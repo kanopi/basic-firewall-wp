@@ -100,21 +100,32 @@ final class User_Agent extends Condition_Rule_Type_Base {
 	 * {@inheritDoc}
 	 */
 	protected function variable_options(): array {
+		/*
+		 * Exactly the vocabulary UserAgent::getValue() understands, and no more.
+		 *
+		 * This list is what the validator checks a condition against, so an
+		 * entry here that the library does not resolve produces a rule that
+		 * saves, reports itself as active, and matches nothing -- the failure
+		 * this plugin exists to prevent. There is deliberately no `user_agent`
+		 * variable: the plugin matches a *parsed* agent, and the raw header is
+		 * reached through a Request / URL rule on `header.user-agent` instead.
+		 */
 		return array(
-			'automated'     => __( 'Automated — the curated bot database plus the wider crawler list. This is the one that stops scanners.', 'basic-firewall' ),
-			'bot'           => __( 'Bot — the curated crawler database only. Does not classify sqlmap, nikto, curl or python-requests.', 'basic-firewall' ),
-			'bot.name'      => __( 'Bot name', 'basic-firewall' ),
-			'bot.category'  => __( 'Bot category — only populated by the curated database', 'basic-firewall' ),
-			'bot.producer'  => __( 'Bot producer — only populated by the curated database', 'basic-firewall' ),
-			'client.name'   => __( 'Client name, such as Chrome or curl', 'basic-firewall' ),
-			'client.type'   => __( 'Client type, such as browser or library', 'basic-firewall' ),
+			'automated'      => __( 'Automated — the curated bot database plus the wider crawler list. This is the one that stops scanners.', 'basic-firewall' ),
+			'bot'            => __( 'Bot — the curated crawler database only. Does not classify sqlmap, nikto, curl or python-requests.', 'basic-firewall' ),
+			'bot.name'       => __( 'Bot name', 'basic-firewall' ),
+			'bot.category'   => __( 'Bot category — only populated by the curated database', 'basic-firewall' ),
+			'bot.producer'   => __( 'Bot producer — only populated by the curated database', 'basic-firewall' ),
+			'bot.url'        => __( 'Bot URL — only populated by the curated database', 'basic-firewall' ),
+			'client.name'    => __( 'Client name, such as Chrome or curl', 'basic-firewall' ),
+			'client.type'    => __( 'Client type, such as browser or library', 'basic-firewall' ),
 			'client.version' => __( 'Client version', 'basic-firewall' ),
-			'os.name'       => __( 'Operating system name', 'basic-firewall' ),
-			'os.version'    => __( 'Operating system version', 'basic-firewall' ),
-			'device.type'   => __( 'Device type, such as desktop or smartphone', 'basic-firewall' ),
-			'device.brand'  => __( 'Device brand', 'basic-firewall' ),
-			'device.model'  => __( 'Device model', 'basic-firewall' ),
-			'user_agent'    => __( 'The raw User-Agent header', 'basic-firewall' ),
+			'os.name'        => __( 'Operating system name', 'basic-firewall' ),
+			'os.short_name'  => __( 'Operating system short name', 'basic-firewall' ),
+			'os.version'     => __( 'Operating system version', 'basic-firewall' ),
+			'device.type'    => __( 'Device type, such as desktop or smartphone', 'basic-firewall' ),
+			'brand'          => __( 'Device brand', 'basic-firewall' ),
+			'model'          => __( 'Device model', 'basic-firewall' ),
 		);
 	}
 

@@ -13,6 +13,7 @@ use Kanopi\BasicFirewall\Install\Capabilities;
 use Kanopi\BasicFirewall\Install\Upgrader;
 use Kanopi\BasicFirewall\Compiler\Compiled_Config_Cache;
 use Kanopi\BasicFirewall\RuleType\Registry;
+use Kanopi\BasicFirewall\Runtime\Runner;
 use Kanopi\BasicFirewall\Support\Paths;
 
 /**
@@ -84,6 +85,21 @@ final class Plugin {
 		add_action( 'init', array( $this, 'load_textdomain' ) );
 
 		/*
+		 * Both evaluation paths converge here.
+		 *
+		 * The mu-plugin fires basic_firewall_early_evaluate at
+		 * muplugins_loaded, which is the earliest a plugin-owned hook can run.
+		 * The wp-config.php bootstrap calls the runner directly and never
+		 * reaches this, which is what the BASIC_FIREWALL_EVALUATED guard is for.
+		 *
+		 * plugins_loaded is the fallback for a site whose mu-plugin could not be
+		 * installed -- later than we would like, but the alternative is not
+		 * evaluating at all.
+		 */
+		add_action( 'basic_firewall_early_evaluate', array( $this, 'evaluate' ), 0 );
+		add_action( 'plugins_loaded', array( $this, 'evaluate' ), 2 );
+
+		/*
 		 * The compiled file is a cache of the settings option, so it is rebuilt
 		 * whenever that option changes rather than on a timer or on a request
 		 * that happens to notice it is stale.
@@ -98,6 +114,20 @@ final class Plugin {
 	 */
 	public function load_textdomain(): void {
 		load_plugin_textdomain( 'basic-firewall', false, dirname( plugin_basename( BASIC_FIREWALL_FILE ) ) . '/languages' );
+	}
+
+	/**
+	 * Evaluate the current request.
+	 */
+	public function evaluate(): void {
+		$this->runner()->evaluate();
+	}
+
+	/**
+	 * The runtime runner.
+	 */
+	public function runner(): Runner {
+		return $this->service( 'runner', static fn(): Runner => new Runner() );
 	}
 
 	/**
@@ -126,6 +156,13 @@ final class Plugin {
 	 */
 	public function compiled(): Compiled_Config_Cache {
 		return $this->service( 'compiled', static fn(): Compiled_Config_Cache => new Compiled_Config_Cache() );
+	}
+
+	/**
+	 * The blocked client store.
+	 */
+	public function blocked(): Blocked_Clients {
+		return $this->service( 'blocked', static fn(): Blocked_Clients => new Blocked_Clients() );
 	}
 
 	/**
