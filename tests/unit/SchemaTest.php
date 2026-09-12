@@ -13,6 +13,8 @@ use Kanopi\BasicFirewall\Support\Schema;
 use PHPUnit\Framework\TestCase;
 
 /**
+ * Pins behaviour this plugin must not lose.
+ *
  * @covers \Kanopi\BasicFirewall\Support\Schema
  */
 final class SchemaTest extends TestCase {

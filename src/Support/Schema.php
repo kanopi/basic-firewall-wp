@@ -122,9 +122,10 @@ final class Schema {
 			'type'     => 'map',
 			'label'    => 'Global settings',
 			'children' => array(
-				'bypass_roles'           => array(
+				'bypass_roles'            => array(
 					'type'    => 'list',
 					'label'   => 'Roles exempt from evaluation',
+
 					/*
 					 * Empty by design. A bypass is a hole in the firewall, so it
 					 * exists only because somebody asked for it -- while this is
@@ -137,9 +138,10 @@ final class Schema {
 						'default' => '',
 					),
 				),
-				'mode'                   => array(
+				'mode'                    => array(
 					'type'    => 'string',
 					'label'   => 'Operating mode',
+
 					/*
 					 * Ships in log mode. A firewall can lock an administrator out
 					 * of their own site, so nothing is blocked until somebody
@@ -148,34 +150,35 @@ final class Schema {
 					'default' => 'log',
 					'choices' => array( 'block', 'log', 'exception', 'disabled' ),
 				),
-				'banning_status_code'    => array(
+				'banning_status_code'     => array(
 					'type'    => 'int',
 					'label'   => 'HTTP status code returned to blocked clients',
 					'default' => 403,
 					'min'     => 100,
 					'max'     => 599,
 				),
-				'banning_message'        => array(
+				'banning_message'         => array(
 					'type'    => 'string',
 					'label'   => 'Message returned to blocked clients',
 					'default' => 'Request blocked. Reference: {{request.id}}',
 				),
-				'repeat_offender_status' => array(
+				'repeat_offender_status'  => array(
 					'type'    => 'int',
 					'label'   => 'HTTP status code returned to already-blocked clients',
 					'default' => 403,
 					'min'     => 100,
 					'max'     => 599,
 				),
-				'add_to_expire'          => array(
+				'add_to_expire'           => array(
 					'type'    => 'int',
 					'label'   => 'Seconds added to a block each time an already-blocked client returns',
 					'default' => 3600,
 					'min'     => 0,
 				),
-				'behind_proxy'           => array(
+				'behind_proxy'            => array(
 					'type'    => 'string',
 					'label'   => 'Whether a proxy sits in front of this deployment',
+
 					/*
 					 * A string, not a boolean, and the default is "unknown".
 					 *
@@ -195,9 +198,10 @@ final class Schema {
 					'label'   => 'Refuse to start unless trusted proxies are configured',
 					'default' => false,
 				),
-				'require_config'         => array(
+				'require_config'          => array(
 					'type'    => 'bool',
 					'label'   => 'Treat a configuration that fails to load as a startup failure',
+
 					/*
 					 * On by default. The library loads configuration leniently: a
 					 * malformed file contributes nothing and it starts with
@@ -209,7 +213,7 @@ final class Schema {
 					 */
 					'default' => true,
 				),
-				'blocking_escalation'    => array(
+				'blocking_escalation'     => array(
 					'type'    => 'list',
 					'label'   => 'Blocking escalation stages',
 					'default' => array(),
@@ -260,6 +264,7 @@ final class Schema {
 				'backend'  => array(
 					'type'    => 'string',
 					'label'   => 'Storage backend',
+
 					/*
 					 * File by default, database recommended in the readme rather
 					 * than set here. File is faster on a quiet site (0.007 ms
@@ -313,6 +318,7 @@ final class Schema {
 							'type'    => 'string',
 							'label'   => 'Connection DSN',
 							'default' => '',
+
 							/*
 							 * A DSN embeds the password, so the whole string is a
 							 * credential and the export has to strip all of it.
@@ -343,6 +349,7 @@ final class Schema {
 					'type'    => 'string',
 					'label'   => 'Driver',
 					'default' => 'pdo_mysql',
+
 					/*
 					 * Doctrine driver names, not database names. `mysql` is the
 					 * mistake everyone makes and it fails when the connection is
@@ -427,6 +434,7 @@ final class Schema {
 				'provider_options' => array(
 					'type'     => 'map',
 					'label'    => 'Provider specific options',
+
 					/*
 					 * Keyed by provider rather than flat. Three of the four
 					 * providers accept a widget_src, and a flat mapping would make
@@ -452,43 +460,45 @@ final class Schema {
 						'turnstile' => array(
 							'type'     => 'map',
 							'children' => array(
-								'site_key'       => array(
+								'site_key'      => array(
 									'type'    => 'string',
 									'label'   => 'Site key',
 									'default' => '',
+
 									/*
 									 * Not secret: the site key is rendered into the
 									 * page source, so redacting it on export would
 									 * protect nothing and break the receiving site.
 									 */
 								),
-								'secret_key'     => array(
+								'secret_key'    => array(
 									'type'    => 'string',
 									'label'   => 'Secret key',
 									'default' => '',
 									'secret'  => true,
 								),
-								'theme'          => array(
+								'theme'         => array(
 									'type'    => 'string',
 									'label'   => 'Widget theme',
 									'default' => 'auto',
 									'choices' => array( 'auto', 'light', 'dark' ),
 								),
-								'widget_src'     => array(
+								'widget_src'    => array(
 									'type'    => 'string',
 									'label'   => 'Widget script URL',
 									'default' => '',
 								),
-								'timeout'        => array(
+								'timeout'       => array(
 									'type'    => 'int',
 									'label'   => 'Verification timeout in seconds',
 									'default' => 5,
 									'min'     => 1,
 									'max'     => 120,
 								),
-								'on_error'       => array(
+								'on_error'      => array(
 									'type'    => 'string',
 									'label'   => 'What to do when verification cannot be reached',
+
 									/*
 									 * Rejects by default. Letting visitors through
 									 * means an outage at the vendor switches the
@@ -498,9 +508,9 @@ final class Schema {
 									'default' => 'fail',
 									'choices' => array( 'fail', 'pass' ),
 								),
-								'send_remoteip'  => array(
+								'send_remoteip' => array(
 									'type'    => 'bool',
-									'label'   => "Forward the client IP to Cloudflare",
+									'label'   => 'Forward the client IP to Cloudflare',
 									'default' => false,
 								),
 							),
@@ -595,7 +605,7 @@ final class Schema {
 			'type'     => 'map',
 			'label'    => 'Logging settings',
 			'children' => array(
-				'redact_extra'  => array(
+				'redact_extra' => array(
 					'type'    => 'list',
 					'label'   => 'Additional request variables to redact from logs',
 					'default' => array(),
@@ -604,12 +614,12 @@ final class Schema {
 						'default' => '',
 					),
 				),
-				'to_wordpress'  => array(
+				'to_wordpress' => array(
 					'type'    => 'bool',
 					'label'   => 'Also send firewall events to WordPress',
 					'default' => false,
 				),
-				'wp_level'      => array(
+				'wp_level'     => array(
 					'type'    => 'string',
 					'label'   => 'Minimum severity forwarded to WordPress',
 					'default' => 'warning',
@@ -629,20 +639,21 @@ final class Schema {
 			'type'     => 'map',
 			'label'    => 'Log handler',
 			'children' => array(
-				'type'           => array(
+				'type'              => array(
 					'type'    => 'string',
 					'label'   => 'Handler type',
 					'default' => 'rotating_file',
 					'choices' => array( 'rotating_file', 'stream', 'error_log', 'database' ),
 				),
-				'enabled'        => array(
+				'enabled'           => array(
 					'type'    => 'bool',
 					'label'   => 'Enabled',
 					'default' => true,
 				),
-				'level'          => array(
+				'level'             => array(
 					'type'    => 'string',
 					'label'   => 'Minimum level',
+
 					/*
 					 * warning, not debug. debug costs roughly 100 KB per allowed
 					 * request on a file handler -- about 97 MB per thousand
@@ -653,18 +664,18 @@ final class Schema {
 					'default' => 'warning',
 					'choices' => array( 'debug', 'info', 'notice', 'warning', 'error', 'critical', 'alert', 'emergency' ),
 				),
-				'path'           => array(
+				'path'              => array(
 					'type'    => 'string',
 					'label'   => 'Log file path',
 					'default' => 'private://logs/firewall.log',
 				),
-				'max_files'      => array(
+				'max_files'         => array(
 					'type'    => 'int',
 					'label'   => 'Days of log files to keep',
 					'default' => 14,
 					'min'     => 0,
 				),
-				'table'          => array(
+				'table'             => array(
 					'type'    => 'string',
 					'label'   => 'Log table',
 					'default' => 'basic_firewall_log',
@@ -675,22 +686,23 @@ final class Schema {
 					'default' => 'wordpress',
 					'choices' => array( 'wordpress', 'dsn', 'parameters' ),
 				),
-				'dsn'            => array(
+				'dsn'               => array(
 					'type'    => 'string',
 					'label'   => 'Connection DSN',
 					'default' => '',
 					'secret'  => true,
 				),
-				'parameters'     => self::connection_parameters(),
-				'retain_days'    => array(
+				'parameters'        => self::connection_parameters(),
+				'retain_days'       => array(
 					'type'    => 'int',
 					'label'   => 'Keep history for this many days, 0 to keep everything',
 					'default' => 30,
 					'min'     => 0,
 				),
-				'buffered'       => array(
+				'buffered'          => array(
 					'type'    => 'bool',
 					'label'   => 'Hold records and write them in one go',
+
 					/*
 					 * On. Unbuffered means one insert per record while the request
 					 * is being served, and the requests producing the most records
@@ -715,42 +727,43 @@ final class Schema {
 			'type'     => 'map',
 			'label'    => 'Firewall rule',
 			'children' => array(
-				'id'          => array(
+				'id'                 => array(
 					'type'    => 'string',
 					'label'   => 'Identifier',
 					'default' => '',
 				),
-				'type'        => array(
+				'type'               => array(
 					'type'    => 'string',
 					'label'   => 'Rule type',
 					'default' => '',
 				),
-				'label'       => array(
+				'label'              => array(
 					'type'    => 'string',
 					'label'   => 'Label',
 					'default' => '',
 				),
-				'enabled'     => array(
+				'enabled'            => array(
 					'type'    => 'bool',
 					'label'   => 'Enabled',
 					'default' => true,
 				),
-				'response'    => array(
+				'response'           => array(
 					'type'    => 'string',
 					'label'   => 'Response',
 					'default' => 'block',
 					'choices' => array( 'allow', 'challenge', 'block' ),
 				),
-				'weight'      => array(
+				'weight'             => array(
 					'type'    => 'int',
 					'label'   => 'Weight',
 					'default' => 0,
 					'min'     => -1000,
 					'max'     => 1000,
 				),
-				'status_code'       => array(
+				'status_code'        => array(
 					'type'    => 'int',
 					'label'   => 'HTTP status code, 0 to use the site-wide code',
+
 					/*
 					 * Zero, and zero is written into the compiled file rather
 					 * than omitted. The library reads
@@ -768,9 +781,10 @@ final class Schema {
 					'label'   => 'Challenge provider for this rule, blank for the site default',
 					'default' => '',
 				),
-				'expiration'  => array(
+				'expiration'         => array(
 					'type'    => 'int',
 					'label'   => 'Block duration, or challenge re-issue interval, in seconds',
+
 					/*
 					 * One hour. Zero is a legitimate value that means opposite
 					 * things by response -- permanent for a block, "fall back to
@@ -780,12 +794,12 @@ final class Schema {
 					'default' => 3600,
 					'min'     => 0,
 				),
-				'description' => array(
+				'description'        => array(
 					'type'    => 'text',
 					'label'   => 'Description',
 					'default' => '',
 				),
-				'settings'    => array(
+				'settings'           => array(
 					'type'    => 'raw',
 					'label'   => 'Rule type settings',
 					'default' => array(),

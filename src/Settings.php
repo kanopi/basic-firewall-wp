@@ -136,12 +136,12 @@ final class Settings {
 	 * @return list<array{path: string, message: string}>
 	 */
 	public function set( string $path, $value ): array {
-		$all     = $this->all();
+		$all      = $this->all();
 		$segments = explode( '.', $path );
-		$cursor  = &$all;
+		$cursor   = &$all;
 
 		foreach ( $segments as $index => $segment ) {
-			if ( $index === count( $segments ) - 1 ) {
+			if ( count( $segments ) - 1 === $index ) {
 				$cursor[ $segment ] = $value;
 				break;
 			}

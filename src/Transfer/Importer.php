@@ -346,11 +346,11 @@ final class Importer {
 		}
 
 		return array(
-			'mode'             => $mode,
-			'rules_new'        => array_values( array_diff( $incoming_ids, $current_ids ) ),
+			'mode'              => $mode,
+			'rules_new'         => array_values( array_diff( $incoming_ids, $current_ids ) ),
 			'rules_overwritten' => array_values( array_intersect( $incoming_ids, $current_ids ) ),
-			'rules_removed'    => array_values( array_diff( $current_ids, $result_ids ) ),
-			'sections_changed' => $sections,
+			'rules_removed'     => array_values( array_diff( $current_ids, $result_ids ) ),
+			'sections_changed'  => $sections,
 		);
 	}
 }

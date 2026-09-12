@@ -65,15 +65,15 @@ final class Site_Health {
 	 */
 	private static function test_map(): array {
 		return array(
-			'library'        => __( 'Basic Firewall library', 'basic-firewall' ),
-			'compiled'       => __( 'Basic Firewall compiled configuration', 'basic-firewall' ),
-			'private_dir'    => __( 'Basic Firewall private directory', 'basic-firewall' ),
-			'evaluation'     => __( 'Basic Firewall evaluation point', 'basic-firewall' ),
-			'proxy'          => __( 'Basic Firewall client IP', 'basic-firewall' ),
-			'mode'           => __( 'Basic Firewall operating mode', 'basic-firewall' ),
-			'storage'        => __( 'Basic Firewall block list storage', 'basic-firewall' ),
-			'logging'        => __( 'Basic Firewall logging', 'basic-firewall' ),
-			'upgrade'        => __( 'Basic Firewall upgrades', 'basic-firewall' ),
+			'library'     => __( 'Basic Firewall library', 'basic-firewall' ),
+			'compiled'    => __( 'Basic Firewall compiled configuration', 'basic-firewall' ),
+			'private_dir' => __( 'Basic Firewall private directory', 'basic-firewall' ),
+			'evaluation'  => __( 'Basic Firewall evaluation point', 'basic-firewall' ),
+			'proxy'       => __( 'Basic Firewall client IP', 'basic-firewall' ),
+			'mode'        => __( 'Basic Firewall operating mode', 'basic-firewall' ),
+			'storage'     => __( 'Basic Firewall block list storage', 'basic-firewall' ),
+			'logging'     => __( 'Basic Firewall logging', 'basic-firewall' ),
+			'upgrade'     => __( 'Basic Firewall upgrades', 'basic-firewall' ),
 		);
 	}
 
@@ -340,13 +340,13 @@ final class Site_Health {
 			return null;
 		}
 
-		$contents = (string) file_get_contents( $dropin ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_get_contents
+		$contents = (string) file_get_contents( $dropin ); // phpcs:ignore WordPress.WP.AlternativeFunctions -- a local file, not a remote URL; WP_Filesystem is not loaded this early.
 
 		foreach ( array(
-			'WP Super Cache' => 'wp-super-cache',
-			'W3 Total Cache' => 'w3-total-cache',
-			'Batcache'       => 'batcache',
-			'WP Rocket'      => 'wp-rocket',
+			'WP Super Cache'  => 'wp-super-cache',
+			'W3 Total Cache'  => 'w3-total-cache',
+			'Batcache'        => 'batcache',
+			'WP Rocket'       => 'wp-rocket',
 			'LiteSpeed Cache' => 'litespeed',
 		) as $name => $needle ) {
 			if ( false !== stripos( $contents, $needle ) ) {
@@ -364,7 +364,7 @@ final class Site_Health {
 		return "require_once ABSPATH . 'wp-content/plugins/basic-firewall/bootstrap.php';\n"
 			. "basic_firewall_evaluate( array(\n"
 			. "    'private_path' => '" . Plugin::instance()->paths()->base() . "',\n"
-			. ") );";
+			. ') );';
 	}
 
 	/**

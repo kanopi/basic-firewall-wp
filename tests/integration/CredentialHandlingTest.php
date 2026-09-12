@@ -333,7 +333,7 @@ final class CredentialHandlingTest extends Settings_Snapshot {
 		 * What has to be true is semantic -- every secret-bearing path is absent,
 		 * empty, or a token -- so that is what is checked.
 		 */
-		$parsed = Yaml::parse( $yaml );
+		$parsed   = Yaml::parse( $yaml );
 		$document = $parsed['basic_firewall']['settings'] ?? array();
 
 		$this->assertIsArray( $document );

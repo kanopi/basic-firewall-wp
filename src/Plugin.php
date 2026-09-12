@@ -44,6 +44,8 @@ final class Plugin {
 
 	/**
 	 * Whether register() has run.
+	 *
+	 * @var bool
 	 */
 	private bool $registered = false;
 
@@ -194,8 +196,8 @@ final class Plugin {
 	 *
 	 * @template T of object
 	 *
-	 * @param string          $name    Service key.
-	 * @param callable(): T   $factory Builds it on first use.
+	 * @param string        $name    Service key.
+	 * @param callable(): T $factory Builds it on first use.
 	 *
 	 * @return T
 	 */
@@ -204,7 +206,11 @@ final class Plugin {
 			$this->services[ $name ] = $factory();
 		}
 
-		/** @var T */
+		/**
+		 * The service, built on first use.
+		 *
+		 * @var T
+		 */
 		return $this->services[ $name ];
 	}
 

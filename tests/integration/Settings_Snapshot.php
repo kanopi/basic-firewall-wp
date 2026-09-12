@@ -53,6 +53,20 @@ abstract class Settings_Snapshot extends TestCase {
 
 		Plugin::instance()->settings()->flush();
 
+		/*
+		 * The compiled file is restored too, not just the option.
+		 *
+		 * Restoring only the option left the site running the *test's* rule set
+		 * -- the compiled file is what the runtime actually reads, and a test
+		 * that rebuilt it had replaced the live firewall. Measured: after a
+		 * run, a path the real configuration blocked returned 404 instead of
+		 * 403, because the compiled file still held the fixture.
+		 *
+		 * A test suite that silently disarms the firewall it is testing is
+		 * worse than one that fails.
+		 */
+		Plugin::instance()->compiled()->rebuild();
+
 		parent::tearDown();
 	}
 

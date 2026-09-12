@@ -72,8 +72,14 @@ function basic_firewall_uninstall_site() {
 	foreach ( $tables as $table ) {
 		$name = $wpdb->prefix . $table;
 
-		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange
-		$wpdb->query( "DROP TABLE IF EXISTS `" . str_replace( '`', '', $name ) . "`" );
+		/*
+		 * A table name is an identifier, and an identifier cannot be a bound
+		 * parameter -- $wpdb->prepare() has nothing to offer here. The safety
+		 * comes from the name never containing user input: it is one of three
+		 * literals above joined to $wpdb->prefix, with backticks stripped.
+		 */
+		// phpcs:ignore WordPress.DB.PreparedSQL, WordPress.DB.DirectDatabaseQuery
+		$wpdb->query( 'DROP TABLE IF EXISTS `' . str_replace( '`', '', $name ) . '`' );
 	}
 
 	basic_firewall_uninstall_private_dir();
@@ -145,7 +151,8 @@ function basic_firewall_uninstall_rmdir( $dir, $depth ) {
 		wp_delete_file( $entry );
 	}
 
-	@rmdir( $dir ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+	// phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, WordPress.WP.AlternativeFunctions -- uninstall runs without WP_Filesystem, and a directory that will not go is not worth failing an uninstall over.
+	@rmdir( $dir );
 }
 
 if ( is_multisite() ) {
@@ -178,7 +185,8 @@ if ( is_multisite() ) {
 $basic_firewall_mu = WPMU_PLUGIN_DIR . '/basic-firewall-loader.php';
 
 if ( is_readable( $basic_firewall_mu ) ) {
-	$basic_firewall_mu_contents = file_get_contents( $basic_firewall_mu ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_get_contents
+	// phpcs:ignore WordPress.WP.AlternativeFunctions -- a local file, not a remote URL.
+	$basic_firewall_mu_contents = file_get_contents( $basic_firewall_mu );
 
 	if ( is_string( $basic_firewall_mu_contents ) && false !== strpos( $basic_firewall_mu_contents, 'BASIC_FIREWALL_MU_LOADER' ) ) {
 		wp_delete_file( $basic_firewall_mu );

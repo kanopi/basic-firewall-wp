@@ -251,7 +251,7 @@ final class Preset_Library {
 			return null;
 		}
 
-		$raw = (string) file_get_contents( (string) $preset['file'] ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_get_contents
+		$raw = (string) file_get_contents( (string) $preset['file'] ); // phpcs:ignore WordPress.WP.AlternativeFunctions -- a local file, not a remote URL; WP_Filesystem is not loaded this early.
 
 		try {
 			$config = Yaml::parse( $raw );
@@ -303,7 +303,7 @@ final class Preset_Library {
 		$label = ucwords( str_replace( array( '-', '_' ), ' ', $name ) );
 
 		/*
-		 * ucwords() produces "Ai Crawlers" and "Wordpress", both of which read
+		 * ucwords() produces "Ai Crawlers" and "WordPress", both of which read
 		 * as a typo in a list somebody is deciding what to enable from. These
 		 * are the names as they are actually spelled.
 		 */

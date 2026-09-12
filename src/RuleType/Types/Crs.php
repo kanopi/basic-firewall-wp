@@ -82,17 +82,20 @@ final class Crs extends Rule_Type_Base {
 		return array(
 			// Monitor, always. The rule set is evaluated and matches are logged,
 			// but nothing is rejected until somebody has read the log.
-			'mode'          => 'monitor',
-			'paranoia'      => 1,
-			'inbound'       => 5,
-			'outbound'      => 4,
-			'disabled_rules' => array(),
+			'mode'                => 'monitor',
+			'paranoia'            => 1,
+			'inbound'             => 5,
+			'outbound'            => 4,
+			'disabled_rules'      => array(),
 			'disabled_categories' => array(),
 		);
 	}
 
 	/**
 	 * {@inheritDoc}
+	 *
+	 * @param array $settings Described by the interface.
+	 * @param array $errors Described by the interface.
 	 */
 	public function validate_settings( array $settings, array &$errors ): array {
 		$mode = (string) ( $settings['mode'] ?? 'monitor' );
@@ -160,15 +163,18 @@ final class Crs extends Rule_Type_Base {
 
 	/**
 	 * {@inheritDoc}
+	 *
+	 * @param array $rule Described by the interface.
 	 */
 	public function compile( array $rule ): array {
 		$entry    = $this->base_entry( $rule );
 		$settings = $rule['settings'] ?? array();
 
 		$config = array(
-			'mode'     => (string) ( $settings['mode'] ?? 'monitor' ),
-			'paranoia' => (int) ( $settings['paranoia'] ?? 1 ),
+			'mode'              => (string) ( $settings['mode'] ?? 'monitor' ),
+			'paranoia'          => (int) ( $settings['paranoia'] ?? 1 ),
 			'anomaly_threshold' => array(
+
 				/*
 				 * The `inbound` / `outbound` key names, not the old severity
 				 * names. Before library v2.9.0 only the severity names were
@@ -210,6 +216,8 @@ final class Crs extends Rule_Type_Base {
 
 	/**
 	 * {@inheritDoc}
+	 *
+	 * @param array $settings Described by the interface.
 	 */
 	public function summarize( array $settings ): array {
 		$lines = array(

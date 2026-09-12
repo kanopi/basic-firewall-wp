@@ -107,7 +107,7 @@ final class Database_Credentials {
 		// A unix socket: anything after a colon that looks like a path.
 		if ( preg_match( '#^(.*?):(/.+)$#', $host, $matches ) === 1 ) {
 			return array(
-				'host'       => '' !== $matches[1] ? $matches[1] : 'localhost',
+				'host'        => '' !== $matches[1] ? $matches[1] : 'localhost',
 				'unix_socket' => $matches[2],
 			);
 		}

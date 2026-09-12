@@ -58,6 +58,8 @@ abstract class Rule_Type_Base implements Rule_Type {
 
 	/**
 	 * {@inheritDoc}
+	 *
+	 * @param array $settings Described by the interface.
 	 */
 	public function summarize( array $settings ): array {
 		return array();
@@ -65,6 +67,8 @@ abstract class Rule_Type_Base implements Rule_Type {
 
 	/**
 	 * {@inheritDoc}
+	 *
+	 * @param array $settings Described by the interface.
 	 */
 	public function check_requirements( array $settings ): array {
 		if ( ! $this->is_available() ) {
@@ -180,7 +184,8 @@ abstract class Rule_Type_Base implements Rule_Type {
 		if ( is_array( $value ) ) {
 			$lines = $value;
 		} else {
-			$lines = preg_split( '/\R/', (string) $value ) ?: array();
+			$split = preg_split( '/\R/', (string) $value );
+			$lines = is_array( $split ) ? $split : array();
 		}
 
 		$out = array();

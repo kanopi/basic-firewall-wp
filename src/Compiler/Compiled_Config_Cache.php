@@ -163,9 +163,16 @@ TXT;
 
 		// tempnam() creates at 0600, which the web server may not be able to read
 		// back if the rebuild ran as a different user under WP-CLI.
-		// phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+		// phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, WordPress.WP.AlternativeFunctions -- WP_Filesystem cannot be relied on here, and a failure to widen permissions is not fatal.
 		@chmod( $temporary, 0644 );
 
+		/*
+		 * rename() rather than WP_Filesystem::move(), deliberately: this is the
+		 * atomic step. WP_Filesystem offers no guarantee of atomicity, and a
+		 * half-written compiled file is a partial rule set that enforces less
+		 * than it claims to.
+		 */
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.rename_rename
 		if ( ! rename( $temporary, $path ) ) {
 			wp_delete_file( $temporary );
 
@@ -235,7 +242,7 @@ TXT;
 			return null;
 		}
 
-		$contents = file_get_contents( $path ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_get_contents
+		$contents = file_get_contents( $path ); // phpcs:ignore WordPress.WP.AlternativeFunctions -- a local file, not a remote URL; WP_Filesystem is not loaded this early.
 
 		return false === $contents ? null : $contents;
 	}

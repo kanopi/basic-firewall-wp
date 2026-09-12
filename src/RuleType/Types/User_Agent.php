@@ -78,6 +78,7 @@ final class User_Agent extends Condition_Rule_Type_Base {
 	 */
 	public function default_settings(): array {
 		return parent::default_settings() + array(
+
 			/*
 			 * Identifying an agent means compiling a 1.7 MB pattern set -- about
 			 * 618 ms the first time each PHP process does it, and every php-fpm
@@ -87,6 +88,7 @@ final class User_Agent extends Condition_Rule_Type_Base {
 			 * again on every worker.
 			 */
 			'cache_detection' => true,
+
 			/*
 			 * Which list `bot` consults. Widening it changes what an existing
 			 * bot rule blocks, so it is a stored choice rather than a default
@@ -131,6 +133,9 @@ final class User_Agent extends Condition_Rule_Type_Base {
 
 	/**
 	 * {@inheritDoc}
+	 *
+	 * @param array $settings Described by the interface.
+	 * @param array $errors Described by the interface.
 	 */
 	public function validate_settings( array $settings, array &$errors ): array {
 		$clean = parent::validate_settings( $settings, $errors );
@@ -145,6 +150,8 @@ final class User_Agent extends Condition_Rule_Type_Base {
 
 	/**
 	 * {@inheritDoc}
+	 *
+	 * @param array $rule Described by the interface.
 	 */
 	public function compile( array $rule ): array {
 		$entry    = parent::compile( $rule );

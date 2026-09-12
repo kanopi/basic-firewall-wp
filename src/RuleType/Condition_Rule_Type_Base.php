@@ -91,6 +91,9 @@ abstract class Condition_Rule_Type_Base extends Rule_Type_Base {
 
 	/**
 	 * {@inheritDoc}
+	 *
+	 * @param array $settings Described by the interface.
+	 * @param array $errors Described by the interface.
 	 */
 	public function validate_settings( array $settings, array &$errors ): array {
 		$match = (string) ( $settings['match_type'] ?? 'any' );
@@ -248,6 +251,7 @@ abstract class Condition_Rule_Type_Base extends Rule_Type_Base {
 		$compiled = array(
 			'variable'       => (string) ( $condition['variable'] ?? '' ),
 			'operator'       => $operator,
+
 			/*
 			 * The library gates the structured format on isset() for all three
 			 * of variable, operator and value, so an empty string must still be
@@ -280,6 +284,8 @@ abstract class Condition_Rule_Type_Base extends Rule_Type_Base {
 
 	/**
 	 * {@inheritDoc}
+	 *
+	 * @param array $settings Described by the interface.
 	 */
 	public function summarize( array $settings ): array {
 		$conditions = $settings['conditions'] ?? array();
@@ -317,6 +323,8 @@ abstract class Condition_Rule_Type_Base extends Rule_Type_Base {
 
 	/**
 	 * {@inheritDoc}
+	 *
+	 * @param array $rule Described by the interface.
 	 */
 	public function compile( array $rule ): array {
 		$entry      = $this->base_entry( $rule );

@@ -29,15 +29,15 @@ define( 'BASIC_FIREWALL_LOADED', true );
  * is not running.
  */
 spl_autoload_register(
-	static function ( string $class ): void {
+	static function ( string $class_name ): void {
 		$prefix = 'Kanopi\\BasicFirewall\\';
 		$length = strlen( $prefix );
 
-		if ( 0 !== strncmp( $prefix, $class, $length ) ) {
+		if ( 0 !== strncmp( $prefix, $class_name, $length ) ) {
 			return;
 		}
 
-		$relative = substr( $class, $length );
+		$relative = substr( $class_name, $length );
 		$path     = BASIC_FIREWALL_DIR . 'src/' . str_replace( '\\', '/', $relative ) . '.php';
 
 		if ( is_readable( $path ) ) {

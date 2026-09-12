@@ -226,15 +226,15 @@ final class Validator {
 	 * @param mixed                $value   Incoming value.
 	 * @param array<string, mixed> $node    Schema node.
 	 * @param string               $path    Dotted path.
-	 * @param int                  $default Fallback.
+	 * @param int                  $fallback Fallback value.
 	 */
-	private function to_int( $value, array $node, string $path, int $default ): int {
+	private function to_int( $value, array $node, string $path, int $fallback ): int {
 		if ( is_bool( $value ) || ! is_scalar( $value ) || ( is_string( $value ) && ! is_numeric( trim( $value ) ) ) ) {
 			if ( null !== $value && '' !== $value ) {
 				$this->error( $path, 'Expected a whole number.' );
 			}
 
-			return $default;
+			return $fallback;
 		}
 
 		$number = (int) $value;
@@ -242,13 +242,13 @@ final class Validator {
 		if ( isset( $node['min'] ) && $number < (int) $node['min'] ) {
 			$this->error( $path, sprintf( 'Must be %d or greater.', (int) $node['min'] ) );
 
-			return $default;
+			return $fallback;
 		}
 
 		if ( isset( $node['max'] ) && $number > (int) $node['max'] ) {
 			$this->error( $path, sprintf( 'Must be %d or less.', (int) $node['max'] ) );
 
-			return $default;
+			return $fallback;
 		}
 
 		return $number;
@@ -260,15 +260,15 @@ final class Validator {
 	 * @param mixed                $value   Incoming value.
 	 * @param array<string, mixed> $node    Schema node.
 	 * @param string               $path    Dotted path.
-	 * @param float                $default Fallback.
+	 * @param float                $fallback Fallback value.
 	 */
-	private function to_float( $value, array $node, string $path, float $default ): float {
+	private function to_float( $value, array $node, string $path, float $fallback ): float {
 		if ( is_bool( $value ) || ! is_scalar( $value ) || ( is_string( $value ) && ! is_numeric( trim( $value ) ) ) ) {
 			if ( null !== $value && '' !== $value ) {
 				$this->error( $path, 'Expected a number.' );
 			}
 
-			return $default;
+			return $fallback;
 		}
 
 		$number = (float) $value;
@@ -276,13 +276,13 @@ final class Validator {
 		if ( isset( $node['min'] ) && $number < (float) $node['min'] ) {
 			$this->error( $path, sprintf( 'Must be %s or greater.', (string) $node['min'] ) );
 
-			return $default;
+			return $fallback;
 		}
 
 		if ( isset( $node['max'] ) && $number > (float) $node['max'] ) {
 			$this->error( $path, sprintf( 'Must be %s or less.', (string) $node['max'] ) );
 
-			return $default;
+			return $fallback;
 		}
 
 		return $number;
@@ -294,13 +294,13 @@ final class Validator {
 	 * @param mixed                $value   Incoming value.
 	 * @param array<string, mixed> $node    Schema node.
 	 * @param string               $path    Dotted path.
-	 * @param string               $default Fallback.
+	 * @param string               $fallback Fallback value.
 	 */
-	private function to_string( $value, array $node, string $path, string $default ): string {
+	private function to_string( $value, array $node, string $path, string $fallback ): string {
 		if ( is_array( $value ) || is_object( $value ) ) {
 			$this->error( $path, 'Expected text.' );
 
-			return $default;
+			return $fallback;
 		}
 
 		if ( is_bool( $value ) ) {
@@ -320,7 +320,7 @@ final class Validator {
 				sprintf( 'Must be one of: %s.', implode( ', ', array_map( 'strval', $node['choices'] ) ) )
 			);
 
-			return $default;
+			return $fallback;
 		}
 
 		return $string;

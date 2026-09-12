@@ -49,7 +49,7 @@ use Symfony\Component\HttpFoundation\Request;
 final class Trusted_Proxies {
 
 	/**
-	 * wp-config.php constant naming the trusted proxy addresses.
+	 * The wp-config.php constant naming the trusted proxy addresses.
 	 */
 	public const PROXIES_CONSTANT = 'BASIC_FIREWALL_TRUSTED_PROXIES';
 

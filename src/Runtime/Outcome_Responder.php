@@ -127,6 +127,7 @@ final class Outcome_Responder {
 			array(
 				'expires'  => 0,
 				'path'     => '/',
+
 				/*
 				 * HttpOnly: the token is presented by the browser on the next
 				 * request and nothing on the page needs to read it, so there is
@@ -198,7 +199,9 @@ final class Outcome_Responder {
 			return;
 		}
 
-		$protocol = isset( $_SERVER['SERVER_PROTOCOL'] ) ? (string) $_SERVER['SERVER_PROTOCOL'] : 'HTTP/1.1';
+		$protocol = isset( $_SERVER['SERVER_PROTOCOL'] )
+			? sanitize_text_field( wp_unslash( (string) $_SERVER['SERVER_PROTOCOL'] ) )
+			: 'HTTP/1.1';
 
 		// Only the two protocols PHP will be serving under, so a forged
 		// SERVER_PROTOCOL cannot be reflected into the response line.
@@ -219,8 +222,8 @@ final class Outcome_Responder {
 		$title = $this->escape( $title );
 
 		return "<!doctype html>\n"
-			. "<html lang=\"en\"><head><meta charset=\"utf-8\">"
-			. "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+			. '<html lang="en"><head><meta charset="utf-8">'
+			. '<meta name="viewport" content="width=device-width,initial-scale=1">'
 			. "<title>{$title}</title>"
 			. '<style>body{font:16px/1.5 system-ui,-apple-system,sans-serif;margin:0;'
 			. 'display:flex;min-height:100vh;align-items:center;justify-content:center;'
@@ -259,4 +262,3 @@ final class Outcome_Responder {
 		exit;
 	}
 }
-

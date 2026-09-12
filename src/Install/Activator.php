@@ -143,7 +143,7 @@ final class Activator {
 			return;
 		}
 
-		$contents = (string) file_get_contents( $target ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_get_contents
+		$contents = (string) file_get_contents( $target ); // phpcs:ignore WordPress.WP.AlternativeFunctions -- a local file, not a remote URL; WP_Filesystem is not loaded this early.
 
 		if ( false === strpos( $contents, 'BASIC_FIREWALL_MU_LOADER' ) ) {
 			// Somebody else's file, or one an administrator has rewritten. Not ours to delete.

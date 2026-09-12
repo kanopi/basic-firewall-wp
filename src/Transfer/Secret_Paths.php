@@ -93,9 +93,9 @@ final class Secret_Paths {
 	/**
 	 * Expand a wildcard path against a document.
 	 *
-	 * @param mixed         $node     Current node.
-	 * @param list<string>  $segments Remaining path segments.
-	 * @param string        $prefix   Path accumulated so far.
+	 * @param mixed        $node     Current node.
+	 * @param list<string> $segments Remaining path segments.
+	 * @param string       $prefix   Path accumulated so far.
 	 *
 	 * @return list<string>
 	 */

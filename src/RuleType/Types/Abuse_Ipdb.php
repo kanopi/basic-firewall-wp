@@ -92,6 +92,9 @@ final class Abuse_Ipdb extends Rule_Type_Base {
 
 	/**
 	 * {@inheritDoc}
+	 *
+	 * @param array $settings Described by the interface.
+	 * @param array $errors Described by the interface.
 	 */
 	public function validate_settings( array $settings, array &$errors ): array {
 		$threshold = (int) ( $settings['threshold'] ?? 75 );
@@ -118,6 +121,8 @@ final class Abuse_Ipdb extends Rule_Type_Base {
 
 	/**
 	 * {@inheritDoc}
+	 *
+	 * @param array $rule Described by the interface.
 	 */
 	public function compile( array $rule ): array {
 		$entry    = $this->base_entry( $rule );
@@ -129,6 +134,7 @@ final class Abuse_Ipdb extends Rule_Type_Base {
 			'cache_ttl'    => (int) ( $settings['cache_ttl'] ?? 86400 ),
 			'timeout'      => (int) ( $settings['timeout'] ?? 5 ),
 			'max_age_days' => (int) ( $settings['max_age_days'] ?? 90 ),
+
 			/*
 			 * Pointed at the private directory rather than left to the library's
 			 * system-temporary fallback. A temp directory is cleared
@@ -151,6 +157,8 @@ final class Abuse_Ipdb extends Rule_Type_Base {
 
 	/**
 	 * {@inheritDoc}
+	 *
+	 * @param array $settings Described by the interface.
 	 */
 	public function summarize( array $settings ): array {
 		return array(

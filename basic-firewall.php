@@ -79,7 +79,13 @@ function basic_firewall_halt_unsupported_php() {
 
 	deactivate_plugins( plugin_basename( BASIC_FIREWALL_FILE ), true );
 
-	// Suppress the "Plugin activated" notice, which would otherwise contradict us.
+	/*
+	 * Suppress the "Plugin activated" notice, which would otherwise contradict
+	 * us. This reads no value and processes no form data -- it removes a flag
+	 * WordPress itself set moments ago -- so there is nothing to verify a nonce
+	 * against.
+	 */
+	// phpcs:ignore WordPress.Security.NonceVerification.Recommended
 	if ( isset( $_GET['activate'] ) ) {
 		unset( $_GET['activate'] );
 	}

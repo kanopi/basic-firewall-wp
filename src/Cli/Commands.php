@@ -213,7 +213,7 @@ final class Commands {
 	 * Summarise the proxy posture.
 	 */
 	private function proxy_summary(): string {
-		$answer    = (string) Plugin::instance()->settings()->get( 'global.behind_proxy', 'unknown' );
+		$answer     = (string) Plugin::instance()->settings()->get( 'global.behind_proxy', 'unknown' );
 		$configured = Trusted_Proxies::are_configured();
 
 		if ( $configured ) {
@@ -376,13 +376,13 @@ final class Commands {
 
 		$row = array(
 			array(
-				'ip'             => $ip,
-				'blocked'        => $answer['blocked'] ? 'true' : 'false',
-				'backend'        => $answer['backend'],
-				'blocked_by'     => (string) ( $record['plugin'] ?? '' ),
-				'blocked_at'     => (string) ( $record['timestamp'] ?? '' ),
-				'reference'      => (string) ( $record['event_id'] ?? '' ),
-				'reason'         => (string) ( $record['reason'] ?? '' ),
+				'ip'         => $ip,
+				'blocked'    => $answer['blocked'] ? 'true' : 'false',
+				'backend'    => $answer['backend'],
+				'blocked_by' => (string) ( $record['plugin'] ?? '' ),
+				'blocked_at' => (string) ( $record['timestamp'] ?? '' ),
+				'reference'  => (string) ( $record['event_id'] ?? '' ),
+				'reason'     => (string) ( $record['reason'] ?? '' ),
 			),
 		);
 
@@ -693,7 +693,7 @@ final class Commands {
 			WP_CLI::error( sprintf( 'Cannot read %s.', $path ) );
 		}
 
-		$yaml = (string) file_get_contents( $path ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_get_contents
+		$yaml = (string) file_get_contents( $path ); // phpcs:ignore WordPress.WP.AlternativeFunctions -- a local file, not a remote URL; WP_Filesystem is not loaded this early.
 		$mode = (string) ( $assoc_args['mode'] ?? 'merge' );
 
 		$importer = new Importer();

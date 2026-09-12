@@ -112,6 +112,7 @@ final class Upgrader {
 	 */
 	private static function routines(): array {
 		return array(
+
 			/*
 			 * 1: the first shipped schema. Present so that the machinery has a
 			 * routine to run and is exercised by the test suite from the first

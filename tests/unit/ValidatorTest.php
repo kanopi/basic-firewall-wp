@@ -13,12 +13,16 @@ use Kanopi\BasicFirewall\Support\Validator;
 use PHPUnit\Framework\TestCase;
 
 /**
+ * Pins behaviour this plugin must not lose.
+ *
  * @covers \Kanopi\BasicFirewall\Support\Validator
  */
 final class ValidatorTest extends TestCase {
 
 	/**
 	 * The validator under test.
+	 *
+	 * @var Validator
 	 */
 	private Validator $validator;
 
@@ -123,7 +127,14 @@ final class ValidatorTest extends TestCase {
 	 */
 	public function test_partial_rule_is_completed_from_defaults(): void {
 		$result = $this->validator->validate(
-			array( 'rules' => array( array( 'id' => 'r1', 'type' => 'ip_address' ) ) )
+			array(
+				'rules' => array(
+					array(
+						'id'   => 'r1',
+						'type' => 'ip_address',
+					),
+				),
+			)
 		);
 
 		$this->assertSame( 3600, $result['rules'][0]['expiration'] );
@@ -152,14 +163,14 @@ final class ValidatorTest extends TestCase {
 	 */
 	public static function boolean_spellings(): array {
 		return array(
-			'unchecked checkbox'  => array( '0', false ),
-			'checked checkbox'    => array( '1', true ),
-			'html on'             => array( 'on', true ),
-			'empty string'        => array( '', false ),
-			'yaml false'          => array( false, false ),
-			'yaml true'           => array( true, true ),
-			'string false'        => array( 'false', false ),
-			'string no'           => array( 'no', false ),
+			'unchecked checkbox' => array( '0', false ),
+			'checked checkbox'   => array( '1', true ),
+			'html on'            => array( 'on', true ),
+			'empty string'       => array( '', false ),
+			'yaml false'         => array( false, false ),
+			'yaml true'          => array( true, true ),
+			'string false'       => array( 'false', false ),
+			'string no'          => array( 'no', false ),
 		);
 	}
 }

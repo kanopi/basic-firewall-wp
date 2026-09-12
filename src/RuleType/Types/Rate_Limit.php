@@ -93,17 +93,18 @@ final class Rate_Limit extends Rule_Type_Base {
 	 */
 	public function default_settings(): array {
 		return array(
-			'paths'               => array(),
-			'default_limit'       => 60,
-			'default_window'      => 60,
+			'paths'                => array(),
+			'default_limit'        => 60,
+			'default_window'       => 60,
+
 			/*
 			 * On, matching the library, but offered as a tick box because it is
 			 * the difference between limiting what you listed and capping the
 			 * whole site. Untick it to limit only the listed patterns.
 			 */
 			'limit_unlisted_paths' => true,
-			'status_code'         => 429,
-			'storage'             => array(
+			'status_code'          => 429,
+			'storage'              => array(
 				'backend'           => 'file',
 				'file'              => 'private://ratelimit.data',
 				'connection_source' => 'wordpress',
@@ -119,13 +120,17 @@ final class Rate_Limit extends Rule_Type_Base {
 
 	/**
 	 * {@inheritDoc}
+	 *
+	 * @param array $settings Described by the interface.
+	 * @param array $errors Described by the interface.
 	 */
 	public function validate_settings( array $settings, array &$errors ): array {
 		$paths = array();
 
 		foreach ( self::lines_to_list( $settings['paths'] ?? array() ) as $line ) {
 			// "pattern limit window", whitespace or pipe separated.
-			$parts = preg_split( '/\s*[|]\s*|\s+/', $line ) ?: array();
+			$split = preg_split( '/\s*[|]\s*|\s+/', $line );
+			$parts = is_array( $split ) ? $split : array();
 
 			$pattern = (string) ( $parts[0] ?? '' );
 			$limit   = (int) ( $parts[1] ?? 0 );
@@ -203,6 +208,8 @@ final class Rate_Limit extends Rule_Type_Base {
 
 	/**
 	 * {@inheritDoc}
+	 *
+	 * @param array $rule Described by the interface.
 	 */
 	public function compile( array $rule ): array {
 		$entry    = $this->base_entry( $rule );
@@ -218,10 +225,11 @@ final class Rate_Limit extends Rule_Type_Base {
 		}
 
 		$config = array(
-			'limits'         => $limits,
-			'default_limit'  => (int) ( $settings['default_limit'] ?? 60 ),
-			'default_window' => (int) ( $settings['default_window'] ?? 60 ),
-			'status_code'    => (int) ( $settings['status_code'] ?? 429 ),
+			'limits'               => $limits,
+			'default_limit'        => (int) ( $settings['default_limit'] ?? 60 ),
+			'default_window'       => (int) ( $settings['default_window'] ?? 60 ),
+			'status_code'          => (int) ( $settings['status_code'] ?? 429 ),
+
 			/*
 			 * Written explicitly rather than omitted. The library's own default
 			 * here caps the entire site with the fallback limit, and a compiled
@@ -326,6 +334,8 @@ final class Rate_Limit extends Rule_Type_Base {
 
 	/**
 	 * {@inheritDoc}
+	 *
+	 * @param array $settings Described by the interface.
 	 */
 	public function summarize( array $settings ): array {
 		$paths = $settings['paths'] ?? array();

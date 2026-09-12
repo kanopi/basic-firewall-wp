@@ -251,7 +251,10 @@ final class Paths {
 		foreach ( $this->guard_files() as $name => $contents ) {
 			$path = $base . '/' . $name;
 
-			if ( is_readable( $path ) && trim( (string) file_get_contents( $path ) ) === trim( $contents ) ) {
+			// phpcs:ignore WordPress.WP.AlternativeFunctions -- a local file, not a remote URL.
+			$existing = is_readable( $path ) ? (string) file_get_contents( $path ) : null;
+
+			if ( null !== $existing && trim( $existing ) === trim( $contents ) ) {
 				continue;
 			}
 
@@ -421,6 +424,7 @@ final class Paths {
 			array(
 				'timeout'     => 10,
 				'redirection' => 0,
+
 				/*
 				 * A request to the site's own uploads directory, often over a
 				 * local or development certificate. Verifying it would make this

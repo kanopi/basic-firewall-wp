@@ -73,6 +73,9 @@ final class Ip_Address extends Rule_Type_Base {
 
 	/**
 	 * {@inheritDoc}
+	 *
+	 * @param array $settings Described by the interface.
+	 * @param array $errors Described by the interface.
 	 */
 	public function validate_settings( array $settings, array &$errors ): array {
 		$addresses = self::lines_to_list( $settings['addresses'] ?? array() );
@@ -133,6 +136,8 @@ final class Ip_Address extends Rule_Type_Base {
 
 	/**
 	 * {@inheritDoc}
+	 *
+	 * @param array $rule Described by the interface.
 	 */
 	public function compile( array $rule ): array {
 		$entry = $this->base_entry( $rule );
@@ -147,6 +152,8 @@ final class Ip_Address extends Rule_Type_Base {
 
 	/**
 	 * {@inheritDoc}
+	 *
+	 * @param array $settings Described by the interface.
 	 */
 	public function summarize( array $settings ): array {
 		$addresses = $settings['addresses'] ?? array();

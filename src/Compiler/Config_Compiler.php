@@ -128,16 +128,17 @@ final class Config_Compiler {
 	/**
 	 * Compile the global section.
 	 *
-	 * @param array<string, mixed> $global Stored global settings.
+	 * @param array<string, mixed> $section Stored global settings.
 	 *
 	 * @return array<string, mixed>
 	 */
-	private function compile_global( array $global ): array {
+	private function compile_global( array $section ): array {
 		$compiled = array(
-			'mode'                    => $this->resolve_mode( $global ),
-			'banning_status_code'     => (int) ( $global['banning_status_code'] ?? 403 ),
-			'banning_message'         => (string) ( $global['banning_message'] ?? 'Request blocked.' ),
-			'require_trusted_proxies' => (bool) ( $global['require_trusted_proxies'] ?? false ),
+			'mode'                    => $this->resolve_mode( $section ),
+			'banning_status_code'     => (int) ( $section['banning_status_code'] ?? 403 ),
+			'banning_message'         => (string) ( $section['banning_message'] ?? 'Request blocked.' ),
+			'require_trusted_proxies' => (bool) ( $section['require_trusted_proxies'] ?? false ),
+
 			/*
 			 * Without this the library logs a failed config load and starts with
 			 * whatever parsed -- which for a single-file setup like ours means an
@@ -146,7 +147,7 @@ final class Config_Compiler {
 			 * logs as an error, and then fails open on. Traffic is treated the
 			 * same either way; this decides whether anybody finds out.
 			 */
-			'require_config'          => (bool) ( $global['require_config'] ?? true ),
+			'require_config'          => (bool) ( $section['require_config'] ?? true ),
 		);
 
 		/*
@@ -159,25 +160,25 @@ final class Config_Compiler {
 		 * security warning on their behalf, so the key is written only once they
 		 * have answered.
 		 */
-		$behind = (string) ( $global['behind_proxy'] ?? 'unknown' );
+		$behind = (string) ( $section['behind_proxy'] ?? 'unknown' );
 
 		if ( 'no' === $behind || 'yes' === $behind ) {
 			$compiled['behind_proxy'] = 'yes' === $behind;
 		}
 
-		$repeat = (int) ( $global['repeat_offender_status'] ?? 0 );
+		$repeat = (int) ( $section['repeat_offender_status'] ?? 0 );
 
 		if ( $repeat > 0 ) {
 			$compiled['repeat_offender_status'] = $repeat;
 		}
 
-		$add_to_expire = (int) ( $global['add_to_expire'] ?? 0 );
+		$add_to_expire = (int) ( $section['add_to_expire'] ?? 0 );
 
 		if ( $add_to_expire > 0 ) {
 			$compiled['add_to_expire'] = $add_to_expire;
 		}
 
-		$escalation = $this->compile_escalation( (array) ( $global['blocking_escalation'] ?? array() ) );
+		$escalation = $this->compile_escalation( (array) ( $section['blocking_escalation'] ?? array() ) );
 
 		if ( array() !== $escalation ) {
 			$compiled['blocking_escalation'] = $escalation;
@@ -189,9 +190,9 @@ final class Config_Compiler {
 	/**
 	 * Resolve the operating mode, honouring a wp-config.php override.
 	 *
-	 * @param array<string, mixed> $global Stored global settings.
+	 * @param array<string, mixed> $section Stored global settings.
 	 */
-	private function resolve_mode( array $global ): string {
+	private function resolve_mode( array $section ): string {
 		if ( defined( 'BASIC_FIREWALL_MODE' ) ) {
 			$override = constant( 'BASIC_FIREWALL_MODE' );
 
@@ -200,7 +201,7 @@ final class Config_Compiler {
 			}
 		}
 
-		$mode = (string) ( $global['mode'] ?? 'log' );
+		$mode = (string) ( $section['mode'] ?? 'log' );
 
 		return isset( Library_Map::MODES[ $mode ] ) ? $mode : 'log';
 	}

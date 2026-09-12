@@ -29,6 +29,7 @@ foreach ( array( dirname( __DIR__, 4 ), dirname( __DIR__, 5 ) ) as $candidate ) 
 }
 
 if ( null === $basic_firewall_wp_load ) {
+	// phpcs:ignore WordPress.WP.AlternativeFunctions -- a CLI test bootstrap; WordPress is what we failed to find.
 	fwrite( STDERR, "Could not locate wp-load.php. Run this suite from inside the site.\n" );
 	exit( 1 );
 }

@@ -25,11 +25,52 @@
 			both of which expect PSR-4.
 		-->
 		<exclude name="WordPress.Files.FileName"/>
+
+		<!--
+			PHP has no native list<string>, array<string, mixed> or array shape
+			type, so a docblock that documents one can never be matched by a
+			parameter's actual type hint. The sniff reads the docblock as a
+			mistake and demands the impossible. Excluded so that precise
+			docblocks are possible; PHPStan checks these types for real.
+		-->
+		<exclude name="Squiz.Commenting.FunctionComment.IncorrectTypeHint"/>
+
+		<!--
+			CapitalPDangit rewrites the string "wordpress" to "WordPress" — and
+			phpcbf applies it to CODE STRING LITERALS, not only to prose.
+
+			It silently broke this plugin: `connection_source` is stored as the
+			value "wordpress", and every comparison against it was rewritten to
+			"WordPress", so database-backed storage stopped matching and fell
+			back to file storage while reporting success. It also broke the
+			preset platform filter, which matches the filename "wordpress.yml".
+
+			Both were caught by an integration test rather than by review, which
+			is the point. The sniff is a prose check; it has no business editing
+			literals, so it is off.
+		-->
+		<exclude name="WordPress.WP.CapitalPDangit"/>
+	</rule>
+
+	<!--
+		Capabilities this plugin defines. Without these, every current_user_can()
+		call against them is reported as an unknown capability.
+	-->
+	<rule ref="WordPress.WP.Capabilities">
+		<properties>
+			<property name="custom_capabilities" type="array">
+				<element value="manage_basic_firewall"/>
+				<element value="view_basic_firewall_reports"/>
+				<element value="unblock_basic_firewall_clients"/>
+			</property>
+		</properties>
 	</rule>
 
 	<rule ref="WordPress.WP.I18n">
 		<properties>
-			<property name="text_domain" type="array" value="basic-firewall"/>
+			<property name="text_domain" type="array">
+				<element value="basic-firewall"/>
+			</property>
 		</properties>
 	</rule>
 
@@ -39,8 +80,33 @@
 				<element value="basic_firewall"/>
 				<element value="BASIC_FIREWALL"/>
 				<element value="Kanopi\BasicFirewall"/>
+				<!--
+					Constants defined by kanopi/firewall, not by this plugin. The
+					plugin sets them so the library reads its cache from the
+					private directory rather than from the system temporary one;
+					their names belong to the library.
+				-->
+				<element value="KANOPI_FIREWALL"/>
 			</property>
 		</properties>
+	</rule>
+
+	<!--
+		WP-CLI dictates the ( array $args, array $assoc_args ) signature for every
+		subcommand. A command that takes no flags still has to accept them, so an
+		unused parameter here is the framework's requirement rather than dead code.
+	-->
+	<rule ref="Generic.CodeAnalysis.UnusedFunctionParameter">
+		<exclude-pattern>/src/Cli/*</exclude-pattern>
+	</rule>
+
+	<!--
+		Test bootstraps define ABSPATH and use local variables at file scope,
+		neither of which can carry a plugin prefix: ABSPATH is WordPress's own
+		constant, and the file is never loaded into a WordPress request.
+	-->
+	<rule ref="WordPress.NamingConventions.PrefixAllGlobals">
+		<exclude-pattern>/tests/bootstrap-*.php</exclude-pattern>
 	</rule>
 
 	<!-- Tests may use assertions and fixtures that the production rules reject. -->
