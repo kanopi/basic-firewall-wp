@@ -300,7 +300,24 @@ final class Preset_Library {
 	 * @param string $name Preset name.
 	 */
 	private function humanize( string $name ): string {
-		return ucwords( str_replace( array( '-', '_' ), ' ', $name ) );
+		$label = ucwords( str_replace( array( '-', '_' ), ' ', $name ) );
+
+		/*
+		 * ucwords() produces "Ai Crawlers" and "Wordpress", both of which read
+		 * as a typo in a list somebody is deciding what to enable from. These
+		 * are the names as they are actually spelled.
+		 */
+		$spellings = array(
+			'Ai '       => 'AI ',
+			'Wordpress' => 'WordPress',
+			'Crs'       => 'CRS',
+			'Url'       => 'URL',
+			'Urls'      => 'URLs',
+			'Ip '       => 'IP ',
+			'Asn'       => 'ASN',
+		);
+
+		return strtr( $label, $spellings );
 	}
 
 	/**

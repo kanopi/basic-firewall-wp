@@ -90,33 +90,77 @@ final class Library_Loader {
 			return;
 		}
 
-		// Case 3 and the double-load case: something already provided it.
-		if ( self::entry_class_exists() ) {
-			self::$mode    = class_exists( self::UNSCOPED_ENTRY, false ) ? 'site-composer' : 'bundled-scoped';
-			self::$version = self::detect_version();
-			self::check_version();
-			return;
-		}
-
-		$autoload = BASIC_FIREWALL_DIR . 'vendor/autoload.php';
-
-		if ( ! is_readable( $autoload ) ) {
-			self::$mode    = 'missing';
-			self::$failure = __( 'The firewall library is not installed. This copy of the plugin has no vendor directory, which usually means it was checked out from git rather than installed from a release zip.', 'basic-firewall' );
-			return;
-		}
-
-		require_once $autoload;
-
 		if ( ! self::entry_class_exists() ) {
-			self::$mode    = 'missing';
-			self::$failure = __( 'The firewall library did not load. A vendor directory is present but does not contain kanopi/firewall.', 'basic-firewall' );
-			return;
+			$autoload = BASIC_FIREWALL_DIR . 'vendor/autoload.php';
+
+			if ( ! is_readable( $autoload ) ) {
+				self::$mode    = 'missing';
+				self::$failure = __( 'The firewall library is not installed. This copy of the plugin has no vendor directory, which usually means it was checked out from git rather than installed from a release zip.', 'basic-firewall' );
+
+				return;
+			}
+
+			require_once $autoload;
+
+			if ( ! self::entry_class_exists() ) {
+				self::$mode    = 'missing';
+				self::$failure = __( 'The firewall library did not load. A vendor directory is present but does not contain kanopi/firewall.', 'basic-firewall' );
+
+				return;
+			}
 		}
 
-		self::$mode    = self::is_scoped() ? 'bundled-scoped' : 'bundled-unscoped';
+		self::$mode    = self::resolve_mode();
 		self::$version = self::detect_version();
+
 		self::check_version();
+	}
+
+	/**
+	 * Work out where the loaded library actually came from.
+	 *
+	 * Determined from the resolved file path of the entry class, not from
+	 * whether we were the one who registered the autoloader.
+	 *
+	 * The first version of this inferred the mode from load order -- "the class
+	 * already existed when we looked, so somebody else must have provided it".
+	 * That was wrong on a perfectly ordinary site: this one has three Composer
+	 * class loaders registered before the plugin runs, and the answer depended
+	 * on which of them happened to win a race we had no visibility into. It
+	 * reported `site-composer` for a library sitting in the plugin's own vendor
+	 * directory.
+	 *
+	 * The file path cannot be raced. It says where the code being executed lives,
+	 * which is the only thing the caller actually wants to know.
+	 */
+	private static function resolve_mode(): string {
+		$scoped = ! class_exists( self::UNSCOPED_ENTRY, false ) && class_exists( self::scoped_entry(), false );
+		$class  = $scoped ? self::scoped_entry() : self::UNSCOPED_ENTRY;
+
+		try {
+			$file = ( new \ReflectionClass( $class ) )->getFileName();
+		} catch ( \Throwable $e ) {
+			$file = false;
+		}
+
+		if ( false === $file ) {
+			return $scoped ? 'bundled-scoped' : 'unknown';
+		}
+
+		$ours = realpath( BASIC_FIREWALL_DIR . 'vendor' );
+		$real = realpath( $file );
+
+		if ( false !== $ours && false !== $real && 0 === strpos( $real, $ours . DIRECTORY_SEPARATOR ) ) {
+			return $scoped ? 'bundled-scoped' : 'bundled-unscoped';
+		}
+
+		/*
+		 * A scoped library outside our own vendor directory would mean a second
+		 * copy of this plugin, which is not a thing WordPress permits -- so this
+		 * is a site-level Composer install, and it is the case the version check
+		 * below exists for.
+		 */
+		return 'site-composer';
 	}
 
 	/**

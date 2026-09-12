@@ -11,6 +11,7 @@ namespace Kanopi\BasicFirewall;
 
 use Kanopi\BasicFirewall\Install\Capabilities;
 use Kanopi\BasicFirewall\Install\Upgrader;
+use Kanopi\BasicFirewall\Cli\Commands;
 use Kanopi\BasicFirewall\Compiler\Compiled_Config_Cache;
 use Kanopi\BasicFirewall\RuleType\Registry;
 use Kanopi\BasicFirewall\Runtime\Runner;
@@ -83,6 +84,10 @@ final class Plugin {
 		add_action( 'plugins_loaded', array( Upgrader::class, 'maybe_upgrade' ), 1 );
 
 		add_action( 'init', array( $this, 'load_textdomain' ) );
+
+		if ( defined( 'WP_CLI' ) && WP_CLI ) {
+			Commands::register();
+		}
 
 		/*
 		 * Both evaluation paths converge here.

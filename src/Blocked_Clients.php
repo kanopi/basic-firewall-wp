@@ -142,12 +142,21 @@ final class Blocked_Clients {
 
 			$expires = (int) ( $record['expire'] ?? 0 );
 
+			/*
+			 * find() wraps the stored payload: the block's own fields live under
+			 * `value`, with `expire`, `expires_at` and `offenses` alongside. The
+			 * payload is flattened here so callers do not each have to know that
+			 * -- and so a listing does not quietly render every rule and reason
+			 * as blank, which is what reading the top level gives you.
+			 */
+			$payload = is_array( $record['value'] ?? null ) ? $record['value'] : $record;
+
 			$clients[] = array(
 				'ip'        => (string) $ip,
 				'expires'   => $expires,
 				'permanent' => 0 === $expires,
 				'offenses'  => (int) ( $record['offenses'] ?? 0 ),
-				'record'    => $record,
+				'record'    => $payload,
 			);
 		}
 
@@ -206,7 +215,7 @@ final class Blocked_Clients {
 		}
 
 		$answer['blocked'] = true;
-		$answer['record']  = $record;
+		$answer['record']  = is_array( $record['value'] ?? null ) ? $record['value'] : $record;
 
 		return $answer;
 	}

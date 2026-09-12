@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<phpunit
+	bootstrap="tests/bootstrap-wp.php"
+	colors="true"
+	cacheResultFile=".phpunit.cache/integration">
+	<!--
+		failOnWarning is deliberately off here, unlike the unit suite.
+
+		One assertion reports as a warning when it cannot run meaningfully: the
+		literal database-password search is useless on a site whose DB_PASSWORD
+		is short or a dictionary word, so it says so instead of passing quietly.
+		That is information, not a defect, and CI sets a long random password so
+		the check runs for real there.
+	-->
+	<testsuites>
+		<testsuite name="integration">
+			<directory suffix="Test.php">tests/integration</directory>
+		</testsuite>
+	</testsuites>
+</phpunit>
