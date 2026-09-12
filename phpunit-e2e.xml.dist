@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<phpunit
+	bootstrap="tests/bootstrap-wp.php"
+	colors="true"
+	cacheResultFile=".phpunit.cache/e2e">
+	<!--
+		Drives a running site over HTTP. Set BFW_E2E_URL to its base URL; the
+		suite skips itself otherwise rather than failing on a missing site.
+
+		These tests change the live rule set and restore it, compiled file
+		included, so run them against a development site.
+	-->
+	<testsuites>
+		<testsuite name="e2e">
+			<directory suffix="Test.php">tests/e2e</directory>
+		</testsuite>
+	</testsuites>
+</phpunit>

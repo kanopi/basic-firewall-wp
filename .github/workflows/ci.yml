@@ -128,6 +128,15 @@ jobs:
           wp basic-firewall rebuild --path=/tmp/wp --allow-root
           wp basic-firewall rules --path=/tmp/wp --allow-root
 
+      - name: End-to-end tests over real HTTP
+        run: |
+          # The only tests here that exercise the mu-plugin, the compiled file
+          # on disk, the library's parse cache and the web server together --
+          # which is where every defect this plugin has shipped so far lived.
+          php -S 127.0.0.1:8080 -t /tmp/wp &
+          sleep 3
+          BFW_E2E_URL=http://127.0.0.1:8080 vendor/bin/phpunit -c phpunit-e2e.xml.dist
+
       - name: A destructive import must refuse without --yes
         run: |
           wp basic-firewall export --file=/tmp/fw.yml --path=/tmp/wp --allow-root

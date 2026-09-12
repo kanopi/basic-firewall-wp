@@ -90,6 +90,17 @@ final class Outcome_Responder {
 	/**
 	 * Serve the challenge interstitial.
 	 *
+	 * Reached only on the exception path -- the request tester, and any site
+	 * running in `exception` mode. In blocking mode the library composes and
+	 * sends the interstitial itself and then exits, answering 200 with
+	 * `Cache-Control: no-store` and a `noindex` page, so none of this runs.
+	 *
+	 * The 503 below is therefore the answer for a caller that asked the firewall
+	 * a question rather than for an ordinary visitor. It is still the right
+	 * status for that case: the visitor is not being refused, they are being
+	 * asked to do something and come back, and a 403 would tell a crawler the
+	 * page is forbidden and remove it from search results.
+	 *
 	 * @param ChallengeRequiredException $outcome The challenge.
 	 */
 	private function send_challenge( ChallengeRequiredException $outcome ): void {

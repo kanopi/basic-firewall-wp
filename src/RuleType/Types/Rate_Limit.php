@@ -215,36 +215,57 @@ final class Rate_Limit extends Rule_Type_Base {
 		$entry    = $this->base_entry( $rule );
 		$settings = $rule['settings'] ?? array();
 
+		/*
+		 * The library's shape, which is not the shape of the form.
+		 *
+		 * `config` is a LIST of rules, each `{path, rate, sample}` -- the plugin
+		 * iterates it and reads `$rule['path']`, skipping anything that is not a
+		 * string. The limits, the defaults and the storage all live where the
+		 * library looks for them rather than where they were convenient to
+		 * store.
+		 *
+		 * The first version of this wrote `config.limits` keyed by pattern with
+		 * `limit`/`window` keys, plus `config.default_limit`. Every one of those
+		 * names is ignored: the rule compiled cleanly, the screen showed it,
+		 * `getFailedRules()` was empty, and four requests over the allowance all
+		 * returned 404 because no limit was ever enforced. It was the end-to-end
+		 * HTTP test that caught it -- nothing that calls the evaluator directly
+		 * would have.
+		 */
 		$limits = array();
 
 		foreach ( $settings['paths'] ?? array() as $path ) {
-			$limits[ (string) $path['pattern'] ] = array(
-				'limit'  => (int) $path['limit'],
-				'window' => (int) $path['window'],
+			if ( ! is_array( $path ) ) {
+				continue;
+			}
+
+			$limits[] = array(
+				'path'   => (string) $path['pattern'],
+				'rate'   => (int) $path['limit'],
+				// The library calls the window "sample".
+				'sample' => (int) $path['window'],
 			);
 		}
 
-		$config = array(
-			'limits'               => $limits,
-			'default_limit'        => (int) ( $settings['default_limit'] ?? 60 ),
-			'default_window'       => (int) ( $settings['default_window'] ?? 60 ),
-			'status_code'          => (int) ( $settings['status_code'] ?? 429 ),
+		$entry['config'] = $limits;
 
-			/*
-			 * Written explicitly rather than omitted. The library's own default
-			 * here caps the entire site with the fallback limit, and a compiled
-			 * file that says what is happening is worth more than one that
-			 * depends on a default that can move underneath it.
-			 */
-			'limit_unlisted_paths' => ! empty( $settings['limit_unlisted_paths'] ),
-		);
-
-		$entry['config'] = $config;
-
-		$storage  = is_array( $settings['storage'] ?? null ) ? $settings['storage'] : array();
 		$metadata = $entry['metadata'] ?? array();
 
-		$metadata['storage'] = $this->compile_storage( $storage );
+		$metadata['default_rate']   = (int) ( $settings['default_limit'] ?? 60 );
+		$metadata['default_sample'] = (int) ( $settings['default_window'] ?? 60 );
+
+		/*
+		 * Written explicitly rather than omitted. The library's own default is
+		 * true, which applies the fallback allowance to every path the rule does
+		 * not list -- capping the whole site from a rule that names one endpoint.
+		 * A compiled file that says what is happening is worth more than one
+		 * that depends on a default that can move.
+		 */
+		$metadata['limit_unlisted_paths'] = ! empty( $settings['limit_unlisted_paths'] );
+
+		$metadata['storage'] = $this->compile_storage(
+			is_array( $settings['storage'] ?? null ) ? $settings['storage'] : array()
+		);
 
 		$entry['metadata'] = $metadata;
 
@@ -268,7 +289,10 @@ final class Rate_Limit extends Rule_Type_Base {
 		);
 
 		if ( 'file' === $backend ) {
-			$compiled['config']['storage_file'] = Plugin::instance()->paths()->resolve(
+			// `file`, which is the key FileRateLimitStorage reads. Not
+			// `storage_file`: that is the blocked-client store's key, and using
+			// it here silently gets you the library's default path instead.
+			$compiled['config']['file'] = Plugin::instance()->paths()->resolve(
 				(string) ( $storage['file'] ?? 'private://ratelimit.data' )
 			);
 
@@ -282,7 +306,7 @@ final class Rate_Limit extends Rule_Type_Base {
 			// Prefixed only when the table lives in WordPress's own database. A
 			// supplied DSN points at a schema somebody named themselves, and
 			// prefixing it would rename a table they created.
-			$compiled['config']['table'] = 'wordpress' === $source
+			$compiled['config']['storage-table'] = 'wordpress' === $source
 				? $credentials->prefix_table( $table )
 				: $table;
 
@@ -303,13 +327,14 @@ final class Rate_Limit extends Rule_Type_Base {
 		}
 
 		if ( 'redis' === $backend ) {
-			$compiled['config'] = array(
+			// Nested under `redis`, which is where the library looks.
+			$compiled['config']['redis'] = array(
 				'host' => (string) ( $storage['redis_host'] ?? '127.0.0.1' ),
 				'port' => (int) ( $storage['redis_port'] ?? 6379 ),
 			);
 
 			if ( '' !== (string) ( $storage['redis_password'] ?? '' ) ) {
-				$compiled['config']['password'] = (string) $storage['redis_password'];
+				$compiled['config']['redis']['auth'] = (string) $storage['redis_password'];
 			}
 
 			/*
@@ -319,7 +344,7 @@ final class Rate_Limit extends Rule_Type_Base {
 			 */
 			$prefix = trim( (string) ( $storage['key_prefix'] ?? '' ) );
 
-			$compiled['config']['key_prefix'] = '' !== $prefix ? $prefix : $credentials->rate_limit_key_prefix();
+			$compiled['config']['redis']['prefix'] = '' !== $prefix ? $prefix : $credentials->rate_limit_key_prefix();
 		}
 
 		return $compiled;
