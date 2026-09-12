@@ -138,12 +138,12 @@ function basic_firewall_scope_data_file( string $file_path, string $prefix, stri
 
 		$contents = (string) preg_replace_callback(
 			'/' . $body . '/',
-			static function ( array $match ) use ( $prefix ): string {
+			static function ( array $found ) use ( $prefix ): string {
 				// The separator style found here is the style used to write the
 				// prefix, so the result is consistent within the scalar.
-				$separator = $match[1];
+				$separator = $found[1];
 
-				return str_replace( '\\', $separator, $prefix ) . $separator . $match[0];
+				return str_replace( '\\', $separator, $prefix ) . $separator . $found[0];
 			},
 			$contents
 		);
@@ -264,6 +264,7 @@ return array(
 	 * which nothing in this plugin calls directly, so the alias bought nothing
 	 * and cost the one guarantee the build is for.
 	 */
+
 	/*
 	 * Every constant this plugin or WordPress names as a STRING.
 	 *

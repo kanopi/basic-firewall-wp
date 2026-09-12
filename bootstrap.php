@@ -52,7 +52,7 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 	 * Never throws and never fatals. Every failure allows the request through:
 	 * a firewall that cannot start must not be the reason a site is down.
 	 *
-	 * @param array $options Bootstrap options. See basic_firewall_options().
+	 * @param array<string, mixed> $options Bootstrap options. See basic_firewall_options().
 	 *
 	 * @return bool True when the request may continue.
 	 */
@@ -121,9 +121,9 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 	/**
 	 * Fill in the bootstrap options.
 	 *
-	 * @param array $options Caller-supplied options.
+	 * @param array<string, mixed> $options Caller-supplied options.
 	 *
-	 * @return array
+	 * @return array<string, mixed>
 	 */
 	function basic_firewall_options( array $options = array() ) {
 		$defaults = array(
@@ -148,7 +148,7 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 	/**
 	 * Locate the compiled configuration file.
 	 *
-	 * @param array $options Bootstrap options.
+	 * @param array<string, mixed> $options Bootstrap options.
 	 *
 	 * @return string|null Absolute path, or null when there is not one.
 	 */
@@ -172,7 +172,7 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 	/**
 	 * Locate the private directory.
 	 *
-	 * @param array $options Bootstrap options.
+	 * @param array<string, mixed> $options Bootstrap options.
 	 *
 	 * @return string|null
 	 */
@@ -213,7 +213,7 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 	/**
 	 * Locate the Composer autoloader.
 	 *
-	 * @param array $options Bootstrap options.
+	 * @param array<string, mixed> $options Bootstrap options.
 	 *
 	 * @return string|null
 	 */
@@ -247,9 +247,9 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 	 * from, which is precisely why database-backed storage cannot be used on
 	 * this path. A site that needs it must pass a connection in `overrides`.
 	 *
-	 * @param array $options Bootstrap options.
+	 * @param array<string, mixed> $options Bootstrap options.
 	 *
-	 * @return array
+	 * @return array<string, mixed>
 	 */
 	function basic_firewall_build_overrides( array $options ) {
 		$options = basic_firewall_options( $options );
@@ -271,7 +271,7 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 	 * anyone). There is no safe default between those, so nothing happens unless
 	 * the site says what to trust.
 	 *
-	 * @param array $options Bootstrap options.
+	 * @param array<string, mixed> $options Bootstrap options.
 	 *
 	 * @return void
 	 */
@@ -333,7 +333,7 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 	 * alone the library falls back to the system temporary directory, which gets
 	 * cleared -- and every clear costs that 42 ms again on every worker.
 	 *
-	 * @param array $options Bootstrap options.
+	 * @param array<string, mixed> $options Bootstrap options.
 	 *
 	 * @return void
 	 */
@@ -376,7 +376,7 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 	 * empty or malformed setting is treated here as not having opted in at all
 	 * rather than being passed through.
 	 *
-	 * @param array $options Bootstrap options.
+	 * @param array<string, mixed> $options Bootstrap options.
 	 *
 	 * @return void
 	 */
@@ -405,7 +405,15 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 			return;
 		}
 
-		foreach ( array( 'Kanopi\\Firewall\\Utility\\TokenSubstitute', 'Kanopi\\BasicFirewall\\Vendor\\Kanopi\\Firewall\\Utility\\TokenSubstitute' ) as $class ) {
+		/*
+		 * Assembled rather than written out, so that neither PHP-Scoper nor a
+		 * static analyser resolves it to one particular class: on a scoped build
+		 * only the second name exists, on an unscoped one only the first.
+		 */
+		$token_class = implode( '\\', array( 'Kanopi', 'Firewall', 'Utility', 'TokenSubstitute' ) );
+		$vendor      = implode( '\\', array( 'Kanopi', 'BasicFirewall', 'Vendor' ) );
+
+		foreach ( array( $token_class, $vendor . '\\' . $token_class ) as $class ) {
 			if ( ! class_exists( $class ) || ! method_exists( $class, 'enableUnsafeProcessors' ) ) {
 				continue;
 			}

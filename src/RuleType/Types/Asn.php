@@ -80,8 +80,8 @@ final class Asn extends Condition_Rule_Type_Base {
 	/**
 	 * {@inheritDoc}
 	 *
-	 * @param array $settings Described by the interface.
-	 * @param array $errors Described by the interface.
+	 * @param array<string, mixed>  $settings Described by the interface.
+	 * @param array<string, string> $errors Described by the interface.
 	 */
 	public function validate_settings( array $settings, array &$errors ): array {
 		return parent::validate_settings( $settings, $errors ) + $this->validate_reader( $settings, $errors );
@@ -90,7 +90,7 @@ final class Asn extends Condition_Rule_Type_Base {
 	/**
 	 * {@inheritDoc}
 	 *
-	 * @param array $rule Described by the interface.
+	 * @param array<string, mixed> $rule Described by the interface.
 	 */
 	public function compile( array $rule ): array {
 		$entry = parent::compile( $rule );
@@ -101,7 +101,7 @@ final class Asn extends Condition_Rule_Type_Base {
 	/**
 	 * {@inheritDoc}
 	 *
-	 * @param array $settings Described by the interface.
+	 * @param array<string, mixed> $settings Described by the interface.
 	 */
 	public function check_requirements( array $settings ): array {
 		return array_merge( parent::check_requirements( $settings ), $this->reader_requirements( $settings ) );

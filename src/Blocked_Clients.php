@@ -128,9 +128,7 @@ final class Blocked_Clients {
 				continue;
 			}
 
-			if ( is_array( $found ) ) {
-				$records += $found;
-			}
+			$records += $found;
 		}
 
 		$clients = array();

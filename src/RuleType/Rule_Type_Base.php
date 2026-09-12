@@ -59,7 +59,7 @@ abstract class Rule_Type_Base implements Rule_Type {
 	/**
 	 * {@inheritDoc}
 	 *
-	 * @param array $settings Described by the interface.
+	 * @param array<string, mixed> $settings Described by the interface.
 	 */
 	public function summarize( array $settings ): array {
 		return array();
@@ -68,7 +68,7 @@ abstract class Rule_Type_Base implements Rule_Type {
 	/**
 	 * {@inheritDoc}
 	 *
-	 * @param array $settings Described by the interface.
+	 * @param array<string, mixed> $settings Described by the interface.
 	 */
 	public function check_requirements( array $settings ): array {
 		if ( ! $this->is_available() ) {

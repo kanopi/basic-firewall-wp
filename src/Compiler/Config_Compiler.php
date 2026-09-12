@@ -584,8 +584,8 @@ final class Config_Compiler {
 					$paths->resolve( (string) ( $handler['path'] ?? 'private://logs/firewall.log' ) ),
 					$level,
 				),
-				'error_log'     => array( 0, $level ),
-				default         => array( $level ),
+				// ErrorLogHandler takes a message type first, then the level.
+				default         => array( 0, $level ),
 			};
 
 			$compiled[] = array(

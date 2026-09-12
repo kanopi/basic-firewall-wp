@@ -116,15 +116,18 @@ final class Preset_Library {
 	 * Where the library keeps its presets.
 	 */
 	private function library_preset_dir(): ?string {
-		$reflector = null;
-
-		try {
-			$reflector = new \ReflectionClass( \Kanopi\Firewall\Firewall::class );
-		} catch ( \Throwable $e ) {
+		if ( ! class_exists( \Kanopi\Firewall\Firewall::class ) ) {
 			return null;
 		}
 
-		$dir = dirname( (string) $reflector->getFileName(), 2 ) . '/presets';
+		$reflector = new \ReflectionClass( \Kanopi\Firewall\Firewall::class );
+		$file      = $reflector->getFileName();
+
+		if ( false === $file ) {
+			return null;
+		}
+
+		$dir = dirname( $file, 2 ) . '/presets';
 
 		return is_dir( $dir ) ? $dir : null;
 	}

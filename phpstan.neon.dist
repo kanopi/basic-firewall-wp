@@ -1,5 +1,8 @@
 parameters:
     level: 6
+    # Analysing the plugin plus the library's stubs exceeds a default 128M.
+    parallel:
+        maximumNumberOfProcesses: 2
     paths:
         - basic-firewall.php
         - loader.php
@@ -13,6 +16,11 @@ parameters:
             - build
     scanDirectories:
         - vendor/kanopi/firewall/src
+    scanFiles:
+        # WP-CLI is provided by the `wp` binary at runtime, never vendored, so
+        # without the stubs every WP_CLI::error() reads as an unknown class.
+        - vendor/php-stubs/wp-cli-stubs/wp-cli-stubs.php
+        - vendor/php-stubs/wp-cli-stubs/wp-cli-commands-stubs.php
     bootstrapFiles:
         - tests/phpstan-bootstrap.php
     treatPhpDocTypesAsCertain: false

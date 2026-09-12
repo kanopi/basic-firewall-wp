@@ -204,6 +204,14 @@ final class Library_Loader {
 
 	/**
 	 * Whether the library entry class is loadable under either name.
+	 *
+	 * Marked impure because its answer genuinely changes between two calls that
+	 * look identical: boot() asks, requires the vendor autoloader, and asks
+	 * again. Without this, static analysis treats the second call as already
+	 * narrowed and reports the check as dead code -- which it would be, if
+	 * requiring an autoloader had no effect.
+	 *
+	 * @phpstan-impure
 	 */
 	private static function entry_class_exists(): bool {
 		return class_exists( self::unscoped_entry() ) || class_exists( self::scoped_entry() );
@@ -231,13 +239,6 @@ final class Library_Loader {
 	 */
 	private static function vendor_prefix(): string {
 		return implode( '\\', self::PREFIX_FRAGMENTS );
-	}
-
-	/**
-	 * Whether the loaded library is the scoped copy.
-	 */
-	private static function is_scoped(): bool {
-		return ! class_exists( self::unscoped_entry(), false ) && class_exists( self::scoped_entry(), false );
 	}
 
 	/**

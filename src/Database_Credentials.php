@@ -116,7 +116,8 @@ final class Database_Credentials {
 		if ( preg_match( '#^\[(.+)\](?::(\d+))?$#', $host, $matches ) === 1 ) {
 			$parsed = array( 'host' => $matches[1] );
 
-			if ( isset( $matches[2] ) && '' !== $matches[2] ) {
+			// The capture group is \d+, so its presence is the only question.
+			if ( isset( $matches[2] ) ) {
 				$parsed['port'] = (int) $matches[2];
 			}
 
