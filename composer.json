@@ -1,0 +1,56 @@
+{
+    "name": "kanopi/basic-firewall-wp",
+    "description": "Evaluates every request against a set of rules and allows, challenges or blocks it, as early in the request as WordPress can act.",
+    "type": "wordpress-plugin",
+    "license": "GPL-2.0-or-later",
+    "homepage": "https://github.com/kanopi/basic-firewall-wp",
+    "support": {
+        "issues": "https://github.com/kanopi/basic-firewall-wp/issues",
+        "source": "https://github.com/kanopi/basic-firewall-wp"
+    },
+    "require": {
+        "php": ">=8.1",
+        "composer/installers": "^1.0 || ^2.0",
+        "kanopi/firewall": "^2.24"
+    },
+    "require-dev": {
+        "dealerdirect/phpcodesniffer-composer-installer": "^1.0",
+        "humbug/php-scoper": "^0.18",
+        "php-stubs/wordpress-stubs": "^6.4",
+        "phpstan/phpstan": "^2.0",
+        "phpunit/phpunit": "^9.6",
+        "squizlabs/php_codesniffer": "^3.9",
+        "szepeviktor/phpstan-wordpress": "^2.0",
+        "wp-coding-standards/wpcs": "^3.1",
+        "yoast/phpunit-polyfills": "^2.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Kanopi\\BasicFirewall\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Kanopi\\BasicFirewall\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "lint": "phpcs",
+        "lint:fix": "phpcbf",
+        "analyse": "phpstan analyse",
+        "test": "phpunit",
+        "test:unit": "phpunit --testsuite unit",
+        "scope": "php-scoper add-prefix --output-dir=build/scoped --force",
+        "verify:scope": "php build/verify-scope.php"
+    },
+    "extra": {
+        "installer-name": "basic-firewall"
+    },
+    "config": {
+        "sort-packages": true,
+        "allow-plugins": {
+            "composer/installers": true,
+            "dealerdirect/phpcodesniffer-composer-installer": true
+        }
+    }
+}

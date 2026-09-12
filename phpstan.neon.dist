@@ -1,0 +1,20 @@
+parameters:
+    level: 6
+    paths:
+        - basic-firewall.php
+        - loader.php
+        - uninstall.php
+        - src
+        - mu-plugin
+        - bootstrap.php
+    excludePaths:
+        analyseAndScan:
+            - vendor
+            - build
+    scanDirectories:
+        - vendor/kanopi/firewall/src
+    bootstrapFiles:
+        - tests/phpstan-bootstrap.php
+    treatPhpDocTypesAsCertain: false
+includes:
+    - vendor/szepeviktor/phpstan-wordpress/extension.neon

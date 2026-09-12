@@ -1,0 +1,50 @@
+<?xml version="1.0"?>
+<ruleset name="Basic Firewall">
+	<description>WordPress Coding Standards for the Basic Firewall plugin.</description>
+
+	<file>.</file>
+
+	<exclude-pattern>/vendor/*</exclude-pattern>
+	<exclude-pattern>/build/*</exclude-pattern>
+	<exclude-pattern>/node_modules/*</exclude-pattern>
+
+	<arg name="extensions" value="php"/>
+	<arg name="colors"/>
+	<arg value="sp"/>
+	<arg name="parallel" value="8"/>
+
+	<config name="minimum_wp_version" value="6.4"/>
+	<config name="testVersion" value="8.1-"/>
+
+	<rule ref="WordPress">
+		<!--
+			The plugin autoloads PSR-4 from src/, so class files are named for
+			their class rather than as class-foo.php. This is a deliberate
+			consequence of shipping a Composer package that must also install
+			with `composer require`, and of running the tree through PHP-Scoper,
+			both of which expect PSR-4.
+		-->
+		<exclude name="WordPress.Files.FileName"/>
+	</rule>
+
+	<rule ref="WordPress.WP.I18n">
+		<properties>
+			<property name="text_domain" type="array" value="basic-firewall"/>
+		</properties>
+	</rule>
+
+	<rule ref="WordPress.NamingConventions.PrefixAllGlobals">
+		<properties>
+			<property name="prefixes" type="array">
+				<element value="basic_firewall"/>
+				<element value="BASIC_FIREWALL"/>
+				<element value="Kanopi\BasicFirewall"/>
+			</property>
+		</properties>
+	</rule>
+
+	<!-- Tests may use assertions and fixtures that the production rules reject. -->
+	<rule ref="WordPress.DB.DirectDatabaseQuery">
+		<exclude-pattern>/tests/*</exclude-pattern>
+	</rule>
+</ruleset>
