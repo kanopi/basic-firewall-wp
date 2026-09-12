@@ -13,6 +13,7 @@ use Kanopi\BasicFirewall\Install\Capabilities;
 use Kanopi\BasicFirewall\Install\Upgrader;
 use Kanopi\BasicFirewall\Cli\Commands;
 use Kanopi\BasicFirewall\Compiler\Compiled_Config_Cache;
+use Kanopi\BasicFirewall\Health\Site_Health;
 use Kanopi\BasicFirewall\RuleType\Registry;
 use Kanopi\BasicFirewall\Runtime\Runner;
 use Kanopi\BasicFirewall\Support\Paths;
@@ -87,6 +88,10 @@ final class Plugin {
 
 		if ( defined( 'WP_CLI' ) && WP_CLI ) {
 			Commands::register();
+		}
+
+		if ( is_admin() ) {
+			Site_Health::register();
 		}
 
 		/*
