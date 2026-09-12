@@ -748,6 +748,26 @@ final class Schema {
 					'min'     => -1000,
 					'max'     => 1000,
 				),
+				'status_code'       => array(
+					'type'    => 'int',
+					'label'   => 'HTTP status code, 0 to use the site-wide code',
+					/*
+					 * Zero, and zero is written into the compiled file rather
+					 * than omitted. The library reads
+					 * `metadata['status_code'] ?? 400`, so an absent key does not
+					 * mean "unset" -- it means 400 Bad Request. Only an explicit
+					 * zero makes the library fall through to the site-wide code
+					 * that the General screen promises.
+					 */
+					'default' => 0,
+					'min'     => 0,
+					'max'     => 599,
+				),
+				'challenge_provider' => array(
+					'type'    => 'string',
+					'label'   => 'Challenge provider for this rule, blank for the site default',
+					'default' => '',
+				),
 				'expiration'  => array(
 					'type'    => 'int',
 					'label'   => 'Block duration, or challenge re-issue interval, in seconds',

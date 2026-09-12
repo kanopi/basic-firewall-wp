@@ -11,6 +11,8 @@ namespace Kanopi\BasicFirewall;
 
 use Kanopi\BasicFirewall\Install\Capabilities;
 use Kanopi\BasicFirewall\Install\Upgrader;
+use Kanopi\BasicFirewall\Compiler\Compiled_Config_Cache;
+use Kanopi\BasicFirewall\RuleType\Registry;
 use Kanopi\BasicFirewall\Support\Paths;
 
 /**
@@ -80,6 +82,15 @@ final class Plugin {
 		add_action( 'plugins_loaded', array( Upgrader::class, 'maybe_upgrade' ), 1 );
 
 		add_action( 'init', array( $this, 'load_textdomain' ) );
+
+		/*
+		 * The compiled file is a cache of the settings option, so it is rebuilt
+		 * whenever that option changes rather than on a timer or on a request
+		 * that happens to notice it is stale.
+		 */
+		add_action( 'basic_firewall_settings_saved', array( $this, 'rebuild' ) );
+		add_action( 'basic_firewall_activated', array( $this, 'rebuild' ) );
+		add_action( 'basic_firewall_upgraded', array( $this, 'rebuild' ) );
 	}
 
 	/**
@@ -87,6 +98,13 @@ final class Plugin {
 	 */
 	public function load_textdomain(): void {
 		load_plugin_textdomain( 'basic-firewall', false, dirname( plugin_basename( BASIC_FIREWALL_FILE ) ) . '/languages' );
+	}
+
+	/**
+	 * Rebuild the compiled configuration.
+	 */
+	public function rebuild(): void {
+		$this->compiled()->rebuild();
 	}
 
 	/**
@@ -101,6 +119,27 @@ final class Plugin {
 	 */
 	public function paths(): Paths {
 		return $this->service( 'paths', static fn(): Paths => new Paths() );
+	}
+
+	/**
+	 * The compiled configuration cache.
+	 */
+	public function compiled(): Compiled_Config_Cache {
+		return $this->service( 'compiled', static fn(): Compiled_Config_Cache => new Compiled_Config_Cache() );
+	}
+
+	/**
+	 * The preset library.
+	 */
+	public function presets(): Preset_Library {
+		return $this->service( 'presets', static fn(): Preset_Library => new Preset_Library() );
+	}
+
+	/**
+	 * The rule type registry.
+	 */
+	public function rule_types(): Registry {
+		return $this->service( 'rule_types', static fn(): Registry => new Registry() );
 	}
 
 	/**

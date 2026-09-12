@@ -1,0 +1,220 @@
+<?php
+/**
+ * What the installed library can actually do.
+ *
+ * @package Kanopi\BasicFirewall
+ */
+
+declare( strict_types = 1 );
+
+namespace Kanopi\BasicFirewall;
+
+use Kanopi\Crs\CrsEngine;
+use Kanopi\Firewall\Challenge\ChallengeProviderInterface;
+use Kanopi\Firewall\Plugins\AbuseIpdb;
+use Kanopi\Firewall\Plugins\Crs;
+use Symfony\Component\HttpFoundation\Request;
+
+/**
+ * Detects installed library features rather than assuming them.
+ *
+ * The library's documentation has historically run ahead of its releases, so
+ * the plugin asks what is present instead of trusting a version number. Two
+ * kinds of check, and the difference between them is the interesting part:
+ *
+ * **Does the class exist?** Cheap, and enough for most features. A rule type
+ * whose plugin class is absent is not offered and its screen 404s.
+ *
+ * **Does it behave?** For the Core Rule Set, the class existing is not evidence
+ * that it works, because it has shipped broken in both directions:
+ *
+ * - library v2.8.0 **inverted the verdict**, so every ordinary request matched
+ *   and real attacks passed. Fixed in v2.8.1.
+ * - `crs-engine` 0.1.0 parsed the rules but **detected almost nothing**, so the
+ *   plugin looked fine and protected nothing. Fixed by `crs-engine` 1.0.0.
+ *
+ * The second is the more dangerous, because nothing looks wrong. So the probe
+ * evaluates both an unmistakable SQL injection payload *and* a clean request: an
+ * engine that flags neither is inert, and an engine that flags both is inverted.
+ * Trusting either would leave a site believing it had coverage it did not.
+ *
+ * The probe is expensive, so its result is cached against the library version
+ * and re-run when that changes.
+ */
+final class Library_Capabilities {
+
+	/**
+	 * Option holding cached probe results.
+	 */
+	public const PROBE_OPTION = 'basic_firewall_library_probe';
+
+	/**
+	 * Whether the library is installed at all.
+	 */
+	public function is_installed(): bool {
+		return Library_Loader::is_usable();
+	}
+
+	/**
+	 * Whether the interstitial challenge flow is available.
+	 */
+	public function has_challenge(): bool {
+		return interface_exists( ChallengeProviderInterface::class );
+	}
+
+	/**
+	 * Whether the AbuseIPDB reputation plugin is available.
+	 *
+	 * A class_exists() check is enough here, unlike the Core Rule Set: there is
+	 * no separate engine package whose version could disagree, and the plugin
+	 * fails open by design, so a misbehaving release degrades to "matches
+	 * nothing" rather than to blocking legitimate traffic.
+	 */
+	public function has_abuse_ipdb(): bool {
+		return class_exists( AbuseIpdb::class );
+	}
+
+	/**
+	 * Whether the Core Rule Set is present and actually detecting.
+	 */
+	public function has_working_crs(): bool {
+		return 'working' === $this->crs_probe()['result'];
+	}
+
+	/**
+	 * The cached Core Rule Set probe, running it if needed.
+	 *
+	 * @return array{result: string, reason: string, version: string}
+	 */
+	public function crs_probe(): array {
+		$version = (string) ( Library_Loader::version() ?? 'unknown' );
+		$cached  = get_option( self::PROBE_OPTION, array() );
+
+		if ( is_array( $cached ) && ( $cached['version'] ?? null ) === $version && isset( $cached['result'] ) ) {
+			return $cached;
+		}
+
+		$probe            = $this->run_crs_probe();
+		$probe['version'] = $version;
+
+		update_option( self::PROBE_OPTION, $probe, false );
+
+		return $probe;
+	}
+
+	/**
+	 * Actually probe the Core Rule Set.
+	 *
+	 * @return array{result: string, reason: string}
+	 */
+	private function run_crs_probe(): array {
+		if ( ! class_exists( Crs::class ) ) {
+			return array(
+				'result' => 'absent',
+				'reason' => __( 'The installed firewall library does not ship the Core Rule Set plugin.', 'basic-firewall' ),
+			);
+		}
+
+		if ( ! class_exists( CrsEngine::class ) ) {
+			return array(
+				'result' => 'absent',
+				'reason' => __( 'The Core Rule Set plugin is present but the kanopi/crs-engine package that evaluates the rules is not installed.', 'basic-firewall' ),
+			);
+		}
+
+		try {
+			$plugin = new Crs(
+				array( 'name' => 'capability_probe' ),
+				array(
+					'mode'              => 'block',
+					'paranoia'          => 1,
+					'anomaly_threshold' => array(
+						'inbound'  => 5,
+						'outbound' => 4,
+					),
+				)
+			);
+
+			// An unmistakable SQL injection. If this does not score, the engine
+			// is inert whatever it reports about itself.
+			$attack = Request::create( '/?id=1%27%20UNION%20SELECT%201,2,3--' );
+			$attack->headers->set( 'User-Agent', 'Mozilla/5.0' );
+
+			// An ordinary request. If this scores, the verdict is inverted.
+			$clean = Request::create( '/about-us' );
+			$clean->headers->set( 'User-Agent', 'Mozilla/5.0' );
+
+			$attack_matched = (bool) $plugin->evaluate( $attack );
+			$clean_matched  = (bool) $plugin->evaluate( $clean );
+		} catch ( \Throwable $e ) {
+			return array(
+				'result' => 'error',
+				'reason' => sprintf(
+					/* translators: %s: error message. */
+					__( 'The Core Rule Set could not be evaluated: %s', 'basic-firewall' ),
+					$e->getMessage()
+				),
+			);
+		}
+
+		if ( $attack_matched && ! $clean_matched ) {
+			return array(
+				'result' => 'working',
+				'reason' => __( 'The Core Rule Set detected a test attack payload and allowed a clean request.', 'basic-firewall' ),
+			);
+		}
+
+		if ( $attack_matched && $clean_matched ) {
+			return array(
+				'result' => 'inverted',
+				'reason' => __( 'The Core Rule Set matched an ordinary request as well as an attack payload. This release inverts the verdict — enabling it would reject legitimate traffic and let real attacks through. The rule type is not offered.', 'basic-firewall' ),
+			);
+		}
+
+		return array(
+			'result' => 'inert',
+			'reason' => __( 'The Core Rule Set did not detect an unmistakable SQL injection payload. This release parses the rules but detects almost nothing, so enabling it would give the appearance of coverage without any. The rule type is not offered.', 'basic-firewall' ),
+		);
+	}
+
+	/**
+	 * Everything unavailable, with the reason, for the status report.
+	 *
+	 * @return list<array{feature: string, reason: string}>
+	 */
+	public function unavailable(): array {
+		$missing = array();
+
+		if ( ! $this->has_challenge() ) {
+			$missing[] = array(
+				'feature' => __( 'Challenges', 'basic-firewall' ),
+				'reason'  => __( 'The installed library does not ship the interstitial challenge flow.', 'basic-firewall' ),
+			);
+		}
+
+		if ( ! $this->has_abuse_ipdb() ) {
+			$missing[] = array(
+				'feature' => __( 'IP reputation (AbuseIPDB)', 'basic-firewall' ),
+				'reason'  => __( 'The installed library does not ship the AbuseIPDB plugin.', 'basic-firewall' ),
+			);
+		}
+
+		$crs = $this->crs_probe();
+
+		if ( 'working' !== $crs['result'] ) {
+			$missing[] = array(
+				'feature' => __( 'OWASP Core Rule Set', 'basic-firewall' ),
+				'reason'  => $crs['reason'],
+			);
+		}
+
+		return $missing;
+	}
+
+	/**
+	 * Discard cached probe results. Used after a library update.
+	 */
+	public function flush(): void {
+		delete_option( self::PROBE_OPTION );
+	}
+}
