@@ -18,3 +18,7 @@
 *.swp
 .idea/
 .vscode/
+
+# Build intermediates. The zip is a release artifact, not a repository file.
+/build/scratch/
+/build/stage/

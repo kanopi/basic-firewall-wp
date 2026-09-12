@@ -49,13 +49,38 @@ final class Library_Loader {
 	public const MINIMUM_LIBRARY = '2.24.0';
 
 	/**
-	 * Canonical, unprefixed name of the library's entry class.
+	 * Fragments of the library's entry class name.
 	 *
-	 * Written as a string rather than a ::class constant on purpose: in a scoped
-	 * build php-scoper rewrites ::class constants, and this check needs to ask
-	 * about the *unscoped* name specifically.
+	 * Assembled at runtime, never written as a single literal, and that is not
+	 * paranoia -- it is a bug that shipped.
+	 *
+	 * This class has to ask two questions that a scoped build makes subtle: does
+	 * the UNPREFIXED name exist, and does the PREFIXED one? A `::class` constant
+	 * cannot answer the first, because php-scoper rewrites it. Neither can a
+	 * plain string: php-scoper also rewrites string literals that look like
+	 * class names, so `'Kanopi\\Firewall\\Firewall'` became
+	 * `'Kanopi\\BasicFirewall\\Vendor\\Kanopi\\Firewall\\Firewall'` in the built
+	 * plugin. The check for "is the unscoped class present" then found the
+	 * scoped one, concluded the build was unscoped, and reported
+	 *
+	 *   Library  2.25.0 (bundled-unscoped)
+	 *   Collision safe  no
+	 *
+	 * on a correctly scoped release. The firewall worked; the one thing this
+	 * class exists to tell you about it was inverted.
+	 *
+	 * Split across an implode(), php-scoper sees no class name to rewrite.
+	 *
+	 * @var list<string>
 	 */
-	private const UNSCOPED_ENTRY = 'Kanopi\\Firewall\\Firewall';
+	private const ENTRY_FRAGMENTS = array( 'Kanopi', 'Firewall', 'Firewall' );
+
+	/**
+	 * Fragments of this plugin's vendor prefix, for the same reason.
+	 *
+	 * @var list<string>
+	 */
+	private const PREFIX_FRAGMENTS = array( 'Kanopi', 'BasicFirewall', 'Vendor' );
 
 	/**
 	 * How the library was resolved, or null before boot() has run.
@@ -65,11 +90,25 @@ final class Library_Loader {
 	private static ?string $mode = null;
 
 	/**
-	 * Why the library is unusable, or null when it is fine.
+	 * Why the library is unusable, as a message key, or null when it is fine.
+	 *
+	 * A key rather than a translated string. boot() runs when the plugin file
+	 * is loaded, long before `init`, and calling __() there makes WordPress 6.7
+	 * and later emit "Translation loading was triggered too early" on every
+	 * request -- a notice that is correct, and that a security plugin printing
+	 * on every page is not a good look for. The message is translated when it is
+	 * read, which is always inside an admin screen or a CLI command.
 	 *
 	 * @var string|null
 	 */
 	private static ?string $failure = null;
+
+	/**
+	 * Substituted into the failure message when it is read.
+	 *
+	 * @var array<int, string>
+	 */
+	private static array $failure_args = array();
 
 	/**
 	 * Resolved library version, or null when it could not be determined.
@@ -95,7 +134,7 @@ final class Library_Loader {
 
 			if ( ! is_readable( $autoload ) ) {
 				self::$mode    = 'missing';
-				self::$failure = __( 'The firewall library is not installed. This copy of the plugin has no vendor directory, which usually means it was checked out from git rather than installed from a release zip.', 'basic-firewall' );
+				self::$failure = 'no-vendor';
 
 				return;
 			}
@@ -104,7 +143,7 @@ final class Library_Loader {
 
 			if ( ! self::entry_class_exists() ) {
 				self::$mode    = 'missing';
-				self::$failure = __( 'The firewall library did not load. A vendor directory is present but does not contain kanopi/firewall.', 'basic-firewall' );
+				self::$failure = 'no-library';
 
 				return;
 			}
@@ -134,8 +173,8 @@ final class Library_Loader {
 	 * which is the only thing the caller actually wants to know.
 	 */
 	private static function resolve_mode(): string {
-		$scoped = ! class_exists( self::UNSCOPED_ENTRY, false ) && class_exists( self::scoped_entry(), false );
-		$class  = $scoped ? self::scoped_entry() : self::UNSCOPED_ENTRY;
+		$scoped = ! class_exists( self::unscoped_entry(), false ) && class_exists( self::scoped_entry(), false );
+		$class  = $scoped ? self::scoped_entry() : self::unscoped_entry();
 
 		try {
 			$file = ( new \ReflectionClass( $class ) )->getFileName();
@@ -167,7 +206,7 @@ final class Library_Loader {
 	 * Whether the library entry class is loadable under either name.
 	 */
 	private static function entry_class_exists(): bool {
-		return class_exists( self::UNSCOPED_ENTRY ) || class_exists( self::scoped_entry() );
+		return class_exists( self::unscoped_entry() ) || class_exists( self::scoped_entry() );
 	}
 
 	/**
@@ -177,14 +216,28 @@ final class Library_Loader {
 	 * rewrite it into a doubly-prefixed name when it processes this file.
 	 */
 	private static function scoped_entry(): string {
-		return 'Kanopi\\BasicFirewall\\Vendor\\' . self::UNSCOPED_ENTRY;
+		return self::vendor_prefix() . '\\' . self::unscoped_entry();
+	}
+
+	/**
+	 * The library's entry class as it is named outside a scoped build.
+	 */
+	private static function unscoped_entry(): string {
+		return implode( '\\', self::ENTRY_FRAGMENTS );
+	}
+
+	/**
+	 * This plugin's vendor namespace prefix.
+	 */
+	private static function vendor_prefix(): string {
+		return implode( '\\', self::PREFIX_FRAGMENTS );
 	}
 
 	/**
 	 * Whether the loaded library is the scoped copy.
 	 */
 	private static function is_scoped(): bool {
-		return ! class_exists( self::UNSCOPED_ENTRY, false ) && class_exists( self::scoped_entry(), false );
+		return ! class_exists( self::unscoped_entry(), false ) && class_exists( self::scoped_entry(), false );
 	}
 
 	/**
@@ -206,7 +259,9 @@ final class Library_Loader {
 			}
 		}
 
-		foreach ( array( 'Composer\\InstalledVersions', 'Kanopi\\BasicFirewall\\Vendor\\Composer\\InstalledVersions' ) as $class ) {
+		$composer = implode( '\\', array( 'Composer', 'InstalledVersions' ) );
+
+		foreach ( array( $composer, self::vendor_prefix() . '\\' . $composer ) as $class ) {
 			if ( ! class_exists( $class ) || ! method_exists( $class, 'isInstalled' ) ) {
 				continue;
 			}
@@ -246,12 +301,8 @@ final class Library_Loader {
 			return;
 		}
 
-		self::$failure = sprintf(
-			/* translators: 1: installed library version, 2: required library version. */
-			__( 'The firewall library is version %1$s, and this plugin requires %2$s or later. An older library re-parses the compiled configuration on every request and does not support every rule type offered here.', 'basic-firewall' ),
-			self::$version,
-			self::MINIMUM_LIBRARY
-		);
+		self::$failure      = 'too-old';
+		self::$failure_args = array( (string) self::$version, self::MINIMUM_LIBRARY );
 	}
 
 	/**
@@ -279,7 +330,28 @@ final class Library_Loader {
 	 * Why the library is unusable, or null when it is fine.
 	 */
 	public static function failure(): ?string {
-		return self::$failure;
+		if ( null === self::$failure ) {
+			return null;
+		}
+
+		switch ( self::$failure ) {
+			case 'no-vendor':
+				return __( 'The firewall library is not installed. This copy of the plugin has no vendor directory, which usually means it was checked out from git rather than installed from a release zip.', 'basic-firewall' );
+
+			case 'no-library':
+				return __( 'The firewall library did not load. A vendor directory is present but does not contain kanopi/firewall.', 'basic-firewall' );
+
+			case 'too-old':
+				return sprintf(
+					/* translators: 1: installed library version, 2: required library version. */
+					__( 'The firewall library is version %1$s, and this plugin requires %2$s or later. An older library re-parses the compiled configuration on every request and does not support every rule type offered here.', 'basic-firewall' ),
+					self::$failure_args[0] ?? '',
+					self::$failure_args[1] ?? self::MINIMUM_LIBRARY
+				);
+
+			default:
+				return self::$failure;
+		}
 	}
 
 	/**
@@ -295,8 +367,9 @@ final class Library_Loader {
 	 * @internal
 	 */
 	public static function reset(): void {
-		self::$mode    = null;
-		self::$failure = null;
-		self::$version = null;
+		self::$mode         = null;
+		self::$failure      = null;
+		self::$failure_args = array();
+		self::$version      = null;
 	}
 }
