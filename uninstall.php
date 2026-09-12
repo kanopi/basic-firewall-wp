@@ -26,133 +26,192 @@ if ( version_compare( PHP_VERSION, '8.1', '<' ) ) {
 	return;
 }
 
-/**
- * Delete this site's firewall data.
- *
- * Everything here is deliberate and destructive. Deactivation is the reversible
- * operation; uninstall is where the block list, the logs and the rule set
- * actually go. It runs per site because the plugin's configuration is per site:
- * on a network, uninstalling has to visit every site or it leaves orphaned
- * tables behind on all of them but one.
- *
- * @return void
+/*
+ * Function declarations are guarded so this file can be included more than
+ * once in a process. WordPress's uninstall_plugin() defines WP_UNINSTALL_PLUGIN
+ * and therefore only works once, so the test suite includes this file directly
+ * to exercise it repeatedly -- and a redeclaration would be a fatal in the
+ * middle of a destructive operation.
  */
-function basic_firewall_uninstall_site() {
-	global $wpdb;
+if ( ! function_exists( 'basic_firewall_uninstall_site' ) ) {
 
-	$options = array(
-		'basic_firewall_settings',
-		'basic_firewall_schema_version',
-		'basic_firewall_mu_plugin_error',
-		'basic_firewall_upgrade_error',
-		'basic_firewall_library_probe',
-		'basic_firewall_source_state',
-	);
-
-	foreach ( $options as $option ) {
-		delete_option( $option );
-	}
-
-	delete_transient( 'basic_firewall_status' );
-
-	wp_clear_scheduled_hook( 'basic_firewall_refresh_sources' );
-	wp_clear_scheduled_hook( 'basic_firewall_prune_logs' );
-
-	/*
-	 * The plugin's own tables. Named with the site's prefix, which is what keeps
-	 * one site in a network from dropping another's.
+	/**
+	 * Delete this site's firewall data.
 	 *
-	 * Table names are assembled from a fixed list and the prefix rather than
-	 * from anything stored, so a tampered option cannot direct a DROP somewhere
-	 * else. They cannot be parameterised -- an identifier is not a value -- so
-	 * the safety has to come from never letting user input reach this line.
+	 * Everything here is deliberate and destructive. Deactivation is the reversible
+	 * operation; uninstall is where the block list, the logs and the rule set
+	 * actually go. It runs per site because the plugin's configuration is per site:
+	 * on a network, uninstalling has to visit every site or it leaves orphaned
+	 * tables behind on all of them but one.
+	 *
+	 * @return void
 	 */
-	$tables = array( 'basic_firewall_blocked', 'basic_firewall_offenses', 'basic_firewall_log' );
-
-	foreach ( $tables as $table ) {
-		$name = $wpdb->prefix . $table;
+	function basic_firewall_uninstall_site() {
+		global $wpdb;
 
 		/*
-		 * A table name is an identifier, and an identifier cannot be a bound
-		 * parameter -- $wpdb->prepare() has nothing to offer here. The safety
-		 * comes from the name never containing user input: it is one of three
-		 * literals above joined to $wpdb->prefix, with backticks stripped.
+		 * Deleted by PREFIX, not from a list.
+		 *
+		 * The first version of this named the options it knew about. Two were added
+		 * to the plugin afterwards -- the compiled-file metadata and the private
+		 * directory's random suffix -- and nobody updated the list, so a real
+		 * uninstall left them behind. That is the failure mode of any file that
+		 * duplicates knowledge it cannot import: uninstall.php runs without the
+		 * plugin's autoloader, so it cannot ask Schema or Paths what they are
+		 * called, and a hand-maintained copy rots silently.
+		 *
+		 * A prefix match cannot rot. Every option this plugin writes is named
+		 * `basic_firewall_*` and nothing else on a site has any business using that
+		 * prefix -- it is the prefix the coding standards require us to own.
 		 */
-		// phpcs:ignore WordPress.DB.PreparedSQL, WordPress.DB.DirectDatabaseQuery
-		$wpdb->query( 'DROP TABLE IF EXISTS `' . str_replace( '`', '', $name ) . '`' );
+		$like = $wpdb->esc_like( 'basic_firewall_' ) . '%';
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		$option_names = $wpdb->get_col(
+			$wpdb->prepare( "SELECT option_name FROM {$wpdb->options} WHERE option_name LIKE %s", $like )
+		);
+
+		foreach ( (array) $option_names as $option_name ) {
+			delete_option( (string) $option_name );
+		}
+
+		/*
+		 * Transients are options too, but under their own prefixes, and they are
+		 * per user -- the admin notice queue and a held import are keyed by user id.
+		 */
+		foreach ( array( '_transient_basic_firewall_', '_transient_timeout_basic_firewall_' ) as $transient_prefix ) {
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+			$transients = $wpdb->get_col(
+				$wpdb->prepare(
+					"SELECT option_name FROM {$wpdb->options} WHERE option_name LIKE %s",
+					$wpdb->esc_like( $transient_prefix ) . '%'
+				)
+			);
+
+			foreach ( (array) $transients as $transient ) {
+				delete_option( (string) $transient );
+			}
+		}
+
+		wp_clear_scheduled_hook( 'basic_firewall_refresh_sources' );
+		wp_clear_scheduled_hook( 'basic_firewall_prune_logs' );
+
+		/*
+		 * The plugin's own tables. Named with the site's prefix, which is what keeps
+		 * one site in a network from dropping another's.
+		 *
+		 * Table names are assembled from a fixed list and the prefix rather than
+		 * from anything stored, so a tampered option cannot direct a DROP somewhere
+		 * else. They cannot be parameterised -- an identifier is not a value -- so
+		 * the safety has to come from never letting user input reach this line.
+		 */
+		$tables = array( 'basic_firewall_blocked', 'basic_firewall_offenses', 'basic_firewall_log' );
+
+		foreach ( $tables as $table ) {
+			$name = $wpdb->prefix . $table;
+
+			/*
+			 * A table name is an identifier, and an identifier cannot be a bound
+			 * parameter -- $wpdb->prepare() has nothing to offer here. The safety
+			 * comes from the name never containing user input: it is one of three
+			 * literals above joined to $wpdb->prefix, with backticks stripped.
+			 */
+			// phpcs:ignore WordPress.DB.PreparedSQL, WordPress.DB.DirectDatabaseQuery
+			$wpdb->query( 'DROP TABLE IF EXISTS `' . str_replace( '`', '', $name ) . '`' );
+		}
+
+		basic_firewall_uninstall_private_dir();
 	}
 
-	basic_firewall_uninstall_private_dir();
-}
-
-/**
- * Delete the private directory and its contents.
- *
- * @return void
- */
-function basic_firewall_uninstall_private_dir() {
-	$uploads = wp_upload_dir( null, false );
-
-	if ( empty( $uploads['basedir'] ) ) {
-		return;
-	}
-
-	$dir = rtrim( $uploads['basedir'], '/\\' ) . '/basic-firewall-private';
-
-	/*
-	 * Recomputed from wp_upload_dir() rather than read from settings or from
-	 * the `basic_firewall_private_path` filter.
+	/**
+	 * Delete the private directory and its contents.
 	 *
-	 * A site that moved the directory keeps it, and that is the right trade: a
-	 * filter pointing at a shared or hand-chosen location is exactly the case
-	 * where recursively deleting whatever is there would be unrecoverable. A
-	 * leftover directory is a tidiness problem; deleting the wrong tree is not.
+	 * @return void
 	 */
-	if ( ! is_dir( $dir ) ) {
-		return;
+	function basic_firewall_uninstall_private_dir() {
+		$uploads = wp_upload_dir( null, false );
+
+		if ( empty( $uploads['basedir'] ) ) {
+			return;
+		}
+
+		$base = rtrim( $uploads['basedir'], '/\\' );
+
+		/*
+		 * The directory name carries a random per-site suffix, so it cannot be
+		 * spelled literally here.
+		 *
+		 * The first version of this looked for `basic-firewall-private` exactly.
+		 * The suffix was added to the plugin later and this was not updated, so a
+		 * real uninstall dropped the tables, revoked the capabilities, removed the
+		 * mu-plugin -- and left the block list, the firewall logs and the compiled
+		 * configuration sitting in a directory that, on nginx, is readable over the
+		 * web. Uninstalling is exactly when nobody is watching for that.
+		 *
+		 * Matched by glob rather than read from the option, because the options are
+		 * deleted above and because a site that has been through more than one
+		 * install cycle can have more than one of these.
+		 *
+		 * Still recomputed from wp_upload_dir() and never from the
+		 * `basic_firewall_private_path` filter: a filter pointing at a shared or
+		 * hand-chosen location is exactly the case where recursively deleting
+		 * whatever is there would be unrecoverable. A leftover directory somebody
+		 * chose is a tidiness problem; deleting the wrong tree is not.
+		 */
+		$found = glob( $base . '/basic-firewall-private-*', GLOB_ONLYDIR );
+
+		// The pre-suffix name, for a site installed before that existed.
+		if ( is_dir( $base . '/basic-firewall-private' ) ) {
+			$found[] = $base . '/basic-firewall-private';
+		}
+
+		foreach ( (array) $found as $dir ) {
+			if ( is_string( $dir ) && is_dir( $dir ) ) {
+				basic_firewall_uninstall_rmdir( $dir, 0 );
+			}
+		}
 	}
 
-	basic_firewall_uninstall_rmdir( $dir, 0 );
-}
+	/**
+	 * Recursively delete a directory.
+	 *
+	 * @param string $dir   Directory to remove.
+	 * @param int    $depth Current recursion depth.
+	 *
+	 * @return void
+	 */
+	function basic_firewall_uninstall_rmdir( $dir, $depth ) {
+		// The tree is shallow and known. A deep one means something unexpected is
+		// in there, and stopping is better than continuing to delete.
+		if ( $depth > 4 ) {
+			return;
+		}
 
-/**
- * Recursively delete a directory.
- *
- * @param string $dir   Directory to remove.
- * @param int    $depth Current recursion depth.
- *
- * @return void
- */
-function basic_firewall_uninstall_rmdir( $dir, $depth ) {
-	// The tree is shallow and known. A deep one means something unexpected is
-	// in there, and stopping is better than continuing to delete.
-	if ( $depth > 4 ) {
-		return;
-	}
+		$entries = glob( rtrim( $dir, '/' ) . '/{,.}[!.,!..]*', GLOB_BRACE );
 
-	$entries = glob( rtrim( $dir, '/' ) . '/{,.}[!.,!..]*', GLOB_BRACE );
+		if ( false === $entries ) {
+			return;
+		}
 
-	if ( false === $entries ) {
-		return;
-	}
+		foreach ( $entries as $entry ) {
+			if ( is_link( $entry ) ) {
+				// Never follow a symlink out of the tree being deleted.
+				wp_delete_file( $entry );
+				continue;
+			}
 
-	foreach ( $entries as $entry ) {
-		if ( is_link( $entry ) ) {
-			// Never follow a symlink out of the tree being deleted.
+			if ( is_dir( $entry ) ) {
+				basic_firewall_uninstall_rmdir( $entry, $depth + 1 );
+				continue;
+			}
+
 			wp_delete_file( $entry );
-			continue;
 		}
 
-		if ( is_dir( $entry ) ) {
-			basic_firewall_uninstall_rmdir( $entry, $depth + 1 );
-			continue;
-		}
-
-		wp_delete_file( $entry );
+		// phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, WordPress.WP.AlternativeFunctions -- uninstall runs without WP_Filesystem, and a directory that will not go is not worth failing an uninstall over.
+		@rmdir( $dir );
 	}
 
-	// phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, WordPress.WP.AlternativeFunctions -- uninstall runs without WP_Filesystem, and a directory that will not go is not worth failing an uninstall over.
-	@rmdir( $dir );
 }
 
 if ( is_multisite() ) {
