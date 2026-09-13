@@ -246,14 +246,50 @@ abstract class Screen {
 	 * @param string $label       Field label.
 	 * @param string $control     The control markup, already escaped.
 	 * @param string $description Help text.
+	 * @param string $show_when   Optional condition, as `field:value` or
+	 *                            `field:value|other`. The row is shown only
+	 *                            while that control holds one of those values.
 	 */
-	protected function row( string $label, string $control, string $description = '' ): void {
+	protected function row( string $label, string $control, string $description = '', string $show_when = '' ): void {
 		printf(
-			'<tr><th scope="row">%s</th><td>%s%s</td></tr>',
+			'<tr%s><th scope="row">%s</th><td>%s%s</td></tr>',
+			'' === $show_when ? '' : sprintf( ' data-bfw-show-when="%s"', esc_attr( $show_when ) ),
 			esc_html( $label ),
 			wp_kses( $control, self::allowed_control_html() ),
 			'' === $description ? '' : '<p class="description">' . wp_kses_post( $description ) . '</p>'
 		);
+	}
+
+	/**
+	 * Open a section that only applies to some selections.
+	 *
+	 * Renders the heading and an optional lead paragraph inside a wrapper the
+	 * admin script can hide. Everything is still rendered and still submitted;
+	 * only its visibility depends on the condition, so a screen behaves exactly
+	 * as it did before when JavaScript is unavailable.
+	 *
+	 * @param string $title     Section heading.
+	 * @param string $show_when Condition, as `field:value` or `field:value|other`.
+	 * @param string $intro     Optional lead paragraph, already translated.
+	 */
+	protected function open_section( string $title, string $show_when = '', string $intro = '' ): void {
+		printf(
+			'<div class="bfw-section"%s>',
+			'' === $show_when ? '' : sprintf( ' data-bfw-show-when="%s"', esc_attr( $show_when ) )
+		);
+
+		printf( '<h2>%s</h2>', esc_html( $title ) );
+
+		if ( '' !== $intro ) {
+			printf( '<p class="description" style="max-width:48rem">%s</p>', wp_kses_post( $intro ) );
+		}
+	}
+
+	/**
+	 * Close a section opened with open_section().
+	 */
+	protected function close_section(): void {
+		echo '</div>';
 	}
 
 	/**

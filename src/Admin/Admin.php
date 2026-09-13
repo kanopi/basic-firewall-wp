@@ -235,6 +235,19 @@ final class Admin {
 			array(),
 			BASIC_FIREWALL_VERSION
 		);
+
+		/*
+		 * Shows only the settings that apply to the current selection. In the
+		 * footer and without dependencies -- it reads the DOM and nothing else,
+		 * so it neither needs jQuery nor has any reason to block rendering.
+		 */
+		wp_enqueue_script(
+			'basic-firewall-admin',
+			BASIC_FIREWALL_URL . 'assets/admin.js',
+			array(),
+			BASIC_FIREWALL_VERSION,
+			true
+		);
 	}
 
 	/**

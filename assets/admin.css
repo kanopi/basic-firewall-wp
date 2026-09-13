@@ -51,3 +51,12 @@
 }
 
 .basic-firewall .bfw-conditions td { vertical-align: top; }
+
+/*
+ * Set by assets/admin.js on a setting that does not apply to the current
+ * selection. Deliberately not the `hidden` attribute: WordPress's own admin CSS
+ * sets `display: table-row` on some rows, which wins over `[hidden]`.
+ */
+.basic-firewall .bfw-hidden {
+	display: none !important;
+}

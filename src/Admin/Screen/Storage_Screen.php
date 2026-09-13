@@ -114,7 +114,7 @@ final class Storage_Screen extends Screen {
 
 		echo '</tbody></table>';
 
-		printf( '<h2>%s</h2>', esc_html__( 'File storage', 'basic-firewall' ) );
+		$this->open_section( __( 'File storage', 'basic-firewall' ), 'backend:file' );
 
 		echo '<table class="form-table" role="presentation"><tbody>';
 
@@ -132,13 +132,12 @@ final class Storage_Screen extends Screen {
 
 		echo '</tbody></table>';
 
-		printf( '<h2>%s</h2>', esc_html__( 'Database storage', 'basic-firewall' ) );
+		$this->close_section();
 
-		printf(
-			'<p class="description" style="max-width:48rem">%s</p>',
-			wp_kses_post(
-				__( 'Reusing WordPress\'s connection reads the credentials fresh on every request and hands them to the firewall then. They are <strong>never written into the compiled file</strong>, so exports stay free of secrets, a plaintext password never reaches disk, and a rotated password takes effect on the next request rather than at the next rebuild.', 'basic-firewall' )
-			)
+		$this->open_section(
+			__( 'Database storage', 'basic-firewall' ),
+			'backend:database',
+			__( 'Reusing WordPress\'s connection reads the credentials fresh on every request and hands them to the firewall then. They are <strong>never written into the compiled file</strong>, so exports stay free of secrets, a plaintext password never reaches disk, and a rotated password takes effect on the next request rather than at the next rebuild.', 'basic-firewall' )
 		);
 
 		echo '<table class="form-table" role="presentation"><tbody>';
@@ -161,9 +160,10 @@ final class Storage_Screen extends Screen {
 			__( 'Connection DSN', 'basic-firewall' ),
 			self::text( 'dsn', '', 'text', 'placeholder="mysqli://user:password@host:3306/database"' ),
 			wp_kses_post(
-				/* translators: %s: the value described in the sentence. */
-				__( 'Only used when the source above is set to DSN. The scheme must be a <strong>Doctrine driver name</strong>, not a database name: <code>mysqli://</code> works, <code>mysql://</code> is an unknown driver, and <code>pdo_mysql://</code> is not a valid URL scheme. Usable schemes are <code>mysqli</code>, <code>pgsql</code>, <code>sqlsrv</code>, <code>oci8</code> and <code>sqlite3</code>. A DSN embeds the password, so the whole string has to be a <code>%env()%</code> token or none of it can be. Leave blank to keep the stored value.', 'basic-firewall' )
-			)
+				/* translators: the %env()% below is a literal token the firewall reads, not a placeholder. */
+				__( 'The scheme must be a <strong>Doctrine driver name</strong>, not a database name: <code>mysqli://</code> works, <code>mysql://</code> is an unknown driver, and <code>pdo_mysql://</code> is not a valid URL scheme. Usable schemes are <code>mysqli</code>, <code>pgsql</code>, <code>sqlsrv</code>, <code>oci8</code> and <code>sqlite3</code>. A DSN embeds the password, so the whole string has to be a <code>%env()%</code> token or none of it can be. Leave blank to keep the stored value.', 'basic-firewall' )
+			),
+			'connection_source:dsn'
 		);
 
 		$storage_table  = (string) $settings->get( 'storage.database.storage_table', '' );
@@ -182,6 +182,8 @@ final class Storage_Screen extends Screen {
 		);
 
 		echo '</tbody></table>';
+
+		$this->close_section();
 
 		$this->close_form();
 	}
