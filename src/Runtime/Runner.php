@@ -40,6 +40,13 @@ final class Runner {
 	private static ?string $failure = null;
 
 	/**
+	 * Marks the firewall applied to this request.
+	 *
+	 * @var list<string>
+	 */
+	private static array $marks = array();
+
+	/**
 	 * Evaluate the current request.
 	 *
 	 * Never throws. Returns true when the request may continue -- which includes
@@ -49,7 +56,13 @@ final class Runner {
 	 */
 	public function evaluate( ?Request $request = null ): bool {
 		if ( defined( 'BASIC_FIREWALL_EVALUATED' ) ) {
-			// The wp-config.php path already dealt with this request.
+			/*
+			 * The wp-config.php path already dealt with this request -- but it
+			 * did so before WordPress existed, so anything it wants to announce
+			 * has been waiting in a global for somewhere to announce it.
+			 */
+			$this->adopt_early_marks();
+
 			return true;
 		}
 
@@ -102,13 +115,104 @@ final class Runner {
 			return true;
 		}
 
+		/*
+		 * The request is built here rather than left to the library, so that
+		 * the marks can be read back off it afterwards.
+		 *
+		 * A `mark` response sets `firewall.marks` as an attribute on the Symfony
+		 * Request, for the application downstream to act on. WordPress has no
+		 * idea that object exists -- so without this, `mark` is a response type
+		 * the rule screen offers and nothing on the site can ever observe.
+		 */
+		$request = $request ?? Request::createFromGlobals();
+
 		try {
-			return $firewall->evaluate( $request );
+			$allowed = $firewall->evaluate( $request );
+
+			$this->publish_marks( $request );
+
+			return $allowed;
 		} catch ( \Throwable $e ) {
 			// A blocking exception is the library's way of saying "rejected" in
 			// exception mode. The responder decides what the visitor sees.
 			return ( new Outcome_Responder() )->respond( $e );
 		}
+	}
+
+	/**
+	 * Announce marks the wp-config.php path recorded before WordPress loaded.
+	 */
+	private function adopt_early_marks(): void {
+		$marks = $GLOBALS['basic_firewall_marks'] ?? null;
+
+		if ( ! is_array( $marks ) || array() === $marks || array() !== self::$marks ) {
+			return;
+		}
+
+		self::$marks = array_values( array_map( 'strval', $marks ) );
+
+		foreach ( self::$marks as $mark ) {
+			$_SERVER['HTTP_X_FIREWALL_MARK'] = $mark;
+		}
+
+		/** This filter is documented in src/Runtime/Runner.php */
+		do_action( 'basic_firewall_request_marked', self::$marks, null );
+	}
+
+	/**
+	 * Hand any marks the firewall set to WordPress.
+	 *
+	 * A marked request is allowed through and flagged -- the honeypot case,
+	 * where you want to know who tripped a rule without telling them they did.
+	 * The library records that on the Symfony Request; this makes it reachable
+	 * from a theme, a plugin, or a logging hook.
+	 *
+	 * @param Request $request The evaluated request.
+	 */
+	private function publish_marks( Request $request ): void {
+		$marks = $request->attributes->get( 'firewall.marks' );
+
+		if ( ! is_array( $marks ) || array() === $marks ) {
+			return;
+		}
+
+		self::$marks = array_values( array_map( 'strval', $marks ) );
+
+		/*
+		 * Mirrored into $_SERVER so that code reading headers the ordinary way
+		 * sees it, which is how a mark reaches something that was never written
+		 * to know this plugin exists.
+		 */
+		foreach ( self::$marks as $mark ) {
+			$_SERVER['HTTP_X_FIREWALL_MARK'] = $mark;
+		}
+
+		/**
+		 * Fires when the firewall marked this request without refusing it.
+		 *
+		 * @param list<string> $marks   The marks applied, each a rule identifier
+		 *                              or the rule's configured mark name.
+		 * @param Request      $request The evaluated request.
+		 */
+		do_action( 'basic_firewall_request_marked', self::$marks, $request );
+	}
+
+	/**
+	 * The marks the firewall applied to this request.
+	 *
+	 * @return list<string>
+	 */
+	public static function marks(): array {
+		return self::$marks;
+	}
+
+	/**
+	 * Whether the firewall marked this request with a given name.
+	 *
+	 * @param string $mark Mark name.
+	 */
+	public static function is_marked( string $mark ): bool {
+		return in_array( $mark, self::$marks, true );
 	}
 
 	/**
@@ -205,5 +309,6 @@ final class Runner {
 	 */
 	public static function reset(): void {
 		self::$failure = null;
+		self::$marks   = array();
 	}
 }

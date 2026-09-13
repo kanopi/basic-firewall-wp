@@ -10,6 +10,7 @@ declare( strict_types = 1 );
 namespace Kanopi\BasicFirewall\Compiler;
 
 use Kanopi\BasicFirewall\Database_Credentials;
+use Kanopi\BasicFirewall\Library_Capabilities;
 use Kanopi\BasicFirewall\Install\Challenge_Secret;
 use Kanopi\BasicFirewall\Plugin;
 use Symfony\Component\Yaml\Yaml;
@@ -412,8 +413,9 @@ final class Config_Compiler {
 	 * @return list<array<string, mixed>>
 	 */
 	private function compile_rules( array $rules ): array {
-		$registry = Plugin::instance()->rule_types();
-		$compiled = array();
+		$registry     = Plugin::instance()->rule_types();
+		$capabilities = new Library_Capabilities();
+		$compiled     = array();
 
 		foreach ( $rules as $rule ) {
 			if ( ! is_array( $rule ) || empty( $rule['enabled'] ) ) {
@@ -445,6 +447,29 @@ final class Config_Compiler {
 					__( 'Rule "%1$s" needs the %2$s rule type, which the installed firewall library cannot provide. It was skipped, so it is not being enforced.', 'basic-firewall' ),
 					(string) ( $rule['id'] ?? '?' ),
 					$type->label()
+				);
+
+				continue;
+			}
+
+			/*
+			 * A response the installed library cannot honour is skipped, loudly.
+			 *
+			 * `redirect` and `mark` arrived in library 2.26.0. An older library
+			 * partitions plugins by response and simply has no bucket for
+			 * either, so a rule carrying one is not rejected -- it is never
+			 * evaluated. That is the silent-no-op this plugin exists to avoid,
+			 * and it is reachable without anybody making a mistake: importing a
+			 * document from a site on a newer library does it.
+			 */
+			$response = (string) ( $rule['response'] ?? 'block' );
+
+			if ( in_array( $response, array( 'redirect', 'mark', 'record' ), true ) && ! $capabilities->has_soft_responses() ) {
+				$this->problems[] = sprintf(
+					/* translators: 1: rule identifier, 2: response name. */
+					__( 'Rule "%1$s" responds with "%2$s", which needs kanopi/firewall 2.26.0 or later. The installed library would never evaluate it, so it was skipped rather than compiled into a rule that silently does nothing.', 'basic-firewall' ),
+					(string) ( $rule['id'] ?? '?' ),
+					$response
 				);
 
 				continue;

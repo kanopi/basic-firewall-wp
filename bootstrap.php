@@ -105,7 +105,33 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 				basic_firewall_build_overrides( $options )
 			);
 
-			return $firewall->evaluate();
+			/*
+			 * The request is built here rather than left to the library, so the
+			 * marks can be read back off it.
+			 *
+			 * A `mark` response flags a request without refusing it -- the
+			 * honeypot case. The library records that as an attribute on the
+			 * Symfony Request, which WordPress knows nothing about, and on this
+			 * path WordPress does not exist yet so there is no hook to fire.
+			 * Stashing it in a global lets the plugin announce it later, once
+			 * there is something listening. Without this, a mark applied on the
+			 * early path is invisible to the entire site.
+			 */
+			$request_class = class_exists( 'Symfony\\Component\\HttpFoundation\\Request' )
+				? 'Symfony\\Component\\HttpFoundation\\Request'
+				: 'Kanopi\\BasicFirewall\\Vendor\\Symfony\\Component\\HttpFoundation\\Request';
+
+			$request = call_user_func( array( $request_class, 'createFromGlobals' ) );
+
+			$allowed = $firewall->evaluate( $request );
+
+			$marks = $request->attributes->get( 'firewall.marks' );
+
+			if ( is_array( $marks ) && array() !== $marks ) {
+				$GLOBALS['basic_firewall_marks'] = array_values( array_map( 'strval', $marks ) );
+			}
+
+			return $allowed;
 		} catch ( \Throwable $e ) {
 			/*
 			 * Includes the blocking exception in `exception` mode. On this path

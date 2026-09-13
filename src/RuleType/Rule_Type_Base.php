@@ -25,7 +25,17 @@ abstract class Rule_Type_Base implements Rule_Type {
 	 * {@inheritDoc}
 	 */
 	public function allowed_responses(): array {
-		return array( 'allow', 'challenge', 'block' );
+		$responses = array( 'allow', 'challenge', 'block' );
+
+		// Offered only when the installed library can honour them; see
+		// Library_Capabilities::has_soft_responses().
+		if ( ( new \Kanopi\BasicFirewall\Library_Capabilities() )->has_soft_responses() ) {
+			$responses[] = 'redirect';
+			$responses[] = 'mark';
+			$responses[] = 'record';
+		}
+
+		return $responses;
 	}
 
 	/**
@@ -166,11 +176,78 @@ abstract class Rule_Type_Base implements Rule_Type {
 			$metadata['challenge_provider'] = $provider;
 		}
 
+		$metadata = $this->apply_response_metadata( $metadata, $rule );
+
 		if ( array() !== $metadata ) {
 			$entry['metadata'] = $metadata;
 		}
 
 		return $entry;
+	}
+
+	/**
+	 * Write the metadata that belongs to a redirect, a mark, or a record choice.
+	 *
+	 * All of this needs library 2.26.0, which split refusing from recording.
+	 * Each key is written only where it applies, for the same reason the
+	 * challenge provider is: a value in an exported document that nothing acts
+	 * on is something the next reader has to go and disprove.
+	 *
+	 * @param array<string, mixed> $metadata Metadata so far.
+	 * @param array<string, mixed> $rule     The whole rule.
+	 *
+	 * @return array<string, mixed>
+	 */
+	private function apply_response_metadata( array $metadata, array $rule ): array {
+		$response = (string) ( $rule['response'] ?? 'block' );
+
+		/*
+		 * Three states collapse to a boolean here, or to nothing at all.
+		 *
+		 * The library's default differs by response -- a block records unless
+		 * told not to, a redirect or mark records only when told to -- so
+		 * "default" has to mean "write no key" rather than "write false".
+		 * Writing false on a block would turn the stored default into a
+		 * deliberate opt-out; writing true on a redirect would turn a honeypot
+		 * into something that bans the visitors it was meant to watch.
+		 */
+		$record = (string) ( $rule['record'] ?? 'default' );
+
+		if ( 'yes' === $record || 'no' === $record ) {
+			$metadata['record'] = ( 'yes' === $record );
+		}
+
+		if ( 'redirect' === $response ) {
+			$location = trim( (string) ( $rule['redirect_to'] ?? '' ) );
+
+			if ( '' !== $location ) {
+				$metadata['redirect_to'] = $location;
+			}
+
+			$status = (int) ( $rule['redirect_status'] ?? 302 );
+
+			// Only the four the library honours; anything else it reads as 302,
+			// so writing it would record a value that does not happen.
+			if ( in_array( $status, array( 301, 302, 307, 308 ), true ) ) {
+				$metadata['redirect_status'] = $status;
+			}
+		}
+
+		if ( 'mark' === $response ) {
+			$name = trim( (string) ( $rule['mark_as'] ?? '' ) );
+
+			if ( '' !== $name ) {
+				$metadata['mark_as'] = $name;
+			}
+
+			$header = trim( (string) ( $rule['mark_header'] ?? '' ) );
+
+			if ( '' !== $header ) {
+				$metadata['mark_header'] = $header;
+			}
+		}
+
+		return $metadata;
 	}
 
 	/**

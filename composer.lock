@@ -549,16 +549,16 @@
         },
         {
             "name": "kanopi/firewall",
-            "version": "v2.25.0",
+            "version": "v2.26.0",
             "source": {
                 "type": "git",
                 "url": "https://github.com/kanopi/firewall.git",
-                "reference": "c972ed32b60bb96125b6bb885c39bf703699831e"
+                "reference": "e033b27af0daa9cd38f44a5d1b09d49e2e7601c7"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/kanopi/firewall/zipball/c972ed32b60bb96125b6bb885c39bf703699831e",
-                "reference": "c972ed32b60bb96125b6bb885c39bf703699831e",
+                "url": "https://api.github.com/repos/kanopi/firewall/zipball/e033b27af0daa9cd38f44a5d1b09d49e2e7601c7",
+                "reference": "e033b27af0daa9cd38f44a5d1b09d49e2e7601c7",
                 "shasum": ""
             },
             "require": {
@@ -623,9 +623,9 @@
             "description": "Evaluate the requests for malicious items.",
             "support": {
                 "issues": "https://github.com/kanopi/firewall/issues",
-                "source": "https://github.com/kanopi/firewall/tree/v2.25.0"
+                "source": "https://github.com/kanopi/firewall/tree/v2.26.0"
             },
-            "time": "2026-09-12T04:56:09+00:00"
+            "time": "2026-09-12T22:51:04+00:00"
         },
         {
             "name": "matomo/device-detector",

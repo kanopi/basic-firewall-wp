@@ -9,6 +9,7 @@ declare( strict_types = 1 );
 
 namespace Kanopi\BasicFirewall\Tests\e2e;
 
+use Kanopi\BasicFirewall\Library_Capabilities;
 use Kanopi\BasicFirewall\Plugin;
 use Kanopi\BasicFirewall\Support\Schema;
 use PHPUnit\Framework\TestCase;
@@ -94,6 +95,18 @@ final class HttpEvaluationTest extends TestCase {
 	 * @param string                           $mode  Operating mode.
 	 */
 	private function given_rules( array $rules, string $mode = 'block' ): void {
+		// Fill in the keys the schema expects, so a fixture naming only what it
+		// cares about does not have the rest coerced to defaults mid-test.
+		foreach ( $rules as $index => $rule ) {
+			$rules[ $index ] = $rule + array(
+				'record'          => 'default',
+				'redirect_to'     => '',
+				'redirect_status' => 302,
+				'mark_as'         => '',
+				'mark_header'     => '',
+			);
+		}
+
 		$settings = array_replace_recursive(
 			Schema::defaults(),
 			array(
@@ -182,8 +195,9 @@ final class HttpEvaluationTest extends TestCase {
 		}
 
 		return array(
-			'status' => (int) wp_remote_retrieve_response_code( $response ),
-			'body'   => (string) wp_remote_retrieve_body( $response ),
+			'status'   => (int) wp_remote_retrieve_response_code( $response ),
+			'body'     => (string) wp_remote_retrieve_body( $response ),
+			'location' => (string) wp_remote_retrieve_header( $response, 'location' ),
 		);
 	}
 
@@ -339,6 +353,113 @@ final class HttpEvaluationTest extends TestCase {
 			'Verification required',
 			$this->request( '/' )['body'],
 			'An unmatched request was challenged.'
+		);
+	}
+
+	/**
+	 * A redirect sends the visitor somewhere instead of refusing them.
+	 *
+	 * Needs library 2.26.0. Temporary by default, deliberately: a rule's verdict
+	 * changes with the next edit, and a 301 is cached by browsers and
+	 * intermediaries more or less forever.
+	 */
+	public function test_a_redirect_rule_sends_the_visitor_elsewhere(): void {
+		if ( ! ( new Library_Capabilities() )->has_soft_responses() ) {
+			$this->markTestSkipped( 'The installed library predates redirect and mark responses.' );
+		}
+
+		$this->given_rules(
+			array(
+				array(
+					'id'              => 'e2e_redirect',
+					'type'            => 'url',
+					'label'           => 'End-to-end redirect',
+					'enabled'         => true,
+					'response'        => 'redirect',
+					'weight'          => 0,
+					'redirect_to'     => '/why-was-i-redirected',
+					'redirect_status' => 302,
+					'settings'        => array(
+						'match_type' => 'any',
+						'conditions' => array(
+							array(
+								'variable' => 'path',
+								'operator' => 'equals',
+								'value'    => '/bfw-e2e-redirect',
+							),
+						),
+					),
+				),
+			)
+		);
+
+		$response = $this->request( '/bfw-e2e-redirect' );
+
+		$this->assertSame( 302, $response['status'], 'The visitor was not redirected.' );
+		$this->assertSame(
+			'/why-was-i-redirected',
+			$response['location'],
+			'The visitor was redirected somewhere other than the configured location.'
+		);
+
+		/*
+		 * And nothing was recorded. A redirect is not a ban: a client sent to a
+		 * notice page who came back to find themselves blocked instead would
+		 * have no way to understand why.
+		 */
+		$this->assertSame(
+			0,
+			count( Plugin::instance()->blocked()->all()['clients'] ),
+			'A redirect recorded the client. It must not, unless the rule opts in.'
+		);
+	}
+
+	/**
+	 * A block can refuse without recording.
+	 *
+	 * The lockdown case, and the reason `record` exists: a rule that refuses
+	 * everybody and records them leaves a block list full of customers once it
+	 * is lifted, each on an escalating ban nobody asked for.
+	 */
+	public function test_a_block_can_refuse_without_recording(): void {
+		if ( ! ( new Library_Capabilities() )->has_record_control() ) {
+			$this->markTestSkipped( 'The installed library always records a block.' );
+		}
+
+		$this->given_rules(
+			array(
+				array(
+					'id'       => 'e2e_lockdown',
+					'type'     => 'url',
+					'label'    => 'End-to-end lockdown',
+					'enabled'  => true,
+					'response' => 'block',
+					'weight'   => 0,
+					'record'   => 'no',
+					'settings' => array(
+						'match_type' => 'any',
+						'conditions' => array(
+							array(
+								'variable' => 'path',
+								'operator' => 'equals',
+								'value'    => '/bfw-e2e-lockdown',
+							),
+						),
+					),
+				),
+			)
+		);
+
+		$this->assertSame(
+			403,
+			$this->request( '/bfw-e2e-lockdown' )['status'],
+			'The lockdown rule did not refuse the request.'
+		);
+
+		$this->assertSame(
+			0,
+			count( Plugin::instance()->blocked()->all()['clients'] ),
+			'A block with record disabled still wrote the client to the block list. Lifting this lockdown would leave every visitor banned.'
 		);
 	}
 

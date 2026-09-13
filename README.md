@@ -309,8 +309,54 @@ generated.
 | IP reputation | AbuseIPDB confidence score. Free API key, one cached lookup per visitor per day, fails open |
 | OWASP Core Rule Set | The full CRS ruleset, via `kanopi/crs-engine` |
 
-Each rule has a **response** — Allow, Challenge or Block — evaluated in that
-order, and a match ends evaluation. Within a group, lower weights run first.
+### Responses
+
+Six, evaluated in order, and a match ends evaluation. Within a group, lower
+weights run first.
+
+| Response | What happens | Recorded? |
+|---|---|---|
+| **Allow** | Let the request through and stop evaluating | no |
+| **Challenge** | Serve an interstitial the visitor must solve | no |
+| **Mark** | Let the request through, and flag it | only if you say so |
+| **Record** | Let the request through, and block them next time | yes |
+| **Redirect** | Send the visitor somewhere else | only if you say so |
+| **Block** | Reject the request | yes, unless you say not to |
+
+The last four need `kanopi/firewall` 2.26.0 or later. On an older library they
+are not offered, and a rule carrying one is skipped at compile time with a
+warning rather than compiled into something the library would never evaluate.
+
+**Refusing and recording are separate.** That split is what makes two common
+setups possible:
+
+- **A honeypot.** A rule catching a scanner on a bait URL wants it blocked
+  *next* time, not to refuse the fetch it is already answering — refusing tells
+  the scanner exactly which URL is wired, which is the one thing a honeypot must
+  not do. That is `record`, or `mark` if you only want the signal.
+- **A lockdown.** A rule that refuses everybody and records them leaves a block
+  list full of customers once it is lifted, each on an escalating ban nobody
+  asked for. Set **Record the client** to *No* on the block rule.
+
+**Reading a mark from your own code.** A marked request is allowed through and
+flagged, and the plugin hands that to WordPress on both evaluation paths:
+
+```php
+add_action( 'basic_firewall_request_marked', function ( array $marks ) {
+    // e.g. log it, tag the session, vary the response
+} );
+
+// Or ask directly, any time after plugins_loaded:
+if ( Kanopi\BasicFirewall\Runtime\Runner::is_marked( 'honeypot' ) ) { … }
+```
+
+A rule can also set a request header, for something downstream — a CDN, a log
+pipeline — that was never written to know this plugin exists.
+
+**Prefer a temporary redirect.** A rule's verdict changes with the next edit, and
+a 301 is cached by browsers and intermediaries more or less forever: somebody
+caught by a rule you later tune would keep being sent to the notice page long
+after it stopped matching them.
 
 ### Use `automated`, not `bot`
 

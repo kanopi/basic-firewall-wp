@@ -75,6 +75,78 @@ final class Library_Capabilities {
 	}
 
 	/**
+	 * Whether the library can redirect or mark a request rather than refuse it.
+	 *
+	 * Added in library 2.26.0, which split refusing from recording: a honeypot
+	 * can record without refusing, and a lockdown can refuse without recording.
+	 * With it come two response actions this plugin did not previously have.
+	 *
+	 * Detected on the method rather than the version, because a version string
+	 * is what the library is called and a method is what it can do. On an older
+	 * library the two responses are not offered on the rule screen and a rule
+	 * carrying one is skipped at compile time with a warning -- rather than
+	 * compiled into a response the library does not understand, which it would
+	 * treat as no match at all.
+	 */
+	public function has_soft_responses(): bool {
+		$base = self::plugin_base_class();
+
+		return method_exists( $base, 'getRedirectLocation' ) && method_exists( $base, 'getMarkName' );
+	}
+
+	/**
+	 * The library's plugin base class, assembled rather than named.
+	 *
+	 * A `::class` constant lets static analysis resolve the class and fold every
+	 * method_exists() against it to a constant -- which is exactly wrong here,
+	 * because the whole point of these checks is that the installed library
+	 * varies. Analysed against 2.26 they all read as "always true"; run against
+	 * 2.24 they are not.
+	 *
+	 * @return class-string
+	 */
+	private static function plugin_base_class(): string {
+		$bare = implode( '\\', array( 'Kanopi', 'Firewall', 'Plugins', 'AbstractPluginBase' ) );
+
+		/*
+		 * Both spellings, scoped first.
+		 *
+		 * Assembling only the unscoped name fixed the static analysis and broke
+		 * every scoped release: in a scoped build that class does not exist, so
+		 * has_soft_responses() answered false and the compiler skipped every
+		 * redirect and mark rule as "needs 2.26.0 or later" -- on a build
+		 * running 2.26.0. The skip was at least loud, which is why it was found
+		 * in a minute rather than in a support ticket.
+		 *
+		 * Scoped first for the same reason Library_Loader does it: it is the
+		 * answer in a release build, and asking for it costs nothing in a
+		 * development one.
+		 */
+		$scoped = implode( '\\', array( 'Kanopi', 'BasicFirewall', 'Vendor' ) ) . '\\' . $bare;
+
+		/**
+		 * Whichever spelling this build actually has.
+		 *
+		 * @var class-string $resolved
+		 */
+		$resolved = class_exists( $scoped ) ? $scoped : $bare;
+
+		return $resolved;
+	}
+
+	/**
+	 * Whether a rule can refuse without recording, or record without refusing.
+	 *
+	 * The same 2.26.0 change, checked separately because it is useful on its own:
+	 * `record: false` on a block is what a deliberate lockdown needs, so that
+	 * lifting it does not leave a block list full of customers each on an
+	 * escalating ban nobody asked for.
+	 */
+	public function has_record_control(): bool {
+		return method_exists( self::plugin_base_class(), 'recordsOffenses' );
+	}
+
+	/**
 	 * Whether the Core Rule Set is present and actually detecting.
 	 */
 	public function has_working_crs(): bool {
@@ -196,6 +268,20 @@ final class Library_Capabilities {
 			$missing[] = array(
 				'feature' => __( 'IP reputation (AbuseIPDB)', 'basic-firewall' ),
 				'reason'  => __( 'The installed library does not ship the AbuseIPDB plugin.', 'basic-firewall' ),
+			);
+		}
+
+		if ( ! $this->has_soft_responses() ) {
+			$missing[] = array(
+				'feature' => __( 'Redirect and mark responses', 'basic-firewall' ),
+				'reason'  => __( 'The installed library cannot redirect a request or mark it without refusing it. Those responses need kanopi/firewall 2.26.0 or later, and are not offered.', 'basic-firewall' ),
+			);
+		}
+
+		if ( ! $this->has_record_control() ) {
+			$missing[] = array(
+				'feature' => __( 'Refusing without recording', 'basic-firewall' ),
+				'reason'  => __( 'The installed library always records a block in the durable block list. Refusing without recording — what a temporary lockdown needs, so lifting it does not leave every visitor banned — needs kanopi/firewall 2.26.0 or later.', 'basic-firewall' ),
 			);
 		}
 

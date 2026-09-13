@@ -81,12 +81,27 @@ if (!isset($pinned["kanopi/firewall"])) {
     fwrite(STDERR, "kanopi/firewall is not in composer.lock\n");
     exit(1);
 }
+// Aligned to the longest key, which is what the coding standard wants -- the
+// file is committed, so it has to pass the same linter as everything else.
+$width = 0;
+foreach (array_keys($pinned) as $name) {
+    $width = max($width, strlen($name) + 2);
+}
+$lines = "";
+foreach ($pinned as $name => $version) {
+    $lines .= sprintf("\t%-" . $width . "s => %s,\n", "\x27" . $name . "\x27", "\x27" . $version . "\x27");
+}
 file_put_contents(
     $argv[2] . "/vendor-version.php",
-    "<?php\n/**\n * Pinned versions of the vendored library, written at build time.\n *\n * @package Kanopi\\BasicFirewall\n */\n\nreturn " . var_export($pinned, true) . ";\n"
+    "<?php\n/**\n * Pinned versions of the vendored library.\n *\n * Generated from composer.lock by build/build-zip.sh, and committed on purpose.\n *\n * This is the only way a scoped release build can report its own library version.\n * PHP-Scoper leaves Composer\x27s classmap key for InstalledVersions unscoped while\n * rewriting the file it points at to declare the prefixed class, so in a scoped\n * build neither name resolves and Composer\x27s runtime API answers nothing.\n *\n * Committed rather than generated-only so a checkout is analysable and the pinned\n * version is visible in git beside composer.lock. The build overwrites it.\n *\n * @package Kanopi\\BasicFirewall\n */\n\nreturn array(\n" . $lines . ");\n"
 );
 printf("    kanopi/firewall %s\n", $pinned["kanopi/firewall"]);
 ' "${ROOT}" "${BUILD}"
+
+# Refresh the committed copy at the plugin root as well, so that a checkout
+# always carries the version the lock file pins. It is read by Library_Loader in
+# a scoped build, where Composer's runtime API cannot answer.
+cp "${BUILD}/vendor-version.php" "${ROOT}/vendor-version.php"
 
 # ---------------------------------------------------------------------------
 # 2. Scope.

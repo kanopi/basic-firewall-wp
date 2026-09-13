@@ -751,7 +751,18 @@ final class Schema {
 					'type'    => 'string',
 					'label'   => 'Response',
 					'default' => 'block',
-					'choices' => array( 'allow', 'challenge', 'block' ),
+
+					/*
+					 * `redirect` and `mark` need library 2.26.0. They are in the
+					 * schema regardless, so that a document exported from a site
+					 * running a newer library imports into an older one without
+					 * the value being rejected and silently replaced by `block`
+					 * -- which would turn a honeypot into a refusal. The rule
+					 * screen only offers them when the library can do them, and
+					 * the compiler skips a rule whose response the library
+					 * cannot honour rather than emitting it.
+					 */
+					'choices' => array( 'allow', 'challenge', 'block', 'redirect', 'mark', 'record' ),
 				),
 				'weight'             => array(
 					'type'    => 'int',
@@ -775,6 +786,50 @@ final class Schema {
 					'default' => 0,
 					'min'     => 0,
 					'max'     => 599,
+				),
+				'record'             => array(
+					'type'    => 'string',
+					'label'   => 'Whether a match is written to the block list',
+
+					/*
+					 * Three states, and "default" is one of them, because the
+					 * library's own default differs by response: a block records
+					 * unless told not to, a redirect or mark records only when
+					 * told to. Storing a boolean would force this plugin to pick
+					 * one of those and get the other wrong.
+					 */
+					'default' => 'default',
+					'choices' => array( 'default', 'yes', 'no' ),
+				),
+				'redirect_to'        => array(
+					'type'    => 'string',
+					'label'   => 'Where a redirected visitor is sent',
+					'default' => '',
+				),
+				'redirect_status'    => array(
+					'type'    => 'int',
+					'label'   => 'Redirect status code',
+
+					/*
+					 * 302, not 301. A rule's verdict can change with the next
+					 * edit, and a 301 is cached by browsers and intermediaries
+					 * more or less forever -- somebody caught by a rule that is
+					 * later tuned should not keep being sent to the notice page
+					 * long after the rule stopped matching.
+					 */
+					'default' => 302,
+					'min'     => 300,
+					'max'     => 308,
+				),
+				'mark_as'            => array(
+					'type'    => 'string',
+					'label'   => 'Name the request is marked with, blank for the rule identifier',
+					'default' => '',
+				),
+				'mark_header'        => array(
+					'type'    => 'string',
+					'label'   => 'Header set on a marked request, blank for none',
+					'default' => '',
 				),
 				'challenge_provider' => array(
 					'type'    => 'string',

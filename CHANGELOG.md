@@ -7,6 +7,38 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- Support for the responses `kanopi/firewall` 2.26.0 introduced: **redirect**,
+  **mark** and **record**, alongside a per-rule choice of whether a match is
+  written to the durable block list. Refusing and recording come apart, which is
+  what a honeypot needs (record without refusing) and what a lockdown needs
+  (refuse without recording — so lifting it does not leave every visitor banned).
+- `basic_firewall_request_marked`, and `Runner::is_marked()`, so a marked request
+  is observable from WordPress. The library records a mark on its own Symfony
+  Request, which WordPress knows nothing about; without this, `mark` was a
+  response the screen offered and nothing on the site could see. Works on both
+  evaluation paths, including the wp-config.php one, where the mark is stashed
+  until there is a hook to announce it on.
+
+### Changed
+
+- The bundled library is now `kanopi/firewall` 2.26.0.
+- The library version is read from Composer's runtime data first and the
+  build-time marker second. The marker is written at build time and went stale
+  the moment a working copy ran `composer update` — reporting 2.25.0 while every
+  test passed against 2.26.0. In a scoped release neither Composer name resolves,
+  so the marker still answers there, and it is now committed rather than
+  generated-only.
+
+### Fixed
+
+- A latent fatal in scoped builds. PHP-Scoper leaves Composer's classmap key for
+  `InstalledVersions` unscoped while rewriting the file it points at to declare
+  the prefixed class, so asking for the unscoped name after the scoped one is
+  loaded is a "Cannot redeclare" fatal. Lookups now ask for the scoped name
+  first and never touch the broken key.
+
 ## [1.0.0]
 
 First release. The WordPress port of the Drupal module `basic_firewall`, built

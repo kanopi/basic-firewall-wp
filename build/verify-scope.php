@@ -50,6 +50,41 @@ if ( ! is_dir( $plugin_dir ) ) {
 $failures = array();
 
 /**
+ * Remove comments and docblocks from PHP source.
+ *
+ * Uses the tokenizer rather than a regular expression, so a class name inside a
+ * string that happens to look like a comment is not removed with them.
+ *
+ * @param string $contents PHP source.
+ *
+ * @return string
+ */
+function bfw_strip_php_comments( string $contents ): string {
+	$tokens = token_get_all( $contents );
+
+	$out = '';
+
+	foreach ( $tokens as $token ) {
+		if ( is_array( $token ) ) {
+			if ( T_COMMENT === $token[0] || T_DOC_COMMENT === $token[0] ) {
+				// Keep the newlines so reported line numbers stay right.
+				$out .= str_repeat( "\n", substr_count( $token[1], "\n" ) );
+
+				continue;
+			}
+
+			$out .= $token[1];
+
+			continue;
+		}
+
+		$out .= $token;
+	}
+
+	return $out;
+}
+
+/**
  * Record a failure.
  *
  * @param string $message What went wrong.
@@ -294,6 +329,40 @@ if ( 0 === $scanned ) {
 }
 
 // ---------------------------------------------------------------------------
+// 1b. Capability detection must still see the library in a scoped build.
+// ---------------------------------------------------------------------------
+
+echo "verify-scope: capability detection\n";
+
+/*
+ * Library_Capabilities decides which features the rule screen offers and which
+ * rules the compiler will emit. It asks the library what it can do by looking
+ * for methods on a class -- and a scoped build renames that class.
+ *
+ * Checking only the unscoped name produced a release that skipped every redirect
+ * and mark rule as "needs kanopi/firewall 2.26.0 or later", on a build running
+ * exactly that. The skip was loud, so it was caught, but nothing in the build
+ * would have caught it.
+ */
+$base = $prefix . '\\Kanopi\\Firewall\\Plugins\\AbstractPluginBase';
+
+if ( ! class_exists( $base ) ) {
+	bfw_fail( 'the scoped plugin base class does not resolve, so capability detection cannot work' );
+} else {
+	bfw_pass( 'the scoped plugin base class resolves' );
+
+	foreach ( array( 'getRedirectLocation', 'getMarkName', 'recordsOffenses' ) as $method ) {
+		if ( method_exists( $base, $method ) ) {
+			bfw_pass( sprintf( '%s() is detectable on the scoped class', $method ) );
+
+			continue;
+		}
+
+		bfw_fail( sprintf( '%s() is not detectable, so the feature it gates will be withheld', $method ) );
+	}
+}
+
+// ---------------------------------------------------------------------------
 // 2a. Constants named as strings must not have been renamed.
 // ---------------------------------------------------------------------------
 
@@ -355,7 +424,9 @@ $loader_path = $plugin_dir . '/src/Library_Loader.php';
 if ( ! is_readable( $loader_path ) ) {
 	bfw_fail( 'src/Library_Loader.php is missing from the build' );
 } else {
-	$loader = (string) file_get_contents( $loader_path );
+	// Comments stripped first: a docblock explaining why the prefix must not
+	// appear as a literal is not itself a prefixed literal.
+	$loader = bfw_strip_php_comments( (string) file_get_contents( $loader_path ) );
 
 	if ( preg_match( '/[\'"]' . preg_quote( $prefix, '/' ) . '/', $loader ) ) {
 		bfw_fail( 'Library_Loader contains a prefixed class-name literal -- its scoping detection is inverted' );

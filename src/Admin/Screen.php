@@ -341,9 +341,14 @@ abstract class Screen {
 	/**
 	 * A select.
 	 *
-	 * @param string                $name    Field name.
-	 * @param array<string, string> $options Value to label.
-	 * @param string                $current Current value.
+	 * @param string                   $name    Field name.
+	 * @param array<array-key, string> $options Value to label. Keys are array-key
+	 *                                          rather than string because PHP
+	 *                                          casts a numeric-string key to an
+	 *                                          int, so array( '302' => ... ) is
+	 *                                          an int-keyed array however it was
+	 *                                          written.
+	 * @param string                   $current Current value.
 	 */
 	protected static function select( string $name, array $options, string $current ): string {
 		$markup = sprintf( '<select name="%s" id="%s">', esc_attr( $name ), esc_attr( $name ) );

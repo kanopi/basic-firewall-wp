@@ -250,19 +250,46 @@ final class Library_Loader {
 	 * build may have rewritten or dropped it.
 	 */
 	private static function detect_version(): ?string {
-		$marker = BASIC_FIREWALL_DIR . 'vendor-version.php';
+		/*
+		 * Composer's live data first, the build-time marker second.
+		 *
+		 * The marker exists because a scoped build might not be able to reach
+		 * Composer's runtime API. It turns out it always can -- the scoped
+		 * builds keep `Composer\InstalledVersions` unprefixed -- so the marker
+		 * is a fallback rather than the primary source, and asking it first was
+		 * actively wrong: it is written at build time and goes stale the moment
+		 * a developer runs `composer update` in a working copy. Measured, on
+		 * exactly that: after upgrading the library to 2.26.0 and watching every
+		 * test pass against it, `wp basic-firewall status` still reported
+		 * 2.25.0, because a marker from an earlier build was answering.
+		 *
+		 * A version this plugin reports wrongly is a version an operator
+		 * troubleshoots against wrongly.
+		 */
 
-		if ( is_readable( $marker ) ) {
-			$pinned = require $marker;
-
-			if ( is_array( $pinned ) && isset( $pinned['kanopi/firewall'] ) && is_string( $pinned['kanopi/firewall'] ) ) {
-				return ltrim( $pinned['kanopi/firewall'], 'v' );
-			}
-		}
-
+		/*
+		 * The SCOPED name is asked for first, and the order is load-bearing.
+		 *
+		 * PHP-Scoper leaves the classmap key for Composer's runtime API
+		 * unscoped -- `Composer\InstalledVersions` -- while rewriting the file
+		 * it points at to declare the prefixed class. So in a scoped build,
+		 * asking for the unscoped name makes the autoloader include a file that
+		 * does not declare it, and if the scoped class is already loaded that
+		 * include is a fatal:
+		 *
+		 *   Cannot redeclare class Kanopi\BasicFirewall\Vendor\Composer\InstalledVersions
+		 *
+		 * Asking for the scoped name first means a scoped build never touches
+		 * that broken key. An unscoped build has no scoped class in its
+		 * classmap, so the first lookup simply misses and the second answers.
+		 *
+		 * Both are assembled from fragments so PHP-Scoper cannot rewrite either
+		 * into the other, which it did to the literal and which collapsed the
+		 * two candidates into one.
+		 */
 		$composer = implode( '\\', array( 'Composer', 'InstalledVersions' ) );
 
-		foreach ( array( $composer, self::vendor_prefix() . '\\' . $composer ) as $class ) {
+		foreach ( array( self::vendor_prefix() . '\\' . $composer, $composer ) as $class ) {
 			if ( ! class_exists( $class ) || ! method_exists( $class, 'isInstalled' ) ) {
 				continue;
 			}
@@ -279,6 +306,16 @@ final class Library_Loader {
 				}
 			} catch ( \Throwable $e ) {
 				continue;
+			}
+		}
+
+		$marker = BASIC_FIREWALL_DIR . 'vendor-version.php';
+
+		if ( is_readable( $marker ) ) {
+			$pinned = require $marker;
+
+			if ( is_array( $pinned ) && isset( $pinned['kanopi/firewall'] ) && is_string( $pinned['kanopi/firewall'] ) ) {
+				return ltrim( $pinned['kanopi/firewall'], 'v' );
 			}
 		}
 

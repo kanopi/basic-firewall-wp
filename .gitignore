@@ -3,7 +3,6 @@
 /vendor/
 /build/scoped/
 /build/dist/
-/vendor-version.php
 
 # Tooling
 /.phpunit.cache/
@@ -22,3 +21,6 @@
 # Build intermediates. The zip is a release artifact, not a repository file.
 /build/scratch/
 /build/stage/
+
+# Written by build/build-zip.sh on every build.
+/build

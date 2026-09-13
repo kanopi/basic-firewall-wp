@@ -80,6 +80,11 @@ final class Rule_Edit_Screen extends Screen {
 			'weight'             => $type->weight(),
 			'status_code'        => 0,
 			'challenge_provider' => '',
+			'record'             => 'default',
+			'redirect_to'        => '',
+			'redirect_status'    => 302,
+			'mark_as'            => '',
+			'mark_header'        => '',
 			'expiration'         => 3600,
 			'description'        => '',
 			'settings'           => $type->default_settings(),
@@ -141,6 +146,11 @@ final class Rule_Edit_Screen extends Screen {
 			'weight'             => (int) $this->posted( 'weight', '0' ),
 			'status_code'        => (int) $this->posted( 'status_code', '0' ),
 			'challenge_provider' => $this->posted( 'challenge_provider' ),
+			'record'             => $this->posted( 'record', 'default' ),
+			'redirect_to'        => $this->posted( 'redirect_to' ),
+			'redirect_status'    => (int) $this->posted( 'redirect_status', '302' ),
+			'mark_as'            => $this->posted( 'mark_as' ),
+			'mark_header'        => $this->posted( 'mark_header' ),
 			'expiration'         => $expiration,
 			'description'        => $this->posted_textarea( 'description' ),
 			'settings'           => $settings,
@@ -290,6 +300,9 @@ final class Rule_Edit_Screen extends Screen {
 			$responses[ $response ] = match ( $response ) {
 				'allow'     => __( 'Allow — let the request through and stop evaluating', 'basic-firewall' ),
 				'challenge' => __( 'Challenge — serve an interstitial the visitor must solve', 'basic-firewall' ),
+				'redirect'  => __( 'Redirect — send the visitor somewhere else', 'basic-firewall' ),
+				'mark'      => __( 'Mark — let the request through, but flag it', 'basic-firewall' ),
+				'record'    => __( 'Record — let the request through, and block them next time', 'basic-firewall' ),
 				default     => __( 'Block — reject the request', 'basic-firewall' ),
 			};
 		}
@@ -338,6 +351,8 @@ final class Rule_Edit_Screen extends Screen {
 			);
 		}
 
+		$this->render_response_rows( $rule );
+
 		$this->row(
 			__( 'Notes', 'basic-firewall' ),
 			self::textarea( 'description', (string) $rule['description'], 3 ),
@@ -363,6 +378,86 @@ final class Rule_Edit_Screen extends Screen {
 		);
 
 		echo '</form>';
+	}
+
+	/**
+	 * Rows that belong to a redirect, a mark, or the record choice.
+	 *
+	 * @param array<string, mixed> $rule The rule being edited.
+	 */
+	private function render_response_rows( array $rule ): void {
+		$response = (string) $rule['response'];
+
+		if ( ! ( new \Kanopi\BasicFirewall\Library_Capabilities() )->has_record_control() ) {
+			return;
+		}
+
+		if ( 'redirect' === $response ) {
+			$this->row(
+				__( 'Send the visitor to', 'basic-firewall' ),
+				self::text( 'redirect_to', (string) $rule['redirect_to'], 'text', 'placeholder="/why-was-i-redirected"' ),
+				__( 'A path on this site, or a full URL. A redirect is the gentler answer when you are fairly sure but not certain — the visitor gets somewhere to read rather than a refusal with no explanation.', 'basic-firewall' )
+			);
+
+			$this->row(
+				__( 'Redirect status', 'basic-firewall' ),
+				self::select(
+					'redirect_status',
+					array(
+						'302' => __( '302 — temporary (recommended)', 'basic-firewall' ),
+						'307' => __( '307 — temporary, keeps the method', 'basic-firewall' ),
+						'301' => __( '301 — permanent', 'basic-firewall' ),
+						'308' => __( '308 — permanent, keeps the method', 'basic-firewall' ),
+					),
+					(string) $rule['redirect_status']
+				),
+				__( 'Keep this temporary unless you are certain. A rule\'s verdict changes with the next edit, and a <strong>301 is cached by browsers and intermediaries more or less forever</strong> — somebody caught by a rule you later tune would keep being sent to the notice page long after the rule stopped matching them.', 'basic-firewall' )
+			);
+		}
+
+		if ( 'mark' === $response ) {
+			$this->row(
+				__( 'Mark the request as', 'basic-firewall' ),
+				self::text( 'mark_as', (string) $rule['mark_as'], 'text', 'placeholder="' . esc_attr( (string) $rule['id'] ) . '"' ),
+				__( 'Left blank, the rule\'s own identifier is used. A marked request is <strong>allowed through</strong> and flagged, which is what a honeypot wants: you find out who tripped it without telling them they did.', 'basic-firewall' )
+			);
+
+			$this->row(
+				__( 'Also set this header', 'basic-firewall' ),
+				self::text( 'mark_header', (string) $rule['mark_header'], 'text', 'placeholder="X-Firewall-Flagged"' ),
+				__( 'Optional. Useful when something downstream — your application, a CDN, a log pipeline — is what acts on the mark.', 'basic-firewall' )
+			);
+		}
+
+		if ( 'record' === $response ) {
+			printf(
+				'<tr><th scope="row">%s</th><td><p class="description">%s</p></td></tr>',
+				esc_html__( 'What this does', 'basic-firewall' ),
+				wp_kses_post(
+					__( 'The client is added to the block list and <strong>this request is still served</strong>. That is what a honeypot needs: a rule catching a scanner on a bait URL wants it blocked <em>next</em> time, not to refuse the fetch it is already answering — refusing tells the scanner exactly which URL is wired, which is the one thing a honeypot must not do.', 'basic-firewall' )
+				)
+			);
+		}
+
+		if ( in_array( $response, array( 'block', 'redirect', 'mark' ), true ) ) {
+			$this->row(
+				__( 'Record the client', 'basic-firewall' ),
+				self::select(
+					'record',
+					array(
+						'default' => 'block' === $response
+							? __( 'Default — record the client, as a block normally does', 'basic-firewall' )
+							: __( 'Default — do not record the client', 'basic-firewall' ),
+						'yes'     => __( 'Yes — add the client to the block list', 'basic-firewall' ),
+						'no'      => __( 'No — act on this request, and record nothing', 'basic-firewall' ),
+					),
+					(string) $rule['record']
+				),
+				'block' === $response
+					? __( 'Recording adds the client to the durable block list, so later requests are refused without re-evaluating. <strong>Set this to No for a temporary lockdown</strong> — a rule that refuses everybody and records them leaves a block list full of customers once it is lifted, each on an escalating ban nobody asked for.', 'basic-firewall' )
+					: __( 'This response does not record by default, which is usually right — a honeypot that banned everyone who tripped it would stop being a honeypot. Set it to Yes if tripping this rule should also earn a block.', 'basic-firewall' )
+			);
+		}
 	}
 
 	/**

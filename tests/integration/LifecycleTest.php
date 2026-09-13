@@ -9,6 +9,7 @@ declare( strict_types = 1 );
 
 namespace Kanopi\BasicFirewall\Tests\integration;
 
+use Kanopi\BasicFirewall\Install\Activator;
 use Kanopi\BasicFirewall\Install\Capabilities;
 use Kanopi\BasicFirewall\Install\Upgrader;
 use Kanopi\BasicFirewall\Plugin;
@@ -94,10 +95,31 @@ final class LifecycleTest extends TestCase {
 	 * Activation writes the safe defaults and grants the capabilities.
 	 */
 	public function test_activation_installs_safely(): void {
+		/*
+		 * Activation is RUN here, against a site with no settings, rather than
+		 * inspected on whatever the site happens to hold.
+		 *
+		 * The first version of this read the live settings and asserted the mode
+		 * was "log". It passed only because the site under test happened to be
+		 * in log mode, and failed the moment somebody left a blocking rule set
+		 * behind -- reporting a safety property as broken when nothing was. A
+		 * test that asserts on ambient state is a test that reports on the last
+		 * thing that touched the site.
+		 */
+		delete_option( Schema::OPTION );
+		delete_option( Schema::VERSION_OPTION );
+
+		Plugin::instance()->settings()->flush();
+
+		Activator::activate();
+
+		Plugin::instance()->settings()->flush();
+
 		$settings = Plugin::instance()->settings();
 
 		$this->assertTrue( $settings->is_installed(), 'Activation did not write the settings option.' );
 		$this->assertSame( 'log', $settings->get( 'global.mode' ), 'A fresh install must not be blocking.' );
+		$this->assertSame( array(), $settings->get( 'rules' ), 'A fresh install must ship no rules.' );
 
 		foreach ( Capabilities::all() as $capability ) {
 			$this->assertTrue(
