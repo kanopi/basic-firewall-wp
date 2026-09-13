@@ -282,27 +282,70 @@ final class Rules_Screen extends Screen {
 	private function render_type_chooser(): void {
 		printf( '<h2>%s</h2>', esc_html__( 'Choose a rule type', 'basic-firewall' ) );
 
-		echo '<div class="bfw-cards">';
+		printf(
+			'<p class="description" style="max-width:48rem">%s</p>',
+			esc_html__( 'Listed in the order they are evaluated in, cheapest first. A rule type contributed by another plugin appears here alongside the shipped ones.', 'basic-firewall' )
+		);
+
+		echo '<table class="widefat striped bfw-rule-types"><thead><tr>';
+
+		foreach ( array(
+			__( 'Rule type', 'basic-firewall' ),
+			__( 'Matches on', 'basic-firewall' ),
+			__( 'Source', 'basic-firewall' ),
+			'',
+		) as $heading ) {
+			printf( '<th>%s</th>', esc_html( $heading ) );
+		}
+
+		echo '</tr></thead><tbody>';
+
+		$shipped = $this->plugin()->rule_types()->shipped_ids();
 
 		foreach ( $this->plugin()->rule_types()->all() as $type ) {
 			$available = $type->is_available();
 
+			echo '<tr>';
+
 			printf(
-				'<div class="bfw-card bfw-card--%s"><h2>%s</h2><p>%s</p><p>%s</p></div>',
-				$available ? 'good' : 'recommended',
+				'<td><strong>%s</strong><br><code>%s</code></td>',
 				esc_html( $type->label() ),
-				esc_html( $type->description() ),
+				esc_html( $type->id() )
+			);
+
+			printf( '<td>%s</td>', esc_html( $type->description() ) );
+
+			/*
+			 * Named rather than implied. A rule type this plugin did not ship
+			 * compiles into the same firewall as one it did, so somebody
+			 * deciding whether to trust it should not have to work out where it
+			 * came from.
+			 */
+			printf(
+				'<td>%s</td>',
+				in_array( $type->id(), $shipped, true )
+					? esc_html__( 'Built in', 'basic-firewall' )
+					: '<em>' . esc_html__( 'Added by another plugin', 'basic-firewall' ) . '</em>'
+			);
+
+			printf(
+				'<td>%s</td>',
 				$available
 					? sprintf(
 						'<a href="%s" class="button">%s</a>',
 						esc_url( Admin::url( 'basic-firewall-rule', array( 'type' => $type->id() ) ) ),
-						esc_html__( 'Add this rule', 'basic-firewall' )
+						esc_html__( 'Add', 'basic-firewall' )
 					)
-					: '<em>' . esc_html__( 'The installed library cannot provide this rule type.', 'basic-firewall' ) . '</em>'
+					: sprintf(
+						'<span class="bfw-unavailable">%s</span>',
+						esc_html__( 'The installed firewall library cannot provide this.', 'basic-firewall' )
+					)
 			);
+
+			echo '</tr>';
 		}
 
-		echo '</div>';
+		echo '</tbody></table>';
 
 		printf(
 			'<p><a href="%s">%s</a></p>',

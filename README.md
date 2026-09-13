@@ -378,6 +378,37 @@ a 301 is cached by browsers and intermediaries more or less forever: somebody
 caught by a rule you later tune would keep being sent to the notice page long
 after it stopped matching them.
 
+### Adding your own rule type
+
+Drupal discovers rule types by scanning for a PHP attribute. WordPress has no
+discovery at all, so `basic_firewall_rule_types` is the whole extension story:
+
+```php
+add_filter( 'basic_firewall_rule_types', function ( array $types ): array {
+    $types['acme_tarpit'] = new Acme_Tarpit(); // implements Rule_Type
+    return $types;
+} );
+```
+
+A contributed type is first-class. It appears in the rule type chooser labelled
+*Added by another plugin*, sorts by its own weight alongside the shipped ones,
+compiles into the same firewall configuration, and **its credentials are
+stripped from an export** — because a type declares which of its own settings
+are secret, and the exporter reads that declaration rather than a list of its
+own. That is the only way the redaction guarantee can hold for code written
+after the exporter was.
+
+Two things it cannot do. It cannot take the id of a shipped type: the shipped
+one wins and the collision is recorded, because silently replacing a type would
+let a plugin change what an existing rule compiles to without anything in the
+interface changing. And it cannot make the firewall library do something it
+cannot do — `library_class()` has to name a plugin class the installed library
+actually has, or the type reports itself unavailable and its rules are skipped
+at compile time with a warning.
+
+Removing a type is equally legitimate. A site that must not offer geolocation
+can `unset( $types['geolocation'] )`, and the screen 404s accordingly.
+
 ### Use `automated`, not `bot`
 
 The user agent rule offers both, and the difference decides whether the rule

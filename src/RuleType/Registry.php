@@ -117,6 +117,26 @@ final class Registry {
 	}
 
 	/**
+	 * The ids of the types this plugin ships.
+	 *
+	 * Used by the rule type chooser to say where each one came from. A type
+	 * contributed through the filter compiles into the same firewall as a
+	 * shipped one, so somebody deciding whether to trust it should not have to
+	 * work that out for themselves.
+	 *
+	 * @return list<string>
+	 */
+	public function shipped_ids(): array {
+		$ids = array();
+
+		foreach ( $this->shipped() as $type ) {
+			$ids[] = $type->id();
+		}
+
+		return $ids;
+	}
+
+	/**
 	 * Only the types the installed library can actually provide.
 	 *
 	 * @return array<string, Rule_Type>

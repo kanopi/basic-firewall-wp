@@ -60,3 +60,8 @@
 .basic-firewall .bfw-hidden {
 	display: none !important;
 }
+
+/* The rule type chooser. */
+.basic-firewall .bfw-rule-types td { vertical-align: middle; }
+.basic-firewall .bfw-rule-types td:last-child { white-space: nowrap; text-align: right; }
+.basic-firewall .bfw-unavailable { color: #b32d2e; }
