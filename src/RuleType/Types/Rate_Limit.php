@@ -106,7 +106,7 @@ final class Rate_Limit extends Rule_Type_Base {
 			'status_code'          => 429,
 			'storage'              => array(
 				'backend'           => 'file',
-				'file'              => 'private://ratelimit.data',
+				'file'              => 'ratelimit.data',
 				'connection_source' => 'wordpress',
 				'dsn'               => '',
 				'table'             => 'basic_firewall_ratelimit',
@@ -194,7 +194,7 @@ final class Rate_Limit extends Rule_Type_Base {
 			'status_code'          => ( $status >= 100 && $status <= 599 ) ? $status : 429,
 			'storage'              => array(
 				'backend'           => $backend,
-				'file'              => trim( (string) ( $storage['file'] ?? 'private://ratelimit.data' ) ),
+				'file'              => trim( (string) ( $storage['file'] ?? 'ratelimit.data' ) ),
 				'connection_source' => (string) ( $storage['connection_source'] ?? 'wordpress' ),
 				'dsn'               => trim( (string) ( $storage['dsn'] ?? '' ) ),
 				'table'             => trim( (string) ( $storage['table'] ?? 'basic_firewall_ratelimit' ) ),
@@ -293,7 +293,7 @@ final class Rate_Limit extends Rule_Type_Base {
 			// `storage_file`: that is the blocked-client store's key, and using
 			// it here silently gets you the library's default path instead.
 			$compiled['config']['file'] = Plugin::instance()->paths()->resolve(
-				(string) ( $storage['file'] ?? 'private://ratelimit.data' )
+				(string) ( $storage['file'] ?? 'ratelimit.data' )
 			);
 
 			return $compiled;

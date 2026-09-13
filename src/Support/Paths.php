@@ -10,7 +10,7 @@ declare( strict_types = 1 );
 namespace Kanopi\BasicFirewall\Support;
 
 /**
- * The private directory, and the `private://` scheme that addresses it.
+ * The private directory, and how stored paths resolve against it.
  *
  * Drupal has a private file system: a directory outside the web root, served
  * only through a code path that checks access. WordPress has nothing of the
@@ -38,10 +38,28 @@ namespace Kanopi\BasicFirewall\Support;
  * know whether the directory is exposed is to ask for a file in it and see what
  * comes back.
  *
- * The `private://` scheme is kept from the module deliberately. Stored paths
- * stay portable between environments whose absolute paths differ, an export
- * carries no filesystem layout, and a multisite network resolves the same
- * stored string to a different per-site directory.
+ * **Stored paths are relative to this directory, and carry no scheme.**
+ *
+ * The Drupal module writes `private://blocked.data`, because Drupal has a
+ * private file system and `private://` is a real registered stream wrapper
+ * there. WordPress has neither. Carrying that spelling across would put a
+ * Drupal-ism in front of every WordPress developer who opens the storage
+ * screen, for a string their platform cannot resolve and their tooling does not
+ * recognise -- and it is exactly the transliteration this port is supposed to
+ * avoid.
+ *
+ * So the rule is the ordinary one:
+ *
+ * - a **relative** path -- `blocked.data`, `logs/firewall.log` -- resolves
+ *   inside the private directory;
+ * - an **absolute** path is used exactly as given, for a site that keeps this
+ *   data somewhere it chose.
+ *
+ * That keeps everything the scheme was there for. A stored path stays portable
+ * between environments whose absolute paths differ, an export carries no
+ * filesystem layout, and a multisite network resolves the same stored string to
+ * a different per-site directory -- because the base is resolved at runtime
+ * either way.
  */
 final class Paths {
 
@@ -51,9 +69,14 @@ final class Paths {
 	public const DIRNAME = 'basic-firewall-private';
 
 	/**
-	 * The scheme used in stored settings.
+	 * A scheme earlier versions of this plugin stored.
+	 *
+	 * Accepted on read so that settings written before the switch still resolve,
+	 * and never written. The upgrade routine rewrites stored values; this is the
+	 * safety net for anything the routine did not reach -- an imported document,
+	 * a hand-edited option.
 	 */
-	public const SCHEME = 'private://';
+	public const LEGACY_SCHEME = 'private://';
 
 	/**
 	 * Option holding this site's random directory suffix.
@@ -186,28 +209,37 @@ final class Paths {
 	/**
 	 * Resolve a stored path to an absolute one.
 	 *
-	 * A `private://` path resolves under the private directory. Anything else is
-	 * returned untouched, so an administrator who supplied an absolute path gets
-	 * the path they asked for.
+	 * A relative path resolves inside the private directory. An absolute path is
+	 * returned untouched, so a site that keeps this data somewhere it chose gets
+	 * the path it asked for.
 	 *
 	 * @param string $path Stored path.
 	 */
 	public function resolve( string $path ): string {
-		if ( 0 !== strpos( $path, self::SCHEME ) ) {
+		$path = trim( $path );
+
+		if ( '' === $path ) {
+			return $this->base();
+		}
+
+		// Settings written before this plugin dropped the Drupal spelling.
+		if ( 0 === strpos( $path, self::LEGACY_SCHEME ) ) {
+			$path = substr( $path, strlen( self::LEGACY_SCHEME ) );
+		}
+
+		if ( self::is_absolute( $path ) ) {
 			return $path;
 		}
 
-		$relative = substr( $path, strlen( self::SCHEME ) );
-
 		/*
-		 * A stored path is administrator-supplied and reaches this method from
-		 * an imported document as readily as from a form, so `..` is stripped
-		 * rather than trusted. Without this, `private://../../wp-config.php` is
-		 * a writable target.
+		 * `..` is stripped rather than trusted. A stored path is
+		 * administrator-supplied and reaches this method from an imported
+		 * document as readily as from a form, so without this,
+		 * `../../wp-config.php` is a writable target.
 		 */
 		$parts = array();
 
-		foreach ( explode( '/', str_replace( '\\', '/', $relative ) ) as $segment ) {
+		foreach ( explode( '/', str_replace( '\\', '/', $path ) ) as $segment ) {
 			if ( '' === $segment || '.' === $segment || '..' === $segment ) {
 				continue;
 			}
@@ -215,7 +247,46 @@ final class Paths {
 			$parts[] = $segment;
 		}
 
-		return $this->base() . '/' . implode( '/', $parts );
+		return array() === $parts
+			? $this->base()
+			: $this->base() . '/' . implode( '/', $parts );
+	}
+
+	/**
+	 * Whether a stored path is absolute.
+	 *
+	 * Handles the Windows spellings as well as the POSIX one: a plugin that
+	 * treated `C:\firewall\blocked.data` as relative would quietly write it
+	 * inside the uploads directory under a filename containing a colon.
+	 *
+	 * @param string $path Stored path.
+	 */
+	public static function is_absolute( string $path ): bool {
+		if ( '' === $path ) {
+			return false;
+		}
+
+		// POSIX, and a UNC or drive-relative Windows path.
+		if ( '/' === $path[0] || '\\' === $path[0] ) {
+			return true;
+		}
+
+		/*
+		 * A Windows drive: C:\ or C:/
+		 *
+		 * The separator is compared directly rather than matched in a character
+		 * class. Written as a regex it needs four backslashes in a
+		 * single-quoted string to mean one literal backslash inside the class,
+		 * and getting that wrong collapses the class to `[/]` -- which matches
+		 * `C:/` and silently misses `C:\`, the spelling Windows actually uses.
+		 */
+		if ( 1 !== preg_match( '#^[A-Za-z]:#', $path ) ) {
+			return false;
+		}
+
+		$separator = $path[2] ?? '';
+
+		return '/' === $separator || '\\' === $separator;
 	}
 
 	/**

@@ -23,6 +23,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- **Stored paths no longer use Drupal's `private://` scheme.** A relative path
+  resolves inside the firewall's private directory and an absolute path is used
+  as given. `private://` is a registered stream wrapper in Drupal and nothing at
+  all in WordPress, so carrying it across put a Drupal-ism in front of every
+  WordPress developer for a string their platform cannot resolve. Existing
+  settings are rewritten by a schema upgrade, and the old spelling still
+  resolves for anything the upgrade did not reach.
 - The bundled library is now `kanopi/firewall` 2.26.0.
 - The library version is read from Composer's runtime data first and the
   build-time marker second. The marker is written at build time and went stale

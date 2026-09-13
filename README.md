@@ -255,6 +255,26 @@ Or move the directory out of the web root entirely, which is strictly better:
 add_filter( 'basic_firewall_private_path', fn() => '/var/private/basic-firewall' );
 ```
 
+### How stored paths resolve
+
+Plainly, with no scheme:
+
+| Stored | Resolves to |
+|---|---|
+| `blocked.data` | inside the private directory |
+| `logs/firewall.log` | inside the private directory |
+| `/var/private/firewall/blocked.data` | exactly that |
+
+A relative path keeps the setting portable — it survives an export to another
+site, it is per-site on a network, and it does not embed one environment's
+filesystem layout. An absolute path is used as given, for a site that keeps this
+data somewhere it chose.
+
+The Drupal module writes `private://blocked.data`, because `private://` is a
+real registered stream wrapper there. WordPress has no such thing, so that
+spelling is not used here. Settings written by an early build of this plugin
+that did use it are migrated on upgrade, and still resolve if they are not.
+
 ## Proxies and the client IP
 
 Every rule that looks at an address depends on the client IP being trustworthy,

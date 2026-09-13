@@ -121,7 +121,7 @@ final class Storage_Screen extends Screen {
 		$this->row(
 			__( 'Blocked client file', 'basic-firewall' ),
 			self::text( 'storage_file', (string) $settings->get( 'storage.file.storage_file', '' ) ),
-			__( 'A <code>private://</code> path resolves inside the firewall\'s private directory, and stays portable between environments.', 'basic-firewall' )
+			__( 'A relative path resolves inside the firewall\'s private directory, which is where this belongs — it stays portable between environments and is per-site on a network. An absolute path is used exactly as given.', 'basic-firewall' )
 		);
 
 		$this->row(

@@ -67,7 +67,7 @@ final class Blocked_Clients {
 		} else {
 			$paths  = Plugin::instance()->paths();
 			$file   = (array) $settings->get( 'storage.file', array() );
-			$target = $paths->resolve( (string) ( $file['storage_file'] ?? 'private://blocked.data' ) );
+			$target = $paths->resolve( (string) ( $file['storage_file'] ?? 'blocked.data' ) );
 
 			$config = array(
 				'storage_file' => $target,

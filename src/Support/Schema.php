@@ -49,7 +49,7 @@ final class Schema {
 	/**
 	 * Current schema version. Bumped whenever an upgrade routine is added.
 	 */
-	public const VERSION = 1;
+	public const VERSION = 2;
 
 	/**
 	 * The full settings tree.
@@ -285,12 +285,12 @@ final class Schema {
 						'storage_file' => array(
 							'type'    => 'string',
 							'label'   => 'Blocked client file',
-							'default' => 'private://blocked.data',
+							'default' => 'blocked.data',
 						),
 						'offense_file' => array(
 							'type'    => 'string',
 							'label'   => 'Offense history file',
-							'default' => 'private://offenses.data',
+							'default' => 'offenses.data',
 						),
 					),
 				),
@@ -667,7 +667,7 @@ final class Schema {
 				'path'              => array(
 					'type'    => 'string',
 					'label'   => 'Log file path',
-					'default' => 'private://logs/firewall.log',
+					'default' => 'logs/firewall.log',
 				),
 				'max_files'         => array(
 					'type'    => 'int',

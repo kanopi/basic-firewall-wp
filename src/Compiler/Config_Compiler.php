@@ -277,7 +277,7 @@ final class Config_Compiler {
 		if ( 'file' === $backend ) {
 			$paths        = Plugin::instance()->paths();
 			$file         = (array) ( $storage['file'] ?? array() );
-			$storage_file = $paths->resolve( (string) ( $file['storage_file'] ?? 'private://blocked.data' ) );
+			$storage_file = $paths->resolve( (string) ( $file['storage_file'] ?? 'blocked.data' ) );
 			$offense_file = trim( (string) ( $file['offense_file'] ?? '' ) );
 
 			$config = array( 'storage_file' => $storage_file );
@@ -601,12 +601,12 @@ final class Config_Compiler {
 			// Positional constructor arguments, ordered per handler.
 			$args = match ( $type ) {
 				'rotating_file' => array(
-					$paths->resolve( (string) ( $handler['path'] ?? 'private://logs/firewall.log' ) ),
+					$paths->resolve( (string) ( $handler['path'] ?? 'logs/firewall.log' ) ),
 					(int) ( $handler['max_files'] ?? 14 ),
 					$level,
 				),
 				'stream'        => array(
-					$paths->resolve( (string) ( $handler['path'] ?? 'private://logs/firewall.log' ) ),
+					$paths->resolve( (string) ( $handler['path'] ?? 'logs/firewall.log' ) ),
 					$level,
 				),
 				// ErrorLogHandler takes a message type first, then the level.

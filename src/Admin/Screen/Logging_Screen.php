@@ -71,7 +71,7 @@ final class Logging_Screen extends Screen {
 				'type'              => (string) $handler['type'],
 				'enabled'           => ! empty( $handler['enabled'] ),
 				'level'             => (string) ( $handler['level'] ?? 'warning' ),
-				'path'              => (string) ( $handler['path'] ?? 'private://logs/firewall.log' ),
+				'path'              => (string) ( $handler['path'] ?? 'logs/firewall.log' ),
 				'max_files'         => (int) ( $handler['max_files'] ?? 14 ),
 				'table'             => (string) ( $handler['table'] ?? 'basic_firewall_log' ),
 				'connection_source' => (string) ( $handler['connection_source'] ?? 'wordpress' ),
@@ -150,7 +150,7 @@ final class Logging_Screen extends Screen {
 			'type'    => '',
 			'enabled' => true,
 			'level'   => 'warning',
-			'path'    => 'private://logs/firewall.log',
+			'path'    => 'logs/firewall.log',
 		);
 
 		foreach ( $rows as $index => $handler ) {
@@ -183,7 +183,7 @@ final class Logging_Screen extends Screen {
 				$this->row(
 					__( 'Path', 'basic-firewall' ),
 					self::text( $name . '[path]', (string) ( $handler['path'] ?? '' ) ),
-					__( 'Keep this under <code>private://</code>.', 'basic-firewall' )
+					__( 'A relative path resolves inside the firewall\'s private directory. Keep it there: a log under a public directory is downloadable by anyone and discloses exactly which addresses you are blocking.', 'basic-firewall' )
 				);
 			}
 

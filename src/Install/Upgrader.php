@@ -10,6 +10,7 @@ declare( strict_types = 1 );
 namespace Kanopi\BasicFirewall\Install;
 
 use Kanopi\BasicFirewall\Plugin;
+use Kanopi\BasicFirewall\Support\Paths;
 use Kanopi\BasicFirewall\Support\Schema;
 
 /**
@@ -126,7 +127,54 @@ final class Upgrader {
 				Plugin::instance()->paths()->ensure();
 				Challenge_Secret::ensure();
 			},
+
+			/*
+			 * 2: drop the Drupal `private://` scheme from stored paths.
+			 *
+			 * The scheme was carried over from the module, where it is a real
+			 * registered stream wrapper. WordPress has no such thing, so it was
+			 * a Drupal-ism in front of every WordPress developer for a string
+			 * their platform cannot resolve. Paths are now plain: relative to
+			 * the private directory, or absolute.
+			 *
+			 * Paths::resolve() still accepts the old spelling, so a site that
+			 * skipped this routine keeps working. This is what stops the old
+			 * spelling being shown back to somebody on the storage screen.
+			 */
+			2 => static function (): void {
+				$settings = Plugin::instance()->settings();
+				$values   = $settings->all();
+
+				self::strip_legacy_scheme( $values );
+
+				$settings->replace( $values );
+			},
 		);
+	}
+
+	/**
+	 * Remove the legacy `private://` prefix from every stored path.
+	 *
+	 * Walks the whole document rather than naming the keys that hold a path.
+	 * Naming them is how uninstall.php came to leave two options behind: a list
+	 * that has to be maintained alongside the thing it describes rots, and a
+	 * rule type contributed by another plugin can store a path this file has
+	 * never heard of.
+	 *
+	 * @param array<string, mixed> $values Settings document, by reference.
+	 */
+	private static function strip_legacy_scheme( array &$values ): void {
+		foreach ( $values as $key => $value ) {
+			if ( is_array( $value ) ) {
+				self::strip_legacy_scheme( $values[ $key ] );
+
+				continue;
+			}
+
+			if ( is_string( $value ) && 0 === strpos( $value, Paths::LEGACY_SCHEME ) ) {
+				$values[ $key ] = substr( $value, strlen( Paths::LEGACY_SCHEME ) );
+			}
+		}
 	}
 
 	/**
