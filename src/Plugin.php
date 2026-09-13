@@ -11,6 +11,7 @@ namespace Kanopi\BasicFirewall;
 
 use Kanopi\BasicFirewall\Install\Capabilities;
 use Kanopi\BasicFirewall\Install\Upgrader;
+use Kanopi\BasicFirewall\Admin\Admin;
 use Kanopi\BasicFirewall\Cli\Commands;
 use Kanopi\BasicFirewall\Compiler\Compiled_Config_Cache;
 use Kanopi\BasicFirewall\Health\Site_Health;
@@ -92,9 +93,19 @@ final class Plugin {
 			Commands::register();
 		}
 
-		if ( is_admin() ) {
-			Site_Health::register();
-		}
+		/*
+		 * Registered unconditionally, not behind is_admin().
+		 *
+		 * Every hook these two attach to -- admin_menu, admin_init,
+		 * admin_enqueue_scripts, admin_notices, site_status_tests -- only fires
+		 * in an admin request anyway, so the guard bought nothing and cost the
+		 * ability to test any of it: is_admin() is false under WP-CLI, so a test
+		 * that called register() and looked for the menu found nothing, and a
+		 * test that called Admin::register() directly passed while the plugin
+		 * shipped without an admin menu at all. Which it did.
+		 */
+		Admin::register();
+		Site_Health::register();
 
 		/*
 		 * Both evaluation paths converge here.
