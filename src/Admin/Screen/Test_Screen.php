@@ -57,7 +57,7 @@ final class Test_Screen extends Screen {
 	 */
 	public function intro(): string {
 		return wp_kses_post(
-			__( 'Describe a request and see what the firewall would do with it. This evaluates the configuration the firewall is actually running, so the answer reflects the live rule set — and rules are evaluated whether or not the firewall is currently enabled, which is what makes this useful for checking a rule set <em>before</em> switching it on. <strong>Nothing is recorded:</strong> no address is blocked, no offense is counted, no rate limit budget is spent, and nothing reaches your log.', 'basic-firewall' )
+			__( 'Describe a request and see what the firewall would do with it. This evaluates the configuration the firewall is actually running, so the answer reflects the live rule set — and rules are evaluated whether or not the firewall is currently enabled, which is what makes this useful for checking a rule set <em>before</em> switching it on. Give a client address and the block list is consulted first, in the order a real request meets it. <strong>Nothing is recorded:</strong> no address is blocked, no offense is counted, no rate limit budget is spent, and nothing reaches your log.', 'basic-firewall' )
 		);
 	}
 
@@ -83,9 +83,109 @@ final class Test_Screen extends Screen {
 			$this->result = ( new Request_Tester() )->test( $this->submitted );
 		}
 
-		$this->render_result();
+		/*
+		 * Form first, result underneath.
+		 *
+		 * The verdict is the answer to the question the form asks, and it reads
+		 * as one when it follows it. Above the form it pushes the inputs down
+		 * the page on every submission, so the thing you are about to change
+		 * moves each time you change it -- and testing a rule set is an
+		 * iterative business: adjust the path, submit, read, adjust again.
+		 */
 		$this->render_form();
+		$this->render_block_list();
+		$this->render_result();
 		$this->render_limits();
+	}
+
+	/**
+	 * Whether the address is already on the block list.
+	 *
+	 * Printed above the rule verdict because that is the order a real request
+	 * meets them: the firewall enforces the durable block list before it
+	 * evaluates the marking, recording and refusing buckets, so an address
+	 * already on the list never reaches the rules at all.
+	 *
+	 * This used to be a line under "what this cannot tell you", which was true
+	 * of the tester and wrong as advice: the block list is exactly what somebody
+	 * is asking about when they test an address that is behaving oddly, the
+	 * screen has access to it, and sending them to a different screen to find
+	 * out meant the most common answer was the one answer this page refused to
+	 * give. Reading it records nothing -- no offense, no counter, no log line --
+	 * which is the property that made it safe to put here.
+	 */
+	private function render_block_list(): void {
+		if ( null === $this->result ) {
+			return;
+		}
+
+		$ip = trim( $this->submitted['ip'] ?? '' );
+
+		if ( '' === $ip ) {
+			printf(
+				'<div class="bfw-warning"><p><strong>%s</strong></p><p>%s</p></div>',
+				esc_html__( 'Block list: not checked', 'basic-firewall' ),
+				esc_html__( 'No client address was given, so there was nothing to look up. The rule verdict below still applies.', 'basic-firewall' )
+			);
+
+			return;
+		}
+
+		$answer = $this->plugin()->blocked()->check( $ip );
+
+		if ( ! $answer['blocked'] ) {
+			printf(
+				'<div class="bfw-notice"><p><strong>%s</strong></p><p>%s</p></div>',
+				esc_html__( 'Block list: not listed', 'basic-firewall' ),
+				sprintf(
+					/* translators: 1: client address, 2: storage backend. */
+					esc_html__( '%1$s is not on the block list held in %2$s storage, so this request reaches the rules.', 'basic-firewall' ),
+					esc_html( $ip ),
+					esc_html( (string) $answer['backend'] )
+				)
+			);
+
+			return;
+		}
+
+		$record  = is_array( $answer['record'] ) ? $answer['record'] : array();
+		$expires = isset( $record['expire'] ) ? (int) $record['expire'] : 0;
+		$reason  = isset( $record['reason'] ) ? (string) $record['reason'] : '';
+		$plugin  = isset( $record['plugin'] ) ? (string) $record['plugin'] : '';
+
+		$detail = array();
+
+		if ( '' !== $plugin ) {
+			/* translators: %s: the rule or source that blocked the client. */
+			$detail[] = sprintf( esc_html__( 'Blocked by %s.', 'basic-firewall' ), esc_html( $plugin ) );
+		}
+
+		if ( '' !== $reason ) {
+			/* translators: %s: the recorded reason. */
+			$detail[] = sprintf( esc_html__( 'Reason: %s', 'basic-firewall' ), esc_html( $reason ) );
+		}
+
+		$detail[] = $expires > 0
+			/* translators: %s: human-readable duration. */
+			? sprintf( esc_html__( 'Expires in %s.', 'basic-firewall' ), esc_html( human_time_diff( time(), $expires ) ) )
+			: esc_html__( 'It does not expire.', 'basic-firewall' );
+
+		printf(
+			'<div class="bfw-danger"><p><strong>%s</strong></p><p>%s</p><p>%s</p><p>%s</p></div>',
+			esc_html__( 'Block list: already blocked', 'basic-firewall' ),
+			sprintf(
+				/* translators: 1: client address, 2: storage backend. */
+				esc_html__( '%1$s is on the block list held in %2$s storage. A real request from it is refused here, before any rule is evaluated — so the rule verdict below describes what would happen if it were released, not what happens now.', 'basic-firewall' ),
+				esc_html( $ip ),
+				esc_html( (string) $answer['backend'] )
+			),
+			wp_kses_post( implode( ' ', $detail ) ),
+			sprintf(
+				'<a href="%s" class="button">%s</a>',
+				esc_url( admin_url( 'admin.php?page=basic-firewall-blocked' ) ),
+				esc_html__( 'Release it on the Blocked clients screen', 'basic-firewall' )
+			)
+		);
 	}
 
 	/**
@@ -196,20 +296,13 @@ final class Test_Screen extends Screen {
 	/**
 	 * What the tester cannot tell you.
 	 *
-	 * Stated on the screen rather than left to the readme, because both of
-	 * these look like the tester being wrong.
+	 * Stated on the screen rather than left to the readme, because this looks
+	 * like the tester being wrong.
 	 */
 	private function render_limits(): void {
 		printf( '<h2>%s</h2>', esc_html__( 'What this cannot tell you', 'basic-firewall' ) );
 
 		echo '<ul style="list-style:disc;margin-left:2em;max-width:48rem">';
-
-		printf(
-			'<li>%s</li>',
-			wp_kses_post(
-				__( '<strong>Whether an address is currently blocked.</strong> The block list is not consulted, so this reports whether the <em>rules</em> match. Use the lookup on the Blocked clients screen, or <code>wp basic-firewall check</code>, for that.', 'basic-firewall' )
-			)
-		);
 
 		printf(
 			'<li>%s</li>',

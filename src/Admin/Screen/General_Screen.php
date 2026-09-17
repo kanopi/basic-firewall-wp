@@ -13,6 +13,7 @@ use Kanopi\BasicFirewall\Admin\Notices;
 use Kanopi\BasicFirewall\Admin\Screen;
 use Kanopi\BasicFirewall\Health\Site_Health;
 use Kanopi\BasicFirewall\Runtime\Trusted_Proxies;
+use Kanopi\BasicFirewall\Sources\Refresher;
 
 /**
  * Mode, responses, the proxy question, and escalation.
@@ -61,6 +62,8 @@ final class General_Screen extends Screen {
 		$all['global']['behind_proxy']            = $this->posted( 'behind_proxy', 'unknown' );
 		$all['global']['require_trusted_proxies'] = '' !== $this->posted( 'require_trusted_proxies' );
 		$all['global']['require_config']          = '' !== $this->posted( 'require_config' );
+
+		$all['sources']['cron_interval'] = (int) $this->posted( 'sources_cron_interval', (string) DAY_IN_SECONDS );
 
 		$roles = $this->posted_array( 'bypass_roles' );
 
@@ -157,6 +160,7 @@ final class General_Screen extends Screen {
 
 		$this->render_proxy_section();
 		$this->render_reliability_section();
+		$this->render_sources_section();
 		$this->render_bypass_section();
 
 		$this->close_form();
@@ -243,6 +247,107 @@ final class General_Screen extends Screen {
 		);
 
 		echo '</tbody></table>';
+	}
+
+	/**
+	 * How often referenced lists are revalidated.
+	 *
+	 * The interval was in the settings schema from the start and had no field,
+	 * which meant a site could reference a published list and have no way to
+	 * say how often to re-read it -- and no way to see whether the last attempt
+	 * had worked, which is the question that actually matters when an allow
+	 * rule stops allowing.
+	 */
+	private function render_sources_section(): void {
+		printf( '<h2>%s</h2>', esc_html__( 'Referenced lists', 'basic-firewall' ) );
+
+		printf(
+			'<p>%s</p>',
+			wp_kses_post(
+				__( 'A rule can name a published address list by URL instead of carrying a copy of it. Fetching never happens while a visitor waits — the request path reads a cached copy and nothing else, so an outage at the provider cannot become latency here — which makes this schedule the thing that keeps that copy current.', 'basic-firewall' )
+			)
+		);
+
+		echo '<table class="form-table" role="presentation"><tbody>';
+
+		$this->row(
+			__( 'Check for updates every', 'basic-firewall' ),
+			self::select(
+				'sources_cron_interval',
+				array(
+					(string) HOUR_IN_SECONDS         => __( 'Hour', 'basic-firewall' ),
+					(string) ( 6 * HOUR_IN_SECONDS ) => __( '6 hours', 'basic-firewall' ),
+					(string) DAY_IN_SECONDS          => __( 'Day (recommended)', 'basic-firewall' ),
+					(string) WEEK_IN_SECONDS         => __( 'Week', 'basic-firewall' ),
+					'0'                              => __( 'Never — I refresh them myself', 'basic-firewall' ),
+				),
+				(string) $this->plugin()->settings()->get( 'sources.cron_interval', DAY_IN_SECONDS )
+			),
+			wp_kses_post(
+				__( 'This is how often WordPress <em>checks</em>; each list is only re-fetched once its own refresh interval has elapsed. Choose <strong>Never</strong> on a host where WP-Cron is disabled, and run <code>wp basic-firewall refresh-sources</code> from your own scheduler or deploy instead — a list that is never refreshed is not an error, and nothing will tell you it has gone stale.', 'basic-firewall' )
+			)
+		);
+
+		$this->row( __( 'Last refresh', 'basic-firewall' ), '<p>' . wp_kses_post( $this->sources_status() ) . '</p>' );
+
+		echo '</tbody></table>';
+	}
+
+	/**
+	 * A sentence about the last refresh.
+	 */
+	private function sources_status(): string {
+		$referenced = count( Refresher::declarations() );
+
+		if ( 0 === $referenced ) {
+			return esc_html__( 'No rule references a list, so nothing is being fetched.', 'basic-firewall' );
+		}
+
+		$last = Refresher::last_run();
+
+		if ( array() === $last || empty( $last['at'] ) ) {
+			return '<strong>' . esc_html__( 'Never.', 'basic-firewall' ) . '</strong> '
+				. esc_html(
+					sprintf(
+						/* translators: %d: number of referenced lists. */
+						_n(
+							'%d list is referenced and has not been fetched yet. Until it is, the rule that references it matches only what is typed into it.',
+							'%d lists are referenced and have not been fetched yet. Until they are, the rules that reference them match only what is typed into them.',
+							$referenced,
+							'basic-firewall'
+						),
+						$referenced
+					)
+				);
+		}
+
+		$when = sprintf(
+			/* translators: %s: human-readable time difference. */
+			esc_html__( '%s ago', 'basic-firewall' ),
+			esc_html( human_time_diff( (int) $last['at'] ) )
+		);
+
+		$failed = (array) ( $last['failed'] ?? array() );
+
+		if ( array() !== $failed ) {
+			return '<strong>' . $when . '</strong> — '
+				. esc_html(
+					sprintf(
+						/* translators: %s: comma-separated list names. */
+						__( 'these could not be fetched: %s. Each list decides for itself what that means; the default keeps the last copy that worked.', 'basic-firewall' ),
+						implode( ', ', array_keys( $failed ) )
+					)
+				);
+		}
+
+		$counts = array();
+
+		foreach ( (array) ( $last['refreshed'] ?? array() ) as $name => $count ) {
+			/* translators: 1: list name, 2: number of entries. */
+			$counts[] = sprintf( esc_html__( '%1$s (%2$d entries)', 'basic-firewall' ), esc_html( (string) $name ), (int) $count );
+		}
+
+		return $when . ' — ' . ( array() === $counts ? esc_html__( 'nothing needed re-fetching.', 'basic-firewall' ) : implode( ', ', $counts ) );
 	}
 
 	/**

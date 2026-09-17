@@ -42,6 +42,102 @@ final class Logging_Screen extends Screen {
 	}
 
 	/**
+	 * One log handler, as a card.
+	 *
+	 * Every type's fields are rendered in every card and shown by condition,
+	 * rather than only the chosen type's. Two reasons. Choosing a type used to
+	 * show nothing until the form had been saved, so adding a handler took two
+	 * round trips to discover what it even asked for. And a card cloned by the
+	 * "Add handler" button has to be able to become any type without going back
+	 * to the server for the fields.
+	 *
+	 * The conditions name this card's own type select by its indexed field
+	 * name, so two cards cannot read each other's state. With JavaScript off
+	 * every field stays visible, which is the behaviour this replaced.
+	 *
+	 * @param int                   $index    Position in the list.
+	 * @param array<string, mixed>  $handler  Its settings.
+	 * @param array<string, string> $types    Available handler types.
+	 * @param array<string, string> $levels   Available log levels.
+	 * @param bool                  $blank    Whether this is the empty "new" card.
+	 */
+	private function render_handler( int $index, array $handler, array $types, array $levels, bool $blank ): void {
+		$name  = sprintf( 'handlers[%d]', $index );
+		$type  = (string) ( $handler['type'] ?? '' );
+		$when  = static fn ( string $values ): string => sprintf( '%s[type]:%s', $name, $values );
+		$title = '' !== $type ? (string) ( $types[ $type ] ?? $type ) : __( 'New handler', 'basic-firewall' );
+
+		printf(
+			'<div class="bfw-repeat__item%s" data-bfw-item>',
+			$blank ? ' bfw-repeat__item--new' : ''
+		);
+
+		printf(
+			'<div class="bfw-repeat__head"><strong>%s</strong>%s</div>',
+			esc_html( $title ),
+			$blank
+				? ''
+				: sprintf(
+					'<button type="button" class="button-link bfw-repeat__remove" data-bfw-remove>%s</button>',
+					esc_html__( 'Remove', 'basic-firewall' )
+				)
+		);
+
+		echo '<table class="form-table" role="presentation"><tbody>';
+
+		$this->row(
+			__( 'Handler', 'basic-firewall' ),
+			self::select( $name . '[type]', array( '' => __( '— none —', 'basic-firewall' ) ) + $types, $type )
+			. ' ' . self::checkbox( $name . '[enabled]', $blank ? true : ! empty( $handler['enabled'] ), __( 'Enabled', 'basic-firewall' ) ),
+			esc_html__( 'Setting this back to "none" removes the handler.', 'basic-firewall' )
+		);
+
+		$this->row(
+			__( 'Minimum level', 'basic-firewall' ),
+			self::select( $name . '[level]', $levels, (string) ( $handler['level'] ?? 'warning' ) ),
+			wp_kses_post( __( '<strong>debug</strong> costs roughly 100 KB per allowed request on a file handler — about 97 MB per thousand requests. Right for diagnosing a rule; wrong to leave on.', 'basic-firewall' ) ),
+			$when( 'rotating_file|stream|error_log|database' )
+		);
+
+		$this->row(
+			__( 'Path', 'basic-firewall' ),
+			self::text( $name . '[path]', (string) ( $handler['path'] ?? 'logs/firewall.log' ) ),
+			wp_kses_post( __( 'A relative path resolves inside the firewall\'s private directory. Keep it there: a log under a public directory is downloadable by anyone and discloses exactly which addresses you are blocking. <code>php://stdout</code> and <code>php://stderr</code> are passed through for a container that collects the process output.', 'basic-firewall' ) ),
+			$when( 'rotating_file|stream' )
+		);
+
+		$this->row(
+			__( 'Days to keep', 'basic-firewall' ),
+			self::text( $name . '[max_files]', (string) ( $handler['max_files'] ?? 14 ), 'number', 'min="0"' ),
+			'',
+			$when( 'rotating_file' )
+		);
+
+		$this->row(
+			__( 'Table', 'basic-firewall' ),
+			self::text( $name . '[table]', (string) ( $handler['table'] ?? 'basic_firewall_log' ) ),
+			esc_html__( 'Created on first write. This site\'s table prefix is applied when the log shares WordPress\'s database.', 'basic-firewall' ),
+			$when( 'database' )
+		);
+
+		$this->row(
+			__( 'Keep history for', 'basic-firewall' ),
+			self::text( $name . '[retain_days]', (string) ( $handler['retain_days'] ?? 30 ), 'number', 'min="0"' ),
+			wp_kses_post( __( 'Days. <code>0</code> keeps everything, which for a busy firewall is a table that only grows.', 'basic-firewall' ) ),
+			$when( 'database' )
+		);
+
+		$this->row(
+			__( 'Buffering', 'basic-firewall' ),
+			self::checkbox( $name . '[buffered]', ! empty( $handler['buffered'] ), __( 'Hold records and write them in one go', 'basic-firewall' ) ),
+			esc_html__( 'Worth leaving on. Unbuffered means one insert per record while the request is being served, and the requests producing the most records are the ones already under attack. The cost is that a fatal error loses that request\'s buffered rows.', 'basic-firewall' ),
+			$when( 'database' )
+		);
+
+		echo '</tbody></table></div>';
+	}
+
+	/**
 	 * {@inheritDoc}
 	 */
 	public function handle(): void {
@@ -143,79 +239,38 @@ final class Logging_Screen extends Screen {
 
 		printf( '<h2>%s</h2>', esc_html__( 'Handlers', 'basic-firewall' ) );
 
-		// One blank row beyond what exists, so adding a handler needs no script.
-		$rows = array_values( $handlers );
-
-		$rows[] = array(
-			'type'    => '',
-			'enabled' => true,
-			'level'   => 'warning',
-			'path'    => 'logs/firewall.log',
+		printf(
+			'<p class="bfw-repeat-intro">%s</p>',
+			esc_html__( 'Add as many as you need. Several at once is the normal arrangement rather than the exception: a rotating file at warning to keep, a database handler at notice so the Log screen has something to show, and a stream to php://stderr on a containerised host where the platform collects the output. Each decides its own level independently.', 'basic-firewall' )
 		);
 
+		/*
+		 * Existing handlers, then one blank card. The blank one is what makes
+		 * "Add handler" work with JavaScript off: the button clones it and
+		 * renumbers the fields, and where it cannot, the blank card is still a
+		 * usable form that adds a handler per save.
+		 */
+		$rows = array_values(
+			array_filter(
+				$handlers,
+				static fn ( $handler ): bool => is_array( $handler ) && '' !== (string) ( $handler['type'] ?? '' )
+			)
+		);
+
+		echo '<div data-bfw-repeatable="handlers">';
+
 		foreach ( $rows as $index => $handler ) {
-			$name = sprintf( 'handlers[%d]', $index );
-
-			echo '<table class="form-table" role="presentation"><tbody>';
-
-			$options = array( '' => __( '— none —', 'basic-firewall' ) ) + $types;
-
-			$this->row(
-				__( 'Handler', 'basic-firewall' ),
-				self::select( $name . '[type]', $options, (string) ( $handler['type'] ?? '' ) )
-				. ' ' . self::checkbox( $name . '[enabled]', ! empty( $handler['enabled'] ), __( 'Enabled', 'basic-firewall' ) ),
-				'' === (string) ( $handler['type'] ?? '' ) ? __( 'Choose a handler to add one.', 'basic-firewall' ) : ''
-			);
-
-			if ( '' === (string) ( $handler['type'] ?? '' ) ) {
-				echo '</tbody></table>';
-
-				continue;
-			}
-
-			$this->row(
-				__( 'Minimum level', 'basic-firewall' ),
-				self::select( $name . '[level]', $levels, (string) ( $handler['level'] ?? 'warning' ) ),
-				__( '<strong>debug</strong> costs roughly 100 KB per allowed request on a file handler — about 97 MB per thousand requests. Right for diagnosing a rule; wrong to leave on.', 'basic-firewall' )
-			);
-
-			if ( in_array( (string) $handler['type'], array( 'rotating_file', 'stream' ), true ) ) {
-				$this->row(
-					__( 'Path', 'basic-firewall' ),
-					self::text( $name . '[path]', (string) ( $handler['path'] ?? '' ) ),
-					__( 'A relative path resolves inside the firewall\'s private directory. Keep it there: a log under a public directory is downloadable by anyone and discloses exactly which addresses you are blocking.', 'basic-firewall' )
-				);
-			}
-
-			if ( 'rotating_file' === (string) $handler['type'] ) {
-				$this->row(
-					__( 'Days to keep', 'basic-firewall' ),
-					self::text( $name . '[max_files]', (string) ( $handler['max_files'] ?? 14 ), 'number', 'min="0"' )
-				);
-			}
-
-			if ( 'database' === (string) $handler['type'] ) {
-				$this->row(
-					__( 'Table', 'basic-firewall' ),
-					self::text( $name . '[table]', (string) ( $handler['table'] ?? 'basic_firewall_log' ) ),
-					__( 'Created on first write. This site\'s table prefix is applied when the log shares WordPress\'s database.', 'basic-firewall' )
-				);
-
-				$this->row(
-					__( 'Keep history for', 'basic-firewall' ),
-					self::text( $name . '[retain_days]', (string) ( $handler['retain_days'] ?? 30 ), 'number', 'min="0"' ),
-					__( 'Days. <code>0</code> keeps everything, which for a busy firewall is a table that only grows.', 'basic-firewall' )
-				);
-
-				$this->row(
-					__( 'Buffering', 'basic-firewall' ),
-					self::checkbox( $name . '[buffered]', ! empty( $handler['buffered'] ), __( 'Hold records and write them in one go', 'basic-firewall' ) ),
-					__( 'Worth leaving on. Unbuffered means one insert per record while the request is being served, and the requests producing the most records are the ones already under attack. The cost is that a fatal error loses that request\'s buffered rows.', 'basic-firewall' )
-				);
-			}
-
-			echo '</tbody></table><hr>';
+			$this->render_handler( $index, (array) $handler, $types, $levels, false );
 		}
+
+		$this->render_handler( count( $rows ), array(), $types, $levels, true );
+
+		echo '</div>';
+
+		printf(
+			'<p><button type="button" class="button" data-bfw-add="handlers">%s</button></p>',
+			esc_html__( '+ Add handler', 'basic-firewall' )
+		);
 
 		printf( '<h2>%s</h2>', esc_html__( 'Cross-cutting', 'basic-firewall' ) );
 

@@ -9,10 +9,12 @@ declare( strict_types = 1 );
 
 namespace Kanopi\BasicFirewall\Cli;
 
+use Kanopi\BasicFirewall\Health\Site_Health;
 use Kanopi\BasicFirewall\Library_Capabilities;
 use Kanopi\BasicFirewall\Library_Loader;
 use Kanopi\BasicFirewall\Plugin;
 use Kanopi\BasicFirewall\Runtime\Trusted_Proxies;
+use Kanopi\BasicFirewall\Sources\Refresher;
 use Kanopi\BasicFirewall\Transfer\Exporter;
 use Kanopi\BasicFirewall\Transfer\Importer;
 use WP_CLI;
@@ -74,6 +76,91 @@ final class Commands {
 		if ( ! is_string( $answer ) || 'y' !== strtolower( trim( $answer ) ) ) {
 			WP_CLI::error( 'Cancelled. Nothing was changed.' );
 		}
+	}
+
+	/**
+	 * Refresh the rule lists referenced by rules.
+	 *
+	 * A rule can name a published list by URL instead of carrying a copy of it.
+	 * The request path never fetches one -- it reads a cache and nothing else,
+	 * so a provider's outage cannot become this site's latency -- which makes
+	 * this command, and the schedule behind it, what keeps that cache current.
+	 *
+	 * Runs on a WP-Cron schedule by default. Use this after adding a rule that
+	 * references a list, on a host where WP-Cron is disabled, or from a deploy.
+	 *
+	 * ## OPTIONS
+	 *
+	 * [--force]
+	 * : Revalidate every list, even one the cache still considers fresh.
+	 *
+	 * [--dry-run]
+	 * : List what is referenced and what the cache holds. Fetches nothing.
+	 *
+	 * ## EXAMPLES
+	 *
+	 *     wp basic-firewall refresh-sources
+	 *     wp basic-firewall refresh-sources --force
+	 *     wp basic-firewall refresh-sources --dry-run
+	 *
+	 * @subcommand refresh-sources
+	 *
+	 * @param array<int, string>    $args       Positional arguments.
+	 * @param array<string, string> $assoc_args Flags.
+	 */
+	public function refresh_sources( array $args, array $assoc_args ): void {
+		$declarations = Refresher::declarations();
+
+		if ( array() === $declarations ) {
+			WP_CLI::success( 'No rule references a list, so there was nothing to refresh.' );
+
+			return;
+		}
+
+		if ( isset( $assoc_args['dry-run'] ) ) {
+			$rows = array();
+
+			foreach ( $declarations as $declaration ) {
+				$rows[] = array(
+					'name'     => (string) ( $declaration['name'] ?? 'unnamed' ),
+					'upstream' => is_array( $declaration['upstream'] ?? null )
+						? (string) ( $declaration['upstream']['url'] ?? '' )
+						: (string) ( $declaration['upstream'] ?? '' ),
+					'ttl'      => (string) ( $declaration['ttl'] ?? '' ),
+					'on_error' => (string) ( $declaration['onError'] ?? 'last_known_good' ),
+				);
+			}
+
+			Utils\format_items( 'table', $rows, array( 'name', 'upstream', 'ttl', 'on_error' ) );
+
+			return;
+		}
+
+		$result = Refresher::refresh( isset( $assoc_args['force'] ) );
+
+		foreach ( $result['refreshed'] as $name => $count ) {
+			WP_CLI::log( sprintf( '  %-28s %d entries', $name, $count ) );
+		}
+
+		foreach ( $result['failed'] as $name => $message ) {
+			WP_CLI::warning( sprintf( '%s: %s', $name, $message ) );
+		}
+
+		if ( ! $result['ran'] ) {
+			WP_CLI::error( $result['message'] );
+		}
+
+		/*
+		 * A failure exits non-zero even though traffic is unaffected, because
+		 * the caller is a deploy or a cron wrapper and the whole value of the
+		 * arrangement is that somebody finds out a list has gone stale before
+		 * it starts mattering.
+		 */
+		if ( array() !== $result['failed'] ) {
+			WP_CLI::error( $result['message'] );
+		}
+
+		WP_CLI::success( $result['message'] );
 	}
 
 	/**
@@ -184,6 +271,10 @@ final class Commands {
 				'value'   => (string) $settings->get( 'storage.backend', 'file' ),
 			),
 			array(
+				'setting' => 'Evaluation point',
+				'value'   => $this->evaluation_summary(),
+			),
+			array(
 				'setting' => 'Proxy posture',
 				'value'   => $this->proxy_summary(),
 			),
@@ -207,6 +298,38 @@ final class Commands {
 			WP_CLI::log( '' );
 			WP_CLI::log( 'Mode is "log": rules are evaluated and matches recorded, but nothing is blocked.' );
 		}
+	}
+
+	/**
+	 * Where the firewall runs, and whether its fallback is in place.
+	 *
+	 * Reported because `status` is what a runbook calls after a deployment,
+	 * and a deployment is exactly what silently removes either piece: an
+	 * overwritten wp-config.php takes the early path, and a wp-content sync
+	 * takes the mu-plugin loader. Both leave a firewall that still works and
+	 * evaluates later than it should, which is the kind of regression nothing
+	 * reports unless it is asked to.
+	 */
+	private function evaluation_summary(): string {
+		$mu    = is_readable( WPMU_PLUGIN_DIR . '/basic-firewall-loader.php' );
+		$early = Site_Health::early_report();
+
+		if ( $early['called'] && ! $early['evaluated'] && 'disabled' !== $early['reason'] ) {
+			return sprintf(
+				'wp-config.php snippet present but NOT evaluating (%s) — running from the mu-plugin instead',
+				(string) $early['reason']
+			);
+		}
+
+		if ( $early['called'] ) {
+			return $mu
+				? 'wp-config.php, before WordPress (mu-plugin fallback installed)'
+				: 'wp-config.php, before WordPress (mu-plugin fallback MISSING)';
+		}
+
+		return $mu
+			? 'mu-plugin, before plugins and the theme'
+			: 'plugins_loaded — LATE. The mu-plugin loader is missing; reactivate the plugin';
 	}
 
 	/**

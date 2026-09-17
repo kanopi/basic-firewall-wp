@@ -142,7 +142,7 @@ final class Import_Screen extends Screen {
 
 		$this->row(
 			__( 'Document', 'basic-firewall' ),
-			self::textarea( 'document', '', 18 )
+			self::textarea( 'document', '', 18, true )
 		);
 
 		$this->row(
