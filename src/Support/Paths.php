@@ -207,36 +207,90 @@ final class Paths {
 	}
 
 	/**
-	 * Resolve a stored path to an absolute one.
+	 * The value a stored path should be written into the compiled file as.
 	 *
-	 * A relative path resolves inside the private directory. An absolute path is
-	 * returned untouched, so a site that keeps this data somewhere it chose gets
-	 * the path it asked for.
+	 * An absolute path is written absolute, because that is what the
+	 * administrator asked for. A relative one is written **relative**, and this
+	 * is the part that matters: the library resolves
+	 * `storage.config.storage_file` and `storage.config.offense_file` against
+	 * the directory holding the configuration file that named them, and it does
+	 * so whether or not the file exists yet — they are on its `creatablePaths`
+	 * list precisely so a first run works (see its #142). The compiled file
+	 * lives in the private directory, so a relative path lands in exactly the
+	 * place resolving it here would have put it.
+	 *
+	 * Resolving eagerly produced the same file and a worse document. Somebody
+	 * typed `blocked.data` into the field and the compiled file came back with
+	 * ninety characters of absolute path they had not written, in a file whose
+	 * own header warns that absolute paths make it environment-specific. It
+	 * also silently took the decision away from the library: a future release
+	 * that resolved these differently — against a configured data directory,
+	 * say — would have no effect here, because there would be nothing left to
+	 * resolve.
+	 *
+	 * What is *not* delegated is the `..` stripping. A stored path reaches this
+	 * from an imported document as readily as from a form, and a relative path
+	 * is only safe to hand onward once it can no longer climb out of the
+	 * directory it will be resolved against.
 	 *
 	 * @param string $path Stored path.
 	 */
-	public function resolve( string $path ): string {
-		$path = trim( $path );
+	public function portable( string $path ): string {
+		$path = $this->without_legacy_scheme( trim( $path ) );
 
-		if ( '' === $path ) {
-			return $this->base();
-		}
-
-		// Settings written before this plugin dropped the Drupal spelling.
-		if ( 0 === strpos( $path, self::LEGACY_SCHEME ) ) {
-			$path = substr( $path, strlen( self::LEGACY_SCHEME ) );
-		}
-
-		if ( self::is_absolute( $path ) ) {
+		if ( '' === $path || self::is_absolute( $path ) || self::has_scheme( $path ) ) {
 			return $path;
 		}
 
-		/*
-		 * `..` is stripped rather than trusted. A stored path is
-		 * administrator-supplied and reaches this method from an imported
-		 * document as readily as from a form, so without this,
-		 * `../../wp-config.php` is a writable target.
-		 */
+		$parts = self::safe_segments( $path );
+
+		return array() === $parts ? '' : implode( '/', $parts );
+	}
+
+	/**
+	 * Drop the Drupal stream wrapper a pre-1.0 setting may still carry.
+	 *
+	 * @param string $path Stored path.
+	 */
+	private function without_legacy_scheme( string $path ): string {
+		return 0 === strpos( $path, self::LEGACY_SCHEME )
+			? substr( $path, strlen( self::LEGACY_SCHEME ) )
+			: $path;
+	}
+
+	/**
+	 * Whether a value is a stream wrapper or URL rather than a filesystem path.
+	 *
+	 * `php://stdout` and `php://stderr` are the ones that matter: they are the
+	 * right answer for a containerised host that collects logs from the
+	 * process, and a Monolog stream handler takes them in the same argument a
+	 * filename goes in. Treated as a relative path, `php://stdout` was split on
+	 * its slashes and reassembled as `php:/stdout` inside the private
+	 * directory, so the handler created a directory called `php:` and logged
+	 * into a file nobody was reading.
+	 *
+	 * The library draws the same line, through `Path::isAbsolute()`, which is
+	 * true for any `scheme://` target.
+	 *
+	 * @param string $path Stored path.
+	 */
+	private static function has_scheme( string $path ): bool {
+		return 1 === preg_match( '#^[a-zA-Z][a-zA-Z0-9+.\-]*://#', $path );
+	}
+
+	/**
+	 * Split a relative path into segments that cannot escape their base.
+	 *
+	 * `..` is stripped rather than trusted. A stored path is
+	 * administrator-supplied and reaches this from an imported document as
+	 * readily as from a form, so without this `../../wp-config.php` is a
+	 * writable target.
+	 *
+	 * @param string $path Relative path.
+	 *
+	 * @return list<string>
+	 */
+	private static function safe_segments( string $path ): array {
 		$parts = array();
 
 		foreach ( explode( '/', str_replace( '\\', '/', $path ) ) as $segment ) {
@@ -246,6 +300,32 @@ final class Paths {
 
 			$parts[] = $segment;
 		}
+
+		return $parts;
+	}
+
+	/**
+	 * Resolve a stored path to an absolute one.
+	 *
+	 * A relative path resolves inside the private directory. An absolute path is
+	 * returned untouched, so a site that keeps this data somewhere it chose gets
+	 * the path it asked for.
+	 *
+	 * @param string $path Stored path.
+	 */
+	public function resolve( string $path ): string {
+		// Settings written before this plugin dropped the Drupal spelling.
+		$path = $this->without_legacy_scheme( trim( $path ) );
+
+		if ( '' === $path ) {
+			return $this->base();
+		}
+
+		if ( self::is_absolute( $path ) || self::has_scheme( $path ) ) {
+			return $path;
+		}
+
+		$parts = self::safe_segments( $path );
 
 		return array() === $parts
 			? $this->base()
@@ -533,6 +613,22 @@ final class Paths {
 	 */
 	public function compiled_file(): string {
 		return $this->base() . '/firewall.yml';
+	}
+
+	/**
+	 * Path of the connection-paths sidecar.
+	 *
+	 * A JSON list of Symfony property-access paths naming where live database
+	 * credentials belong in the compiled tree. It exists so the wp-config.php
+	 * evaluation path can inject them: that path runs before WordPress, so the
+	 * option the normal path reads the same list from is unreachable, and
+	 * without this file database-backed storage would have to fail open there.
+	 *
+	 * It holds paths, never values -- the credentials themselves are read from
+	 * the `DB_*` constants at request time and still never touch disk.
+	 */
+	public function connection_paths_file(): string {
+		return $this->base() . '/connection-paths.json';
 	}
 
 	/**

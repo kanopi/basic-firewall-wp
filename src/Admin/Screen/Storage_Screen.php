@@ -108,7 +108,7 @@ final class Storage_Screen extends Screen {
 				$backend
 			),
 			wp_kses_post(
-				__( '<strong>File</strong> is faster on a quiet site (0.007 ms against 0.07 ms) and is the only option that works on the wp-config.php evaluation path. Its lookup cost grows with the size of the block list — about 0.75 ms at 2,000 clients — so it gets slower exactly when the firewall is busiest. <strong>Database</strong> stays flat. File is the default because most sites never block at volume; switch once yours does.', 'basic-firewall' )
+				__( '<strong>File</strong> is faster on a quiet site (0.007 ms against 0.07 ms), but its lookup cost grows with the size of the block list — about 0.75 ms at 2,000 clients — so it gets slower exactly when the firewall is busiest. <strong>Database</strong> stays flat. File is the default because most sites never block at volume; switch once yours does. Both work on the wp-config.php evaluation path, provided the bootstrap is required below the DB_ constants — the Dashboard shows the snippet and the placement.', 'basic-firewall' )
 			)
 		);
 
@@ -153,7 +153,10 @@ final class Storage_Screen extends Screen {
 				),
 				(string) $settings->get( 'storage.database.connection_source', 'wordpress' )
 			),
-			__( '<strong>Let a preset supply it</strong> exists because every other choice defeats the preset, silently: this plugin\'s compiled file is the base of the merge, so any connection it writes survives whatever the preset sets — and reusing WordPress\'s credentials is applied later still, replacing the preset\'s outright. Contributing nothing is the only way the preset\'s connection reaches the backend.', 'basic-firewall' )
+			wp_kses_post(
+				__( '<strong>Reuse WordPress\'s credentials</strong> does not copy anything into the compiled file. Nothing is written there to look at — the compiled configuration carries the two table names and no connection at all, and the host, user and password are read fresh from <code>wp-config.php</code> on every request and handed to the library in memory. That is deliberate: the compiled file lives under uploads, which on nginx this plugin has measured to be readable over the web, and an exported configuration cannot leak a password it never contained. It also means a rotated password takes effect on the next request rather than the next rebuild, which is what makes this work on a host that rotates credentials for you.', 'basic-firewall' )
+				. '<br><br>' . __( '<strong>Let a preset supply it</strong> exists because every other choice defeats the preset, silently: this plugin\'s compiled file is the base of the merge, so any connection it writes survives whatever the preset sets — and reusing WordPress\'s credentials is applied later still, replacing the preset\'s outright. Contributing nothing is the only way the preset\'s connection reaches the backend.', 'basic-firewall' )
+			)
 		);
 
 		$this->row(

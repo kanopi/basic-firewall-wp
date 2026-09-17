@@ -296,6 +296,46 @@ final class Runner {
 	}
 
 	/**
+	 * Backends that built but could not reach what they were configured with.
+	 *
+	 * Asked of a firewall built for the purpose rather than of the one that
+	 * evaluated this request, because on an admin screen there was no such
+	 * request: the early path answered it before WordPress existed, or this is
+	 * WP-CLI. Building one costs a parse the library has already cached.
+	 *
+	 * Never throws. A firewall that cannot be built at all is a different
+	 * problem, reported by a different check, and this one returning nothing is
+	 * the right answer to "what degraded" when the answer is "everything".
+	 *
+	 * Needs library 2.28.0, which composer.json now requires. Before it these
+	 * backends did not degrade -- they stopped the firewall starting, which on
+	 * a blocking site meant no protection rather than less.
+	 *
+	 * @return list<array<string, mixed>>
+	 */
+	public function degraded_backends(): array {
+		if ( ! Library_Loader::is_usable() ) {
+			return array();
+		}
+
+		$compiled = Plugin::instance()->paths()->compiled_file();
+
+		if ( ! is_readable( $compiled ) ) {
+			return array();
+		}
+
+		$this->define_cache_constants();
+
+		try {
+			$degraded = Firewall::create( array( $compiled ), $this->overrides() )->getDegradedBackends();
+		} catch ( \Throwable $e ) {
+			return array();
+		}
+
+		return array_values( $degraded );
+	}
+
+	/**
 	 * Why the last evaluation did not happen, or null.
 	 */
 	public static function failure(): ?string {

@@ -26,14 +26,27 @@
  * loading an mu-plugin. So on exactly the busy, cached site that most needs a
  * firewall, the normal path does not run. This one does.
  *
- * WHAT IT CANNOT DO, and this is carried over from the Drupal module unchanged
- * because hiding it would be worse than the limitation:
+ * WHAT IT CAN AND CANNOT DO.
  *
- *   **Database-backed block storage must not be used here.** There is no CMS to
- *   read credentials from, so the connection cannot be built, and a site
- *   combining the two fails open on every request while the admin screens go on
- *   reporting the firewall as enabled and blocking. Use file storage on this
- *   path, or supply a connection explicitly in the options below.
+ * The Drupal module documents database-backed block storage as unusable on this
+ * path, because there is no CMS to read credentials from. That is true of
+ * Drupal and not of WordPress: `wp-config.php` defines DB_NAME, DB_USER,
+ * DB_PASSWORD and DB_HOST as plain constants above the line this file is
+ * required from, so they are already in scope here. Database storage therefore
+ * works -- see basic_firewall_build_overrides() for how, and for the sidecar
+ * that supplies the injection paths without needing an option.
+ *
+ * Placement is the condition, and it is the one thing to get right: required
+ * *below* the DB_ constants and immediately above wp-settings.php. Required
+ * above them, the constants do not exist yet, no connection is built, and a
+ * site using database storage fails open on every request through this path
+ * while the admin screens go on reporting the firewall as blocking. Site Health
+ * checks for exactly that and says so.
+ *
+ * What genuinely is not available here is the rest of WordPress: no options, no
+ * hooks, no $wpdb, no translations. The table names the library writes to are
+ * baked into the compiled file with the site's prefix already applied, which is
+ * why storage needs nothing from $wpdb at this point.
  *
  * Usage -- the Site Health screen prints this with your site's real path
  * filled in, because the private directory carries a random per-site suffix:
@@ -57,21 +70,54 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 	 * @return bool True when the request may continue.
 	 */
 	function basic_firewall_evaluate( array $options = array() ) {
+		/*
+		 * The bootstrap's report on itself, written before anything can
+		 * short-circuit. Everything here is a fact only this line is in a
+		 * position to establish, because by the time WordPress loads and
+		 * something asks, the evidence is gone:
+		 *
+		 * `called` -- that wp-config.php actually *calls* this function, not
+		 * merely that it required the file. Nothing downstream can tell those
+		 * apart: `function_exists()` is true either way, and the constant that
+		 * used to stand in for this is also set by the mu-plugin runner, so a
+		 * snippet pasted without its second half reported a healthy early path
+		 * that was never running.
+		 *
+		 * `credentials` -- whether the DB_ constants existed at this moment,
+		 * which is the question of where in wp-config.php the snippet sits.
+		 * They are always defined by the time Site Health asks.
+		 *
+		 * `evaluated` and `reason` are filled in below, once it is known
+		 * whether this request was actually evaluated here or handed onward.
+		 */
+		$GLOBALS['basic_firewall_early'] = array(
+			'called'      => true,
+			'credentials' => defined( 'DB_NAME' ) && defined( 'DB_USER' ) && defined( 'DB_HOST' ),
+			'evaluated'   => false,
+			'reason'      => null,
+		);
+
 		$options = basic_firewall_options( $options );
 
 		if ( ! $options['enabled'] ) {
+			$GLOBALS['basic_firewall_early']['reason'] = 'disabled';
+
 			return true;
 		}
 
 		$compiled = basic_firewall_compiled_path( $options );
 
 		if ( null === $compiled ) {
+			$GLOBALS['basic_firewall_early']['reason'] = 'no-compiled-file';
+
 			return true;
 		}
 
 		$autoload = basic_firewall_autoloader( $options );
 
 		if ( null === $autoload ) {
+			$GLOBALS['basic_firewall_early']['reason'] = 'no-autoloader';
+
 			return true;
 		}
 
@@ -79,6 +125,8 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 
 		if ( ! class_exists( 'Kanopi\\Firewall\\Firewall' )
 			&& ! class_exists( 'Kanopi\\BasicFirewall\\Vendor\\Kanopi\\Firewall\\Firewall' ) ) {
+			$GLOBALS['basic_firewall_early']['reason'] = 'library-missing';
+
 			return true;
 		}
 
@@ -93,6 +141,8 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 		if ( ! defined( 'BASIC_FIREWALL_EVALUATED' ) ) {
 			define( 'BASIC_FIREWALL_EVALUATED', true );
 		}
+
+		$GLOBALS['basic_firewall_early']['evaluated'] = true;
 
 		$class = class_exists( 'Kanopi\\Firewall\\Firewall' )
 			? 'Kanopi\\Firewall\\Firewall'
@@ -267,11 +317,28 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 	/**
 	 * Build the runtime overrides.
 	 *
-	 * Note what is *not* here: WordPress's database credentials. On the normal
-	 * path the runner injects them per request, which is what makes a rotated
-	 * password take effect immediately. Here there is no WordPress to read them
-	 * from, which is precisely why database-backed storage cannot be used on
-	 * this path. A site that needs it must pass a connection in `overrides`.
+	 * Including WordPress's database credentials, which is what lets database
+	 * block storage work on this path.
+	 *
+	 * The Drupal module documents this as a fail-open, and it is one there:
+	 * `settings.php` puts `$databases` behind enough machinery that reading it
+	 * without bootstrapping Drupal is not something a config file can promise.
+	 * WordPress is not shaped that way. `wp-config.php` defines `DB_NAME`,
+	 * `DB_USER`, `DB_PASSWORD` and `DB_HOST` as plain constants near the top of
+	 * the file, and this bootstrap is required *below* them, immediately before
+	 * `wp-settings.php`. By the time this function runs the credentials are
+	 * therefore already in scope -- so the limitation is Drupal's, not the
+	 * early path's, and carrying it over would have been transliteration.
+	 *
+	 * The two halves the compiler splits still hold. Values are read from the
+	 * constants at request time, so a rotated password takes effect on the next
+	 * request rather than the next rebuild; and the *paths* they are injected
+	 * at come from a sidecar written beside the compiled file, because the
+	 * option the normal path reads them from needs a WordPress that does not
+	 * exist yet. Neither half puts a credential on disk.
+	 *
+	 * Anything explicitly passed in `overrides` still wins: a site supplying
+	 * its own connection is not overwritten by this.
 	 *
 	 * @param array<string, mixed> $options Bootstrap options.
 	 *
@@ -286,7 +353,108 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 			$overrides['[global][mode]'] = BASIC_FIREWALL_MODE;
 		}
 
+		$credentials = basic_firewall_connection_parameters( $options );
+
+		if ( array() !== $credentials ) {
+			foreach ( basic_firewall_connection_paths( $options ) as $path ) {
+				if ( ! isset( $overrides[ $path ] ) ) {
+					$overrides[ $path ] = $credentials;
+				}
+			}
+		}
+
 		return $overrides;
+	}
+
+	/**
+	 * Where the compiled configuration wants live credentials injected.
+	 *
+	 * Read from the sidecar the compiler writes beside the compiled file. An
+	 * absent or unreadable file means no injection, which is the behaviour this
+	 * path had before the sidecar existed: storage that needs a connection
+	 * fails open, and Site Health says so.
+	 *
+	 * @param array<string, mixed> $options Bootstrap options.
+	 *
+	 * @return array<string>
+	 */
+	function basic_firewall_connection_paths( array $options ) {
+		$compiled = basic_firewall_compiled_path( $options );
+
+		if ( null === $compiled ) {
+			return array();
+		}
+
+		$sidecar = dirname( $compiled ) . '/connection-paths.json';
+
+		if ( ! is_readable( $sidecar ) ) {
+			return array();
+		}
+
+		$decoded = json_decode( (string) file_get_contents( $sidecar ), true ); // phpcs:ignore WordPress.WP.AlternativeFunctions -- a local file, and WP_Filesystem does not exist on this path.
+
+		if ( ! is_array( $decoded ) ) {
+			return array();
+		}
+
+		$paths = array();
+
+		foreach ( $decoded as $path ) {
+			if ( is_string( $path ) && '' !== $path ) {
+				$paths[] = $path;
+			}
+		}
+
+		return $paths;
+	}
+
+	/**
+	 * WordPress's database connection, read from the constants.
+	 *
+	 * Delegates to the same class the normal path uses, so the two paths cannot
+	 * drift -- `DB_HOST` alone has four shapes (host, host:port, bracketed IPv6,
+	 * unix socket) and getting them right twice is getting them right once and
+	 * wrong once. The class is loaded by hand because the release build's
+	 * autoloader is an authoritative classmap of the *vendored* tree and does
+	 * not carry this plugin's own `src/`; the guard stops a redeclare when the
+	 * normal path has already autoloaded it.
+	 *
+	 * Only `get_connection_parameters()` is called, which touches nothing but
+	 * the constants. The rest of the class uses `$wpdb` and would fatal here.
+	 *
+	 * @param array<string, mixed> $options Bootstrap options.
+	 *
+	 * @return array<string, mixed>
+	 */
+	function basic_firewall_connection_parameters( array $options ) {
+		if ( ! defined( 'DB_NAME' ) || ! defined( 'DB_USER' ) || ! defined( 'DB_HOST' ) ) {
+			return array();
+		}
+
+		$class = 'Kanopi\\BasicFirewall\\Database_Credentials';
+
+		if ( ! class_exists( $class, false ) ) {
+			$file = rtrim( (string) $options['plugin_path'], '/' ) . '/src/Database_Credentials.php';
+
+			if ( ! is_readable( $file ) ) {
+				return array();
+			}
+
+			require_once $file;
+		}
+
+		if ( ! class_exists( $class, false ) ) {
+			return array();
+		}
+
+		try {
+			return ( new $class() )->get_connection_parameters();
+		} catch ( \Throwable $e ) {
+			// A malformed DB_HOST is not a reason for the site to stop serving:
+			// no credentials means no injection, which means storage that needs
+			// one fails open and Site Health reports it.
+			return array();
+		}
 	}
 
 	/**

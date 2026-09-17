@@ -9,6 +9,7 @@ declare( strict_types = 1 );
 
 namespace Kanopi\BasicFirewall\Tests\integration;
 
+use Kanopi\BasicFirewall\Health\Site_Health;
 use Kanopi\BasicFirewall\Install\Activator;
 use Kanopi\BasicFirewall\Install\Capabilities;
 use Kanopi\BasicFirewall\Install\Upgrader;
@@ -54,6 +55,19 @@ final class LifecycleTest extends TestCase {
 
 	/**
 	 * Put it all back, and leave the site activated.
+	 *
+	 * "Activated" includes the mu-plugin loader, and that was the one piece
+	 * this method used to leave behind. The uninstall tests run last in this
+	 * class and `uninstall.php` deletes the loader, so a suite run ended with
+	 * the site's earliest evaluation point quietly gone: the firewall dropped
+	 * from `muplugins_loaded` to `plugins_loaded`, which still works and looks
+	 * identical from the admin screens, so nothing said so. On a site also
+	 * running the wp-config.php path it was invisible, because that path
+	 * supersedes the loader and Site Health then reports the better answer.
+	 *
+	 * A test suite that disarms the firewall it is testing is worse than one
+	 * that fails, and this is the second form that took -- the first was the
+	 * compiled file, restored above for the same reason.
 	 */
 	protected function tearDown(): void {
 		foreach ( $this->snapshot as $name => $value ) {
@@ -68,8 +82,105 @@ final class LifecycleTest extends TestCase {
 		Capabilities::grant();
 		Plugin::instance()->paths()->ensure();
 		Plugin::instance()->compiled()->rebuild();
+		$this->restore_mu_plugin();
 
 		parent::tearDown();
+	}
+
+	/**
+	 * Reinstate the mu-plugin loader if a test removed it.
+	 *
+	 * Copied directly rather than by running `Activator::activate()`, which
+	 * would write the default settings back over the snapshot this method has
+	 * just restored.
+	 */
+	private function restore_mu_plugin(): void {
+		$target = WPMU_PLUGIN_DIR . '/basic-firewall-loader.php';
+
+		if ( file_exists( $target ) ) {
+			return;
+		}
+
+		$source = dirname( __DIR__, 2 ) . '/mu-plugin/basic-firewall-loader.php';
+
+		if ( ! is_readable( $source ) || ! wp_is_writable( WPMU_PLUGIN_DIR ) ) {
+			return;
+		}
+
+		copy( $source, $target ); // phpcs:ignore WordPress.WP.AlternativeFunctions -- WP_Filesystem is not initialised in the test bootstrap, and this is a local copy of a file the plugin ships.
+	}
+
+	/**
+	 * The mu-plugin loader's absence is reported, even when it is not in use.
+	 *
+	 * This is the check that was missing while the bug above went unnoticed.
+	 * Site Health returned early on the wp-config.php path and never looked at
+	 * the loader, so the one screen that could have said it was gone reported
+	 * the better answer instead.
+	 */
+	public function test_a_missing_mu_loader_is_reported(): void {
+		$target = WPMU_PLUGIN_DIR . '/basic-firewall-loader.php';
+		$backup = $target . '.test-backup';
+
+		if ( ! file_exists( $target ) ) {
+			$this->markTestSkipped( 'The loader is not installed on this site, so there is nothing to hide.' );
+		}
+
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.rename_rename -- WP_Filesystem is not initialised in the test bootstrap.
+		rename( $target, $backup );
+
+		try {
+			$result = Site_Health::results()['evaluation'];
+
+			$this->assertNotSame(
+				'good',
+				$result['status'],
+				'A missing mu-plugin loader was reported as healthy, so nothing would tell an administrator the fallback had gone.'
+			);
+
+			$this->assertStringContainsStringIgnoringCase(
+				'mu-plugin',
+				wp_strip_all_tags( $result['label'] . ' ' . $result['description'] ),
+				'The result does not mention the mu-plugin, so it does not say what is actually wrong.'
+			);
+		} finally {
+			// phpcs:ignore WordPress.WP.AlternativeFunctions.rename_rename -- restoring the file this test moved.
+			rename( $backup, $target );
+		}
+	}
+
+	/**
+	 * The wp-config.php snippet gets a check of its own.
+	 *
+	 * Separate from the evaluation point on purpose: that test folds the
+	 * snippet, the mu-plugin and any page cache into one answer, and so reports
+	 * a healthy site when the single item somebody came looking for is absent.
+	 */
+	public function test_the_bootstrap_snippet_has_its_own_check(): void {
+		$results = Site_Health::results();
+
+		$this->assertArrayHasKey(
+			'bootstrap',
+			$results,
+			'There is no check reporting whether wp-config.php calls the firewall.'
+		);
+
+		$this->assertContains(
+			$results['bootstrap']['status'],
+			array( 'good', 'recommended', 'critical' ),
+			'The bootstrap check did not return a usable status.'
+		);
+
+		/*
+		 * Asserted against the bootstrap's own report rather than against this
+		 * site's wp-config.php, so the test says the same thing on a machine
+		 * that runs the early path and one that does not.
+		 */
+		$this->assertSame(
+			Site_Health::early_report()['called'],
+			'good' === $results['bootstrap']['status'],
+			'The check disagrees with whether the bootstrap actually ran, which is the only thing that proves the snippet is doing anything.'
+		);
 	}
 
 	/**
