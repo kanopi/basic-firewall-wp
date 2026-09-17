@@ -78,6 +78,10 @@ final class Config_Compiler {
 		 */
 		$presets = $plugin->presets()->resolve_paths( (array) $settings->get( 'presets', array() ) );
 
+		foreach ( $plugin->presets()->problems() as $problem ) {
+			$this->problems[] = $problem;
+		}
+
 		if ( array() !== $presets ) {
 			$compiled['configs'] = $presets;
 		}
@@ -275,10 +279,23 @@ final class Config_Compiler {
 		}
 
 		if ( 'file' === $backend ) {
-			$paths        = Plugin::instance()->paths();
-			$file         = (array) ( $storage['file'] ?? array() );
-			$storage_file = $paths->resolve( (string) ( $file['storage_file'] ?? 'blocked.data' ) );
-			$offense_file = trim( (string) ( $file['offense_file'] ?? '' ) );
+			$paths = Plugin::instance()->paths();
+			$file  = (array) ( $storage['file'] ?? array() );
+
+			/*
+			 * Written as the administrator typed it. A relative filename stays
+			 * relative: the library resolves these two keys against the
+			 * directory holding the file that named them, which is the private
+			 * directory, so the result is identical and the document says what
+			 * the form said. See Paths::portable().
+			 */
+			$storage_file = $paths->portable( (string) ( $file['storage_file'] ?? 'blocked.data' ) );
+
+			if ( '' === $storage_file ) {
+				$storage_file = 'blocked.data';
+			}
+
+			$offense_file = $paths->portable( (string) ( $file['offense_file'] ?? '' ) );
 
 			$config = array( 'storage_file' => $storage_file );
 
@@ -291,7 +308,7 @@ final class Config_Compiler {
 			 * escalated each other's clients.
 			 */
 			$config['offense_file'] = '' !== $offense_file
-				? $paths->resolve( $offense_file )
+				? $offense_file
 				: $storage_file . '.offenses';
 
 			return array(
@@ -518,6 +535,23 @@ final class Config_Compiler {
 			'path'        => (string) ( $challenge['path'] ?? '/basic-firewall/challenge' ),
 			'cookie_name' => (string) ( $challenge['cookie_name'] ?? 'bfw_pass' ),
 			'header_name' => (string) ( $challenge['header_name'] ?? 'X-Firewall-Pass' ),
+
+			/*
+			 * A ceiling as well as a default, which is the whole point of it.
+			 *
+			 * Needs library 2.30.0. Before it, the lifetime that signs a pass
+			 * token was whatever the interstitial's POST body asked for --
+			 * solve one arithmetic puzzle, post a lifetime of thirty-one years,
+			 * and hold a signed exemption from every challenge rule for three
+			 * decades. The signature was valid; it covered the number the
+			 * client chose.
+			 *
+			 * Written out rather than left to the library's own default so the
+			 * value is visible in the compiled file and on the screen that sets
+			 * it, because a rule asking for longer than this is silently
+			 * granted this instead.
+			 */
+			'ttl'         => max( 60, (int) ( $challenge['ttl'] ?? 3600 ) ),
 		);
 
 		$secret = Challenge_Secret::resolve();
@@ -573,13 +607,37 @@ final class Config_Compiler {
 			$level = $levels[ (string) ( $handler['level'] ?? 'warning' ) ] ?? $levels['warning'];
 
 			if ( in_array( $type, Library_Map::LOG_HANDLERS_KEYED, true ) ) {
+				/*
+				 * Every key here is the library's own spelling, and two of them
+				 * were not.
+				 *
+				 * The handler reads `buffer` and `retention_days`; this wrote
+				 * `buffered` and `retain_days`. A declaration is read with array
+				 * keys, so neither was an error -- both were ignored and the
+				 * defaults applied. The Buffering checkbox therefore did
+				 * nothing and the handler always buffered, and "Keep history
+				 * for" did nothing and retention stayed at zero, which is the
+				 * table that only grows the field's own help text warns about.
+				 */
 				$options = array(
-					'table'       => 'wordpress' === ( $handler['connection_source'] ?? 'wordpress' )
+					'table'                    => 'wordpress' === ( $handler['connection_source'] ?? 'wordpress' )
 						? $credentials->prefix_table( (string) ( $handler['table'] ?? 'basic_firewall_log' ) )
 						: (string) ( $handler['table'] ?? 'basic_firewall_log' ),
-					'level'       => $level,
-					'buffered'    => ! empty( $handler['buffered'] ),
-					'retain_days' => (int) ( $handler['retain_days'] ?? 30 ),
+					'level'                    => $level,
+					'buffer'                   => ! empty( $handler['buffered'] ),
+					'retention_days'           => (int) ( $handler['retain_days'] ?? 30 ),
+
+					/*
+					 * The library checks its schema on one write in a hundred,
+					 * which is the right cost on a table that exists and the
+					 * wrong behaviour on one that does not: a fresh install
+					 * loses roughly its first hundred events while the handler
+					 * waits for its turn to notice there is nowhere to put
+					 * them. Checked on every write for the first few instead --
+					 * the check is one query against a table this handler is
+					 * about to write to anyway.
+					 */
+					'schema_check_probability' => 1.0,
 				);
 
 				$entry = array(
@@ -598,15 +656,28 @@ final class Config_Compiler {
 				continue;
 			}
 
-			// Positional constructor arguments, ordered per handler.
+			/*
+			 * Positional constructor arguments, ordered per handler.
+			 *
+			 * The path is written as typed, for the same reason the storage
+			 * file is: the library resolves a relative `args.0` on a stream or
+			 * rotating-file handler against the directory holding the config
+			 * that named it, missing file and all. See Paths::portable().
+			 */
+			$log_path = $paths->portable( (string) ( $handler['path'] ?? 'logs/firewall.log' ) );
+
+			if ( '' === $log_path ) {
+				$log_path = 'logs/firewall.log';
+			}
+
 			$args = match ( $type ) {
 				'rotating_file' => array(
-					$paths->resolve( (string) ( $handler['path'] ?? 'logs/firewall.log' ) ),
+					$log_path,
 					(int) ( $handler['max_files'] ?? 14 ),
 					$level,
 				),
 				'stream'        => array(
-					$paths->resolve( (string) ( $handler['path'] ?? 'logs/firewall.log' ) ),
+					$log_path,
 					$level,
 				),
 				// ErrorLogHandler takes a message type first, then the level.

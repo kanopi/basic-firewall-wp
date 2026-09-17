@@ -62,6 +62,13 @@ abstract class Rule_Type_Base implements Rule_Type {
 	/**
 	 * {@inheritDoc}
 	 */
+	public function settings_help(): array {
+		return array();
+	}
+
+	/**
+	 * {@inheritDoc}
+	 */
 	public function default_settings(): array {
 		return array();
 	}
@@ -177,12 +184,101 @@ abstract class Rule_Type_Base implements Rule_Type {
 		}
 
 		$metadata = $this->apply_response_metadata( $metadata, $rule );
+		$metadata = self::apply_schedule( $metadata, $rule );
 
 		if ( array() !== $metadata ) {
 			$entry['metadata'] = $metadata;
 		}
 
 		return $entry;
+	}
+
+	/**
+	 * Write a rule's active window, if it has one.
+	 *
+	 * Needs library 2.27.0. Before it, "block this country outside business
+	 * hours" or "turn this limit on for the campaign" were answered by
+	 * commenting the rule out and remembering to put it back.
+	 *
+	 * Written only when something was actually chosen. An empty `active` block
+	 * is not a schedule that never applies -- the library reads an absent key
+	 * as "always", and an empty one has to be interpreted, which is a value in
+	 * an exported document that nothing acts on.
+	 *
+	 * @param array<string, mixed> $metadata Metadata so far.
+	 * @param array<string, mixed> $rule     The whole rule.
+	 *
+	 * @return array<string, mixed>
+	 */
+	public static function apply_schedule( array $metadata, array $rule ): array {
+		$schedule = self::schedule_declaration( (array) ( $rule['schedule'] ?? array() ) );
+
+		if ( array() !== $schedule ) {
+			$metadata['active'] = $schedule;
+		}
+
+		return $metadata;
+	}
+
+	/**
+	 * The library's `active` block, from what the screen stored.
+	 *
+	 * Public and static because the validator needs to build the same thing in
+	 * order to hand it to the library and find out whether it is valid. Two
+	 * places assembling this differently is how a rule ends up validating as
+	 * one schedule and running as another.
+	 *
+	 * @param array<string, mixed> $schedule Stored schedule.
+	 *
+	 * @return array<string, mixed>
+	 */
+	public static function schedule_declaration( array $schedule ): array {
+		$declaration = array();
+
+		foreach ( array( 'timezone', 'hours', 'from', 'until' ) as $key ) {
+			$value = trim( (string) ( $schedule[ $key ] ?? '' ) );
+
+			if ( '' !== $value ) {
+				$declaration[ $key ] = $value;
+			}
+		}
+
+		$days = array_values(
+			array_filter(
+				array_map(
+					static fn ( $day ): string => strtolower( trim( (string) $day ) ),
+					(array) ( $schedule['days'] ?? array() )
+				),
+				static fn ( string $day ): bool => '' !== $day
+			)
+		);
+
+		if ( array() !== $days ) {
+			$declaration['days'] = $days;
+		}
+
+		/*
+		 * The site's timezone is written out rather than left absent.
+		 *
+		 * The library reads an absent `timezone` as UTC, which is the right
+		 * default for a library and the wrong one here: somebody typing
+		 * business hours into a WordPress admin means the hours this site keeps,
+		 * and WordPress already knows what those are. Left to the default, a
+		 * 09:00-17:00 window would be out by up to twelve hours and look
+		 * correct while it was.
+		 *
+		 * Only when the rest of the schedule says something, so an untouched
+		 * form still stores nothing at all.
+		 */
+		if ( array() !== $declaration && ! isset( $declaration['timezone'] ) ) {
+			$site = wp_timezone_string();
+
+			if ( '' !== $site ) {
+				$declaration['timezone'] = $site;
+			}
+		}
+
+		return $declaration;
 	}
 
 	/**

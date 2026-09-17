@@ -49,7 +49,7 @@ final class Schema {
 	/**
 	 * Current schema version. Bumped whenever an upgrade routine is added.
 	 */
-	public const VERSION = 2;
+	public const VERSION = 5;
 
 	/**
 	 * The full settings tree.
@@ -410,6 +410,13 @@ final class Schema {
 					'label'   => 'Signing secret',
 					'default' => '',
 					'secret'  => true,
+				),
+				'ttl'              => array(
+					'type'    => 'int',
+					'label'   => 'How long a solved challenge is honoured, in seconds',
+					'default' => 3600,
+					'min'     => 60,
+					'max'     => 2592000,
 				),
 				'path'             => array(
 					'type'    => 'string',
@@ -853,6 +860,42 @@ final class Schema {
 					'type'    => 'text',
 					'label'   => 'Description',
 					'default' => '',
+				),
+				'schedule'           => array(
+					'type'     => 'map',
+					'label'    => 'When this rule is awake',
+					'children' => array(
+						'timezone' => array(
+							'type'    => 'string',
+							'label'   => 'Timezone the hours are read in',
+							'default' => '',
+						),
+						'days'     => array(
+							'type'    => 'list',
+							'label'   => 'Days of the week',
+							'default' => array(),
+							'of'      => array(
+								'type'    => 'string',
+								'label'   => 'Day',
+								'default' => '',
+							),
+						),
+						'hours'    => array(
+							'type'    => 'string',
+							'label'   => 'Hours, as 18:00-06:00',
+							'default' => '',
+						),
+						'from'     => array(
+							'type'    => 'string',
+							'label'   => 'Not before this date',
+							'default' => '',
+						),
+						'until'    => array(
+							'type'    => 'string',
+							'label'   => 'Not after this date',
+							'default' => '',
+						),
+					),
 				),
 				'settings'           => array(
 					'type'    => 'raw',

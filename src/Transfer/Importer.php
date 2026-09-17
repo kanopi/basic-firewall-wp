@@ -31,6 +31,13 @@ use Symfony\Component\Yaml\Yaml;
 final class Importer {
 
 	/**
+	 * Settings a rule type refused while merging.
+	 *
+	 * @var list<array{path: string, message: string}>
+	 */
+	private array $problems = array();
+
+	/**
 	 * Parse a document without applying it.
 	 *
 	 * @param string $yaml Raw document.
@@ -121,6 +128,8 @@ final class Importer {
 	 * @return array{ok: bool, error: string|null, summary: array<string, mixed>, problems: list<array{path: string, message: string}>}
 	 */
 	public function import( string $yaml, string $mode = 'merge' ): array {
+		$this->problems = array();
+
 		$preview = $this->preview( $yaml, $mode );
 
 		if ( ! $preview['ok'] ) {
@@ -134,11 +143,18 @@ final class Importer {
 
 		$problems = Plugin::instance()->settings()->replace( $preview['result'] );
 
+		/*
+		 * Settings a rule type refused are reported alongside the schema's own
+		 * complaints rather than swallowed. An import that quietly dropped half
+		 * a rule's configuration and said "imported" would be the worst of both
+		 * -- the document says one thing, the site enforces another, and
+		 * nothing connects them.
+		 */
 		return array(
 			'ok'       => true,
 			'error'    => null,
 			'summary'  => $preview['summary'],
-			'problems' => $problems,
+			'problems' => array_merge( $this->problems, $problems ),
 		);
 	}
 
@@ -263,9 +279,67 @@ final class Importer {
 			$by_id[ $id ] = isset( $existing_by_id[ $id ] )
 				? $this->merge_section( $existing_by_id[ $id ], $rule )
 				: $rule;
+
+			$by_id[ $id ] = $this->normalise_settings( $by_id[ $id ] );
 		}
 
 		return array_values( $by_id );
+	}
+
+	/**
+	 * Put an incoming rule's settings through its own type's validator.
+	 *
+	 * Until this existed, the rule form was the only thing that ever called
+	 * `validate_settings()`, so a document could write any shape it liked
+	 * straight into the settings option. The shapes are not interchangeable: a
+	 * rate limit path is `"/wp-login.php 20 60"` as typed and a map of pattern,
+	 * limit and window once validated, and a type handed the wrong one threw
+	 * where it was read -- which was the rules listing, so importing a document
+	 * could leave the screen you would use to find the bad rule unable to load.
+	 *
+	 * Also the place a hostile document is defanged. Everything else about an
+	 * import is checked; this was the one field that went in verbatim.
+	 *
+	 * A type that rejects part of what arrives keeps the rest, because refusing
+	 * the whole rule would silently drop something the document plainly asked
+	 * for. What is dropped is reported like any other import problem.
+	 *
+	 * @param array<string, mixed> $rule One incoming rule.
+	 *
+	 * @return array<string, mixed>
+	 */
+	private function normalise_settings( array $rule ): array {
+		$type = Plugin::instance()->rule_types()->get( (string) ( $rule['type'] ?? '' ) );
+
+		if ( null === $type ) {
+			return $rule;
+		}
+
+		$errors = array();
+
+		try {
+			$rule['settings'] = $type->validate_settings( (array) ( $rule['settings'] ?? array() ), $errors );
+		} catch ( \Throwable $e ) {
+			$this->problems[] = array(
+				'path'    => sprintf( 'rules.%s.settings', (string) ( $rule['id'] ?? '' ) ),
+				'message' => sprintf(
+					/* translators: %s: error message. */
+					__( 'These settings could not be read and were left as they arrived: %s', 'basic-firewall' ),
+					$e->getMessage()
+				),
+			);
+
+			return $rule;
+		}
+
+		foreach ( $errors as $field => $message ) {
+			$this->problems[] = array(
+				'path'    => sprintf( 'rules.%s.settings.%s', (string) ( $rule['id'] ?? '' ), (string) $field ),
+				'message' => (string) $message,
+			);
+		}
+
+		return $rule;
 	}
 
 	/**

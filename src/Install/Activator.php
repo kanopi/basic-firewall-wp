@@ -10,6 +10,7 @@ declare( strict_types = 1 );
 namespace Kanopi\BasicFirewall\Install;
 
 use Kanopi\BasicFirewall\Plugin;
+use Kanopi\BasicFirewall\Sources\Refresher;
 use Kanopi\BasicFirewall\Support\Schema;
 
 /**
@@ -55,6 +56,13 @@ final class Activator {
 		 * that only make sense against older data.
 		 */
 		update_option( Schema::VERSION_OPTION, Schema::VERSION, false );
+
+		/*
+		 * Scheduled here as well as on every settings save, because a rule can
+		 * reference a list before the settings screen is ever opened -- an
+		 * imported configuration, or one deployed as code.
+		 */
+		Refresher::reschedule();
 
 		/**
 		 * Fires at the end of activation.

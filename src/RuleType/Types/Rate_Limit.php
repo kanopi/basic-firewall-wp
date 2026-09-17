@@ -120,6 +120,20 @@ final class Rate_Limit extends Rule_Type_Base {
 
 	/**
 	 * {@inheritDoc}
+	 */
+	public function settings_help(): array {
+		return array(
+			'paths' => array(
+				'label'       => __( 'Limits', 'basic-firewall' ),
+				'description' => wp_kses_post(
+					__( 'One per line, as <code>pattern requests seconds</code> — <code>/wp-login.php 5 300</code> is five attempts in five minutes.<br><br>A fourth field names <strong>what to count</strong>, comma separated. Left off, the firewall counts the client address and the pattern, which is what it has always done. <code>/login 5 300 post.log</code> counts the account being tried rather than the address trying it, so a credential-stuffing run spread over a thousand addresses still hits one limit. <code>/api/* 100 60 client_ip,path</code> counts each endpoint separately rather than the API as a whole.', 'basic-firewall' )
+				),
+			),
+		);
+	}
+
+	/**
+	 * {@inheritDoc}
 	 *
 	 * @param array<string, mixed>  $settings Described by the interface.
 	 * @param array<string, string> $errors Described by the interface.
@@ -127,19 +141,41 @@ final class Rate_Limit extends Rule_Type_Base {
 	public function validate_settings( array $settings, array &$errors ): array {
 		$paths = array();
 
-		foreach ( self::lines_to_list( $settings['paths'] ?? array() ) as $line ) {
-			// "pattern limit window", whitespace or pipe separated.
-			$split = preg_split( '/\s*[|]\s*|\s+/', $line );
-			$parts = is_array( $split ) ? $split : array();
+		foreach ( self::path_lines( $settings['paths'] ?? array() ) as $line ) {
+			/*
+			 * An entry arrives either as the "pattern limit window" line the
+			 * textarea produces, or as the map this method produced last time.
+			 *
+			 * Both, because this method is no longer only called on what a
+			 * human typed: the importer runs it over an incoming document, and
+			 * a document exported from this plugin already holds the map. Read
+			 * as a line, the map stringified to "Array" and was rejected --
+			 * so importing a rate limit rule exported from this very plugin
+			 * silently produced a rule with no limits in it.
+			 */
+			$key = array();
 
-			$pattern = (string) ( $parts[0] ?? '' );
-			$limit   = (int) ( $parts[1] ?? 0 );
-			$window  = (int) ( $parts[2] ?? 0 );
+			if ( is_array( $line ) ) {
+				$pattern = (string) ( $line['pattern'] ?? '' );
+				$limit   = (int) ( $line['limit'] ?? 0 );
+				$window  = (int) ( $line['window'] ?? 0 );
+				$key     = self::parse_key( implode( ',', (array) ( $line['key'] ?? array() ) ) );
+				$line    = trim( $pattern . ' ' . $limit . ' ' . $window );
+			} else {
+				// "pattern limit window", whitespace or pipe separated.
+				$split = preg_split( '/\s*[|]\s*|\s+/', $line );
+				$parts = is_array( $split ) ? $split : array();
+
+				$pattern = (string) ( $parts[0] ?? '' );
+				$limit   = (int) ( $parts[1] ?? 0 );
+				$window  = (int) ( $parts[2] ?? 0 );
+				$key     = self::parse_key( implode( ',', array_slice( $parts, 3 ) ) );
+			}
 
 			if ( '' === $pattern || $limit < 1 || $window < 1 ) {
 				$errors['paths'] = sprintf(
 					/* translators: %s: the rejected line. */
-					__( '%s is not a limit. Write one per line, as "pattern requests seconds" — for example "/wp-login.php 5 300".', 'basic-firewall' ),
+					__( '%s is not a limit. Write one per line, as "pattern requests seconds" — for example "/wp-login.php 5 300". A fourth field names what to count, comma separated: "/login 5 300 post.log" counts the account rather than the address.', 'basic-firewall' ),
 					$line
 				);
 
@@ -169,6 +205,7 @@ final class Rate_Limit extends Rule_Type_Base {
 				'pattern' => $pattern,
 				'limit'   => $limit,
 				'window'  => $window,
+				'key'     => $key,
 			);
 		}
 
@@ -235,16 +272,41 @@ final class Rate_Limit extends Rule_Type_Base {
 		$limits = array();
 
 		foreach ( $settings['paths'] ?? array() as $path ) {
-			if ( ! is_array( $path ) ) {
+			/*
+			 * The raw "pattern limit window" line is read here as well as the
+			 * validated map, because only the rule form runs the validator --
+			 * an imported document, a deploy writing the option or a hand edit
+			 * all reach the compiler with whatever they stored. Skipping a raw
+			 * line would have compiled a rate limit rule with fewer paths than
+			 * it was configured with, and said nothing.
+			 */
+			if ( is_string( $path ) ) {
+				$path = self::parse_path_line( $path );
+			}
+
+			if ( ! is_array( $path ) || '' === (string) ( $path['pattern'] ?? '' ) ) {
 				continue;
 			}
 
-			$limits[] = array(
+			$limit = array(
 				'path'   => (string) $path['pattern'],
-				'rate'   => (int) $path['limit'],
+				'rate'   => (int) ( $path['limit'] ?? 0 ),
 				// The library calls the window "sample".
-				'sample' => (int) $path['window'],
+				'sample' => (int) ( $path['window'] ?? 0 ),
 			);
+
+			/*
+			 * Written only when named. Absent, the library counts the client
+			 * address and the pattern -- byte-identical to what it counted
+			 * before 2.27.0, so no counter resets on upgrade.
+			 */
+			$components = (array) ( $path['key'] ?? array() );
+
+			if ( array() !== $components ) {
+				$limit['key'] = array_values( array_map( 'strval', $components ) );
+			}
+
+			$limits[] = $limit;
 		}
 
 		$entry['config'] = $limits;
@@ -358,6 +420,96 @@ final class Rate_Limit extends Rule_Type_Base {
 	}
 
 	/**
+	 * Split the stored paths, keeping maps intact.
+	 *
+	 * `lines_to_list()` casts every entry to a string, which is right for the
+	 * textarea it was written for and wrong for a value this type stores
+	 * structured. An already-validated path went through it as the string
+	 * "Array".
+	 *
+	 * @param mixed $value Raw textarea content, a list of lines, or a list of maps.
+	 *
+	 * @return list<string|array<string, mixed>>
+	 */
+	private static function path_lines( $value ): array {
+		if ( ! is_array( $value ) ) {
+			return self::lines_to_list( $value );
+		}
+
+		$out = array();
+
+		foreach ( $value as $entry ) {
+			if ( is_array( $entry ) ) {
+				$out[] = $entry;
+
+				continue;
+			}
+
+			$entry = trim( (string) $entry );
+
+			if ( '' !== $entry ) {
+				$out[] = $entry;
+			}
+		}
+
+		return $out;
+	}
+
+	/**
+	 * Read one "pattern limit window" line.
+	 *
+	 * The stored-as-typed form, which is what the validator turns into a map
+	 * and what everything that bypasses the validator leaves alone.
+	 *
+	 * @param string $line Raw line.
+	 *
+	 * @return array{pattern: string, limit: int, window: int}
+	 */
+	public static function parse_path_line( string $line ): array {
+		$split = preg_split( '/\s*[|]\s*|\s+/', trim( $line ) );
+		$parts = is_array( $split ) ? $split : array();
+
+		return array(
+			'pattern' => (string) ( $parts[0] ?? '' ),
+			'limit'   => (int) ( $parts[1] ?? 0 ),
+			'window'  => (int) ( $parts[2] ?? 0 ),
+
+			/*
+			 * A fourth field, comma-separated, naming what to count. Needs
+			 * library 2.27.0; absent it counts the address and the pattern,
+			 * which is what every earlier version did and what a line with
+			 * three fields keeps doing.
+			 *
+			 * Everything from the fourth field on is rejoined before being
+			 * split on commas, because the line is split on whitespace first:
+			 * `client_ip, path` arrives as two fields, and taking only the
+			 * first would drop half the key into a limit that counts something
+			 * narrower than it was told to.
+			 */
+			'key'     => self::parse_key( implode( ',', array_slice( $parts, 3 ) ) ),
+		);
+	}
+
+	/**
+	 * Split the comma-separated key components of a path line.
+	 *
+	 * @param string $value Raw field.
+	 *
+	 * @return list<string>
+	 */
+	public static function parse_key( string $value ): array {
+		return array_values(
+			array_filter(
+				array_map(
+					static fn ( string $part ): string => strtolower( trim( $part ) ),
+					explode( ',', $value )
+				),
+				static fn ( string $part ): bool => '' !== $part
+			)
+		);
+	}
+
+	/**
 	 * {@inheritDoc}
 	 *
 	 * @param array<string, mixed> $settings Described by the interface.
@@ -371,12 +523,28 @@ final class Rate_Limit extends Rule_Type_Base {
 			$lines = array();
 
 			foreach ( array_slice( $paths, 0, 5 ) as $path ) {
+				/*
+				 * A path arrives parsed from the rule form and unparsed from
+				 * everywhere else -- an imported document, a deploy writing the
+				 * option, a hand edit -- because only the form runs
+				 * validate_settings(). Reading the raw "pattern limit window"
+				 * line here as well means a listing describes what is stored
+				 * rather than throwing over it.
+				 */
+				if ( is_string( $path ) ) {
+					$path = self::parse_path_line( $path );
+				}
+
+				if ( ! is_array( $path ) ) {
+					continue;
+				}
+
 				$lines[] = sprintf(
 					/* translators: 1: path pattern, 2: request count, 3: window in seconds. */
 					__( '%1$s — %2$d request(s) per %3$d second(s)', 'basic-firewall' ),
-					(string) $path['pattern'],
-					(int) $path['limit'],
-					(int) $path['window']
+					(string) ( $path['pattern'] ?? '' ),
+					(int) ( $path['limit'] ?? 0 ),
+					(int) ( $path['window'] ?? 0 )
 				);
 			}
 		}

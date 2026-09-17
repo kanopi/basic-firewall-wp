@@ -17,6 +17,7 @@ use Kanopi\BasicFirewall\Compiler\Compiled_Config_Cache;
 use Kanopi\BasicFirewall\Health\Site_Health;
 use Kanopi\BasicFirewall\RuleType\Registry;
 use Kanopi\BasicFirewall\Runtime\Runner;
+use Kanopi\BasicFirewall\Sources\Refresher;
 use Kanopi\BasicFirewall\Support\Paths;
 
 /**
@@ -127,6 +128,8 @@ final class Plugin {
 		 * whenever that option changes rather than on a timer or on a request
 		 * that happens to notice it is stale.
 		 */
+		Refresher::register();
+
 		add_action( 'basic_firewall_settings_saved', array( $this, 'rebuild' ) );
 		add_action( 'basic_firewall_activated', array( $this, 'rebuild' ) );
 		add_action( 'basic_firewall_upgraded', array( $this, 'rebuild' ) );
