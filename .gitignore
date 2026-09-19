@@ -23,4 +23,9 @@
 /build/stage/
 
 # Written by build/build-zip.sh on every build.
-/build
+/build/vendor-version.php
+
+# The build tools resolve against the build machine's PHP rather than the
+# plugin's floor, so they carry their own manifest -- which is tracked. Its
+# vendor is not.
+/build/tools/vendor/

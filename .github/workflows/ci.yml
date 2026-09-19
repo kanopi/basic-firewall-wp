@@ -26,6 +26,13 @@ jobs:
       - name: Install dependencies
         run: composer install --no-interaction --no-progress
 
+      # The plugin claims PHP 8.1, so nothing it ships may require more. The
+      # lock is resolved against that floor by config.platform; this asserts it,
+      # because the failure mode is a fatal on a customer's site rather than
+      # anything a test would catch.
+      - name: The shipped tree must install on the declared floor
+        run: composer check-platform-reqs --no-dev
+
       - name: WordPress Coding Standards
         run: composer lint
 
@@ -153,9 +160,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Not the plugin's floor. PHP-Scoper needs 8.3, and it is the only thing
+      # here that runs on this PHP: the tree it rewrites is installed from the
+      # plugin's own lock, which is resolved for 8.1 by config.platform. The
+      # zip is identical whichever PHP builds it.
       - uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.1'
+          php-version: '8.3'
           coverage: none
           tools: composer:v2, wp-cli
 

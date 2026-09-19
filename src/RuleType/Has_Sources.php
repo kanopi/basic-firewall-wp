@@ -35,8 +35,13 @@ trait Has_Sources {
 	 * Providers move things on the order of weeks, and the refresh happens out
 	 * of band rather than on the request path, so a shorter window buys nothing
 	 * and a longer one risks a stale allowlist.
+	 *
+	 * A method rather than a constant because a constant in a trait is PHP 8.2,
+	 * and this plugin declares 8.1.
 	 */
-	public const DEFAULT_SOURCE_TTL = 86400;
+	public static function default_source_ttl(): int {
+		return 86400;
+	}
 
 	/**
 	 * One referenced list, with everything unset.
@@ -55,7 +60,7 @@ trait Has_Sources {
 			'operator'    => 'contains',
 			'negate'      => false,
 			'validate'    => static::source_validator_default(),
-			'ttl'         => self::DEFAULT_SOURCE_TTL,
+			'ttl'         => self::default_source_ttl(),
 			'on_error'    => 'last_known_good',
 			'max_delta'   => '',
 			'max_size'    => '',
