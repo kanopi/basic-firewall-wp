@@ -390,6 +390,24 @@ final class AdminMenuTest extends TestCase {
 				'action'     => 'login',
 			);
 
+			/*
+			 * No challenge section is compiled unless something challenges --
+			 * the library refuses to start on a challenge configuration with
+			 * nothing behind it. A site already carrying such a rule made this
+			 * pass without the test saying it depended on one.
+			 */
+			$values['rules'] = array(
+				array(
+					'id'       => 'recaptcha-version',
+					'type'     => 'ip_address',
+					'label'    => 'Challenge, so the section is compiled',
+					'enabled'  => true,
+					'response' => 'challenge',
+					'weight'   => 0,
+					'settings' => array( 'addresses' => array( '203.0.113.199' ) ),
+				),
+			);
+
 			$settings->replace( $values );
 
 			$this->assertSame( 'v3', $settings->get( 'challenge.provider_options.recaptcha.version' ) );
