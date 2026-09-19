@@ -59,6 +59,14 @@ final class AdminMenuTest extends TestCase {
 	public static function setUpBeforeClass(): void {
 		parent::setUpBeforeClass();
 
+		/*
+		 * add_menu_page() and add_submenu_page() live in an admin include that
+		 * a CLI bootstrap never loads. A site that has been browsed has it
+		 * warm; a freshly installed one in CI does not, and the whole class
+		 * died on an undefined function rather than on anything about the menu.
+		 */
+		require_once ABSPATH . 'wp-admin/includes/plugin.php';
+
 		global $menu, $submenu;
 
 		/*

@@ -88,6 +88,72 @@ final class BlockListWriteTest extends TestCase {
 	}
 
 	/**
+	 * The expiry survives on whichever backend the site is using.
+	 *
+	 * This is the shape of a bug that hid for a whole development cycle. The
+	 * expiry was read from isBlocked(), which reports it on database storage --
+	 * it hydrates the whole row, `expire` column included -- and not on file
+	 * storage, which returns the stored payload alone. The dev site ran on
+	 * database storage and CI on file, so each half of the work was checked
+	 * against the half that agreed with it.
+	 *
+	 * Both are exercised here in one run, because a backend-dependent read is
+	 * only ever caught by looking at both.
+	 *
+	 * @dataProvider backends
+	 *
+	 * @param string $backend Storage backend to run against.
+	 */
+	public function test_the_expiry_is_reported_on_every_backend( string $backend ): void {
+		$settings = Plugin::instance()->settings();
+		$snapshot = $settings->all();
+
+		try {
+			$values                       = $settings->all();
+			$values['storage']['backend'] = $backend;
+			$settings->replace( $values );
+
+			$blocked = Plugin::instance()->blocked();
+
+			if ( ! $blocked->is_durable() ) {
+				$this->markTestSkipped( sprintf( 'The %s backend is not usable on this site.', $backend ) );
+			}
+
+			$blocked->unblock( self::ADDRESS );
+			$this->assertTrue( $blocked->block( self::ADDRESS, 3600, 'Backend round trip' ) );
+
+			$record = Plugin::instance()->blocked()->check( self::ADDRESS )['record'] ?? array();
+
+			$this->assertGreaterThan(
+				time(),
+				(int) ( $record['expire'] ?? 0 ),
+				sprintf( 'On %s storage the expiry did not come back, so the block reads as permanent and nothing ever releases it.', $backend )
+			);
+
+			$this->assertSame(
+				'Backend round trip',
+				(string) ( $record['reason'] ?? '' ),
+				sprintf( 'On %s storage the reason did not come back.', $backend )
+			);
+		} finally {
+			Plugin::instance()->blocked()->unblock( self::ADDRESS );
+			$settings->replace( $snapshot );
+		}
+	}
+
+	/**
+	 * The backends a site can be set to.
+	 *
+	 * @return array<string, array{string}>
+	 */
+	public static function backends(): array {
+		return array(
+			'file'     => array( 'file' ),
+			'database' => array( 'database' ),
+		);
+	}
+
+	/**
 	 * Releasing it puts things back.
 	 */
 	public function test_an_added_address_can_be_released(): void {

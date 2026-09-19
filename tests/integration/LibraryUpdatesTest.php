@@ -223,6 +223,26 @@ final class LibraryUpdatesTest extends TestCase {
 		try {
 			$values                     = $settings->all();
 			$values['challenge']['ttl'] = 900;
+
+			/*
+			 * The section is only emitted when something actually challenges --
+			 * the library refuses to start on a challenge configuration with no
+			 * challenge rule behind it. On a site that already has one this
+			 * passed without saying so, and on a freshly installed one the
+			 * compiled file had no challenge section at all to look in.
+			 */
+			$values['rules'] = array(
+				array(
+					'id'       => 'ttl-ceiling',
+					'type'     => 'ip_address',
+					'label'    => 'Challenge, so the section is compiled',
+					'enabled'  => true,
+					'response' => 'challenge',
+					'weight'   => 0,
+					'settings' => array( 'addresses' => array( '203.0.113.198' ) ),
+				),
+			);
+
 			$settings->replace( $values );
 
 			Plugin::instance()->compiled()->rebuild();

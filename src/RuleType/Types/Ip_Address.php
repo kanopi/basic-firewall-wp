@@ -79,12 +79,6 @@ final class Ip_Address extends Rule_Type_Base {
 		);
 	}
 
-
-
-
-
-
-
 	/**
 	 * {@inheritDoc}
 	 */
