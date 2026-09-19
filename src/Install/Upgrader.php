@@ -191,6 +191,22 @@ final class Upgrader {
 
 				$settings->replace( $values );
 			},
+
+			/*
+			 * 6: seed `storage.record_request`, new in library 2.31.0.
+			 *
+			 * Writing the document back through the validator fills in every key
+			 * the schema has gained since it was last saved, which is what this
+			 * is for -- the compiler defaults an absent bucket too, but only the
+			 * stored document is what the storage screen shows, and a screen
+			 * whose fields are blank while the compiled file has the defaults is
+			 * a screen that lies.
+			 */
+			6 => static function (): void {
+				$settings = Plugin::instance()->settings();
+
+				$settings->replace( $settings->all() );
+			},
 		);
 	}
 

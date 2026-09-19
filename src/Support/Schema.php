@@ -9,6 +9,8 @@ declare( strict_types = 1 );
 
 namespace Kanopi\BasicFirewall\Support;
 
+use Kanopi\BasicFirewall\Compiler\Library_Map;
+
 /**
  * Describes the shape of the settings option.
  *
@@ -49,7 +51,7 @@ final class Schema {
 	/**
 	 * Current schema version. Bumped whenever an upgrade routine is added.
 	 */
-	public const VERSION = 5;
+	public const VERSION = 6;
 
 	/**
 	 * The full settings tree.
@@ -261,7 +263,7 @@ final class Schema {
 			'type'     => 'map',
 			'label'    => 'Blocked client storage',
 			'children' => array(
-				'backend'  => array(
+				'backend'        => array(
 					'type'    => 'string',
 					'label'   => 'Storage backend',
 
@@ -278,7 +280,7 @@ final class Schema {
 					'default' => 'file',
 					'choices' => array( 'memory', 'file', 'database' ),
 				),
-				'file'     => array(
+				'file'           => array(
 					'type'     => 'map',
 					'label'    => 'File storage settings',
 					'children' => array(
@@ -294,7 +296,7 @@ final class Schema {
 						),
 					),
 				),
-				'database' => array(
+				'database'       => array(
 					'type'     => 'map',
 					'label'    => 'Database storage settings',
 					'children' => array(
@@ -330,6 +332,83 @@ final class Schema {
 						),
 						'parameters'        => self::connection_parameters(),
 					),
+				),
+				'record_request' => self::record_request(),
+			),
+		);
+	}
+
+	/**
+	 * What a block record keeps about the request that caused it.
+	 *
+	 * Needs library 2.31.0. Before it, a record held the whole cookie jar and
+	 * header set verbatim -- so a blocked visitor's session cookie, their
+	 * Authorization header and their challenge pass were persisted into the
+	 * block list, which is the artifact that gets pasted into a ticket.
+	 *
+	 * An allowlist, not a denylist, because a denylist is a promise to have
+	 * thought of every header name a framework might invent. All four buckets
+	 * are written out rather than left absent: a textarea cannot express the
+	 * difference between "not configured, use the library's default" and
+	 * "configured to keep nothing", and of the two readings the silent one is
+	 * the one that surprises somebody.
+	 *
+	 * @return array<string, mixed>
+	 */
+	private static function record_request(): array {
+		return array(
+			'type'     => 'map',
+			'label'    => 'What a block record keeps',
+			'children' => array(
+				'cookies' => array(
+					'type'    => 'text',
+					'label'   => 'Cookies to keep',
+
+					/*
+					 * None. The session cookie problem is unambiguous: it is not
+					 * the firewall's to hold, and a record outlives the request
+					 * by the length of the ban.
+					 */
+					'default' => '',
+				),
+				'headers' => array(
+					'type'    => 'text',
+					'label'   => 'Headers to keep',
+
+					/*
+					 * The library's own list, read from it rather than copied:
+					 * the ones that describe a client rather than authenticate
+					 * it, so nothing here can be replayed to become somebody.
+					 * Seeded rather than left empty because an empty field means
+					 * "keep nothing", and a site that never opened this screen
+					 * would silently lose the user agent off every record.
+					 */
+					'default' => implode( "\n", Library_Map::default_recorded_headers() ),
+				),
+				'query'   => array(
+					'type'    => 'text',
+					'label'   => 'Query parameters to keep',
+
+					/*
+					 * Everything, which is the library's default and the right
+					 * one for the commonest reason anybody reads a block record:
+					 * for a scanner, the query string is the attack, and an
+					 * allowlist would gut the record for its main use.
+					 *
+					 * It is also the one bucket a WordPress site should think
+					 * about, because WordPress puts secrets in query strings --
+					 * `wp-login.php?action=rp&key=...` is a working password
+					 * reset. The storage screen says so at the point the choice
+					 * is made rather than leaving it to be discovered.
+					 */
+					'default' => '*',
+				),
+				'body'    => array(
+					'type'    => 'text',
+					'label'   => 'Request body fields to keep',
+
+					// None. A blocked login attempt has the password in it.
+					'default' => '',
 				),
 			),
 		);
@@ -705,6 +784,20 @@ final class Schema {
 					'label'   => 'Keep history for this many days, 0 to keep everything',
 					'default' => 30,
 					'min'     => 0,
+				),
+				'deferred'          => array(
+					'type'    => 'bool',
+					'label'   => 'Send after the visitor has their response',
+
+					/*
+					 * Off. Deferring trades durability for latency -- a fatal
+					 * before shutdown loses the buffer -- and for a local file
+					 * it buys nothing, which is what most handlers here are.
+					 * It earns itself on a handler that makes a network round
+					 * trip, where a log service having a bad afternoon is
+					 * otherwise a slow site.
+					 */
+					'default' => false,
 				),
 				'buffered'          => array(
 					'type'    => 'bool',

@@ -12,6 +12,7 @@ namespace Kanopi\BasicFirewall\Admin\Screen;
 use Kanopi\BasicFirewall\Admin\Notices;
 use Kanopi\BasicFirewall\Admin\Screen;
 use Kanopi\BasicFirewall\Database_Credentials;
+use Kanopi\BasicFirewall\Settings;
 
 /**
  * Where the block list lives.
@@ -60,6 +61,10 @@ final class Storage_Screen extends Screen {
 		$all['storage']['database']['storage_table']     = $this->posted( 'storage_table' );
 		$all['storage']['database']['offenses_table']    = $this->posted( 'offenses_table' );
 		$all['storage']['database']['connection_source'] = $this->posted( 'connection_source', 'wordpress' );
+
+		foreach ( array( 'cookies', 'headers', 'query', 'body' ) as $bucket ) {
+			$all['storage']['record_request'][ $bucket ] = $this->posted_textarea( 'record_' . $bucket );
+		}
 
 		$dsn = $this->posted( 'dsn' );
 
@@ -188,7 +193,67 @@ final class Storage_Screen extends Screen {
 
 		$this->close_section();
 
+		$this->render_record_request( $settings );
+
 		$this->close_form();
+	}
+
+	/**
+	 * What a block record keeps about the request that caused it.
+	 *
+	 * Needs library 2.31.0, which stopped records keeping the whole cookie jar
+	 * and header set. Surfaced rather than left at the library's defaults
+	 * because three of the four buckets are a settled answer and the fourth is
+	 * a decision this plugin cannot make for a site.
+	 *
+	 * @param Settings $settings Current settings.
+	 */
+	private function render_record_request( Settings $settings ): void {
+		$this->open_section(
+			__( 'What a block record keeps', 'basic-firewall' ),
+			'',
+			wp_kses_post(
+				__( 'When a rule blocks a request, the request is recorded alongside the address so an operator can see what was blocked and why. That record outlives the request by the length of the ban, and it is the thing that gets pasted into a ticket — so it keeps an <strong>allowlist</strong> of each part of the request rather than all of it. One name per line. A single <code>*</code> keeps everything in that bucket; an empty field keeps nothing.', 'basic-firewall' )
+			)
+		);
+
+		echo '<table class="form-table" role="presentation"><tbody>';
+
+		$this->row(
+			__( 'Cookies', 'basic-firewall' ),
+			self::textarea( 'record_cookies', (string) $settings->get( 'storage.record_request.cookies', '' ), 3 ),
+			wp_kses_post(
+				__( 'Empty by default, and the one bucket with no argument on the other side: a blocked visitor\'s session cookie is not the firewall\'s to hold, and a record that keeps it is a stored login for the duration of the ban.', 'basic-firewall' )
+			)
+		);
+
+		$this->row(
+			__( 'Headers', 'basic-firewall' ),
+			self::textarea( 'record_headers', (string) $settings->get( 'storage.record_request.headers', '' ), 8 ),
+			wp_kses_post(
+				__( 'Matched case-insensitively. The default list is the one the library ships: the headers that <em>describe</em> a client rather than authenticate it, so nothing in it can be replayed to become somebody. <code>Cookie</code>, <code>Authorization</code> and anything ending in <code>-Token</code> are the reason this is an allowlist.', 'basic-firewall' )
+			)
+		);
+
+		$this->row(
+			__( 'Query parameters', 'basic-firewall' ),
+			self::textarea( 'record_query', (string) $settings->get( 'storage.record_request.query', '' ), 3 ),
+			wp_kses_post(
+				__( '<strong>Everything, by default, and this is the one to think about.</strong> For a scanner — the commonest reason anybody reads a block record — the query string <em>is</em> the attack, so narrowing this guts the record for the thing it is most often read about. But WordPress puts working secrets in query strings: <code>wp-login.php?action=rp&amp;key=…</code> is a password reset, and <code>wp-activate.php?key=…</code> is an account. A blocked request to one of those stores a usable credential. Site Health counts how many of your current records hold one.', 'basic-firewall' )
+			)
+		);
+
+		$this->row(
+			__( 'Request body fields', 'basic-firewall' ),
+			self::textarea( 'record_body', (string) $settings->get( 'storage.record_request.body', '' ), 3 ),
+			wp_kses_post(
+				__( 'Empty by default. A blocked login attempt has the password in it.', 'basic-firewall' )
+			)
+		);
+
+		echo '</tbody></table>';
+
+		$this->close_section();
 	}
 
 	/**

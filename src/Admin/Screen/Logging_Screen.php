@@ -134,6 +134,12 @@ final class Logging_Screen extends Screen {
 			$when( 'database' )
 		);
 
+		$this->row(
+			__( 'Off the request path', 'basic-firewall' ),
+			self::checkbox( $name . '[deferred]', ! empty( $handler['deferred'] ), __( 'Send after the visitor has their response', 'basic-firewall' ) ),
+			wp_kses_post( __( 'Holds records in memory and writes them after the response has been sent, so a slow destination is not a slow page. Worth nothing for a local file, which is already fast, and worth a lot for anything that makes a network round trip — a database on another host, or a handler added through the advanced YAML that posts to a log service. The cost is that a fatal error before shutdown loses the buffer, which is the right trade for a firewall log and the wrong one for an audit log.', 'basic-firewall' ) )
+		);
+
 		echo '</tbody></table></div>';
 	}
 
@@ -173,6 +179,7 @@ final class Logging_Screen extends Screen {
 				'connection_source' => (string) ( $handler['connection_source'] ?? 'wordpress' ),
 				'retain_days'       => (int) ( $handler['retain_days'] ?? 30 ),
 				'buffered'          => ! empty( $handler['buffered'] ),
+				'deferred'          => ! empty( $handler['deferred'] ),
 			);
 		}
 

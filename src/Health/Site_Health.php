@@ -75,6 +75,7 @@ final class Site_Health {
 			'mode'        => __( 'Basic Firewall operating mode', 'basic-firewall' ),
 			'storage'     => __( 'Basic Firewall block list storage', 'basic-firewall' ),
 			'logging'     => __( 'Basic Firewall logging', 'basic-firewall' ),
+			'records'     => __( 'Basic Firewall block records', 'basic-firewall' ),
 			'upgrade'     => __( 'Basic Firewall upgrades', 'basic-firewall' ),
 		);
 	}
@@ -113,9 +114,166 @@ final class Site_Health {
 			'mode'        => self::check_mode(),
 			'storage'     => self::check_storage(),
 			'logging'     => self::check_logging(),
+			'records'     => self::check_records(),
 			'upgrade'     => self::check_upgrade(),
 			default       => self::ok( __( 'Unknown test', 'basic-firewall' ), '' ),
 		};
+	}
+
+	/**
+	 * How many query parameters WordPress puts secrets in are sitting in the
+	 * block list.
+	 *
+	 * Library 2.31.0 stopped block records keeping cookies and most headers,
+	 * because the block list is the artifact operators paste into tickets and a
+	 * record outlives the request by the length of the ban. It deliberately kept
+	 * the whole query string, and that is the right default: for a scanner --
+	 * the commonest reason anybody reads a block record -- the query string *is*
+	 * the attack.
+	 *
+	 * It is also the bucket WordPress is unusual about. `wp-login.php` and
+	 * `wp-activate.php` put working secrets in query strings, so a blocked
+	 * request to a password reset link stores a usable password reset. The
+	 * library cannot know that; WordPress can, which is why the check is here
+	 * rather than a note in its documentation.
+	 *
+	 * Narrowing `query` is not offered as the fix, because an allowlist cannot
+	 * express "everything except this" and enumerating the parameters a scanner
+	 * might use is the thing allowlists are bad at. Clearing the affected
+	 * records is the honest instrument, and it is the operator's call because it
+	 * unblocks whoever is in them.
+	 *
+	 * @return array{status: string, label: string, description: string, actions: string}
+	 */
+	private static function check_records(): array {
+		$listing = Plugin::instance()->blocked()->all();
+
+		if ( ! $listing['supported'] ) {
+			return self::ok(
+				__( 'Block records cannot be enumerated on this backend', 'basic-firewall' ),
+				esc_html__( 'Nothing to report, and nothing to check: this storage backend cannot list what it holds.', 'basic-firewall' )
+			);
+		}
+
+		$holding = 0;
+		$stale   = 0;
+
+		foreach ( $listing['clients'] as $client ) {
+			$request = ( $client['record']['request'] ?? null );
+			$request = is_string( $request ) ? json_decode( $request, true ) : $request;
+
+			if ( ! is_array( $request ) ) {
+				continue;
+			}
+
+			if ( self::holds_secret_query( (array) ( $request['query'] ?? array() ) ) ) {
+				++$holding;
+			}
+
+			// Written before the allowlist existed. Redaction happens on the way
+			// in, so these are unaffected by the setting and expire with their
+			// bans.
+			if ( array() !== (array) ( $request['cookies'] ?? array() ) ) {
+				++$stale;
+			}
+		}
+
+		if ( 0 === $holding && 0 === $stale ) {
+			return self::ok(
+				__( 'No block record is holding a credential', 'basic-firewall' ),
+				esc_html(
+					sprintf(
+						/* translators: %d: number of block records. */
+						_n(
+							'%d block record was checked for a session cookie and for the query parameters WordPress puts secrets in.',
+							'%d block records were checked for session cookies and for the query parameters WordPress puts secrets in.',
+							count( $listing['clients'] ),
+							'basic-firewall'
+						),
+						count( $listing['clients'] )
+					)
+				)
+			);
+		}
+
+		$description = '';
+
+		if ( $holding > 0 ) {
+			$description .= '<p>' . esc_html(
+				sprintf(
+					/* translators: %d: number of block records. */
+					_n(
+						'%d block record holds a query parameter of the kind WordPress uses for a secret — a password reset key, an activation key, or an API token somebody put in a URL.',
+						'%d block records hold query parameters of the kind WordPress uses for a secret — a password reset key, an activation key, or an API token somebody put in a URL.',
+						$holding,
+						'basic-firewall'
+					),
+					$holding
+				)
+			) . '</p>';
+
+			$description .= '<p>' . esc_html__( 'A password reset key in the block list is a working password reset, for as long as the ban lasts. The block list is also what gets pasted into a ticket.', 'basic-firewall' ) . '</p>';
+		}
+
+		if ( $stale > 0 ) {
+			$description .= '<p>' . esc_html(
+				sprintf(
+					/* translators: %d: number of block records. */
+					_n(
+						'%d block record still holds the cookies the visitor sent, including their session cookie. It was written before the allowlist existed and is unaffected by it, because redaction happens on the way in.',
+						'%d block records still hold the cookies the visitor sent, including their session cookies. They were written before the allowlist existed and are unaffected by it, because redaction happens on the way in.',
+						$stale,
+						'basic-firewall'
+					),
+					$stale
+				)
+			) . '</p>';
+		}
+
+		$description .= '<p>' . esc_html__( 'These expire with their bans. Clearing the block list removes them sooner, at the cost of unblocking whoever is currently in it.', 'basic-firewall' ) . '</p>';
+
+		return self::recommended(
+			__( 'Block records are holding credentials somebody sent', 'basic-firewall' ),
+			$description,
+			sprintf(
+				'<p><a href="%s">%s</a></p>',
+				esc_url( admin_url( 'admin.php?page=basic-firewall-blocked' ) ),
+				esc_html__( 'Review the block list', 'basic-firewall' )
+			)
+		);
+	}
+
+	/**
+	 * Whether a recorded query string carries something WordPress treats as a
+	 * secret.
+	 *
+	 * Named rather than pattern-matched, and kept short. `_wpnonce` is
+	 * deliberately absent: it is on a large share of admin URLs, it is bound to
+	 * one user and one action, and flagging it would fire on every scan of
+	 * `admin-ajax.php` until nobody read this check any more.
+	 *
+	 * @param array<array-key, mixed> $query Recorded query parameters.
+	 */
+	private static function holds_secret_query( array $query ): bool {
+		$secrets = array(
+			// wp-login.php?action=rp&key=... and wp-activate.php?key=...
+			'key',
+			'token',
+			'access_token',
+			'api_key',
+			'apikey',
+			'secret',
+			'password',
+			'pwd',
+		);
+
+		foreach ( array_keys( $query ) as $name ) {
+			if ( in_array( strtolower( (string) $name ), $secrets, true ) ) {
+				return true;
+			}
+		}
+
+		return false;
 	}
 
 	/**

@@ -762,6 +762,33 @@ block()  -> false          the client is not recorded
 request  -> allowed        the firewall fails open
 ```
 
+### What a block record keeps
+
+When a rule blocks a request, the request is recorded alongside the address. That
+record outlives the request by the length of the ban, and the block list is the
+artifact people paste into tickets — so each part of the request is kept by
+**allowlist**, on the Storage screen. One name per line; a single `*` keeps
+everything in that bucket, an empty field keeps nothing.
+
+| Bucket | Default | Why |
+|---|---|---|
+| Cookies | none | A session cookie is not the firewall's to hold |
+| Headers | a short list | The ones that describe a client rather than authenticate it |
+| Query parameters | **everything** | For a scanner, the query string *is* the attack |
+| Request body | none | A blocked login attempt has the password in it |
+
+Query is the one to think about, and the reason is WordPress rather than the
+firewall: `wp-login.php?action=rp&key=…` is a working password reset and
+`wp-activate.php?key=…` is an account, so a blocked request to either stores a
+usable credential. Narrowing the bucket is not much of an answer — an allowlist
+cannot say "everything except this", and enumerating what a scanner might send is
+exactly what allowlists are bad at. **Site Health counts how many of your current
+records hold one**, which is the actionable version of the same warning.
+
+Redaction happens on the way in, so records written before this existed are
+unaffected by the setting. They expire with their bans; clearing the block list
+removes them sooner, at the cost of unblocking whoever is in it.
+
 ## Logging
 
 The firewall logs through Monolog, not through WordPress, because it runs before
@@ -777,6 +804,29 @@ shell; a table answers the questions that actually get asked — which rule has
 blocked the most clients this week, whether a rule has matched anything at all
 since it was added, what the firewall did to an address before its owner
 complained.
+
+### Off the request path
+
+Every handler has a **Send after the visitor has their response** option. It holds
+records in memory and flushes them after the response has been sent, so a slow
+destination is not a slow page. It buys nothing for a local file, which is already
+fast; it earns itself on anything that makes a network round trip — a database on
+another host, or a handler you add through the advanced YAML that posts to a log
+service. The cost is that a fatal error before shutdown loses the buffer, which is
+the right trade for a firewall log and the wrong one for an audit log.
+
+The advanced YAML can now nest handlers, which the library gained in 2.31.0 —
+before it, a wrapping handler could not be expressed in configuration at all:
+
+```yaml
+logger:
+  # Hold debug records in memory; write them only if something goes wrong.
+  - class: Monolog\Handler\FingersCrossedHandler
+    args:
+      - class: Monolog\Handler\StreamHandler
+        args: [/var/log/firewall/firewall.log, Monolog\Level::Debug]
+      - Monolog\Level::Error
+```
 
 ## Export and import
 

@@ -139,6 +139,8 @@ if ( ! is_readable( $autoload ) ) {
 		'Kanopi\\Firewall\\Storage\\FileStorage',
 		'Kanopi\\Firewall\\Storage\\DatabaseStorage',
 		'Kanopi\\Firewall\\Logging\\Handler\\DatabaseHandler',
+		'Kanopi\\Firewall\\Logging\\Handler\\DeferredHandler',
+		'Kanopi\\Firewall\\Storage\\RecordedRequest',
 		'Monolog\\Handler\\RotatingFileHandler',
 		'Monolog\\Level',
 		'Symfony\\Component\\Yaml\\Yaml',

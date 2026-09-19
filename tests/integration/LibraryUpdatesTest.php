@@ -41,8 +41,8 @@ final class LibraryUpdatesTest extends TestCase {
 
 		$this->assertIsString( $version );
 		$this->assertTrue(
-			version_compare( ltrim( $version, 'v' ), '2.30.0', '>=' ),
-			sprintf( 'The challenge TTL ceiling and source verification need 2.30.0; this is %s.', $version )
+			version_compare( ltrim( $version, 'v' ), '2.32.0', '>=' ),
+			sprintf( 'The recorded-request allowlist and the deferred log handler need 2.31.0, and the signed pass lifetime 2.32.0; this is %s.', $version )
 		);
 	}
 
@@ -326,5 +326,147 @@ final class LibraryUpdatesTest extends TestCase {
 
 		$this->assertSame( array(), $clean['sources'] );
 		$this->assertArrayHasKey( 'sources.0.checksum', $errors );
+	}
+
+	/**
+	 * A block record keeps no cookies and no request body.
+	 *
+	 * Library 2.31.0. Before it, every block record held the whole cookie jar
+	 * verbatim -- session cookie, Authorization header, challenge pass -- and
+	 * the block list is the artifact that gets pasted into a ticket and, with
+	 * shared storage, replicated to every node. A record outlives the request
+	 * by the length of the ban.
+	 *
+	 * All four buckets are asserted present rather than only the two that are
+	 * empty, because the plugin writes them all out: the library would default
+	 * an absent bucket sensibly, but a form cannot express "absent" and a
+	 * compiled file that disagrees with the screen is the bug underneath half
+	 * the entries in this class.
+	 */
+	public function test_a_block_record_keeps_no_credentials(): void {
+		$compiled = $this->compiled_config();
+		$policy   = $compiled['storage']['config']['record_request'] ?? null;
+
+		$this->assertIsArray( $policy, 'No record_request was compiled, so the library falls back to keeping everything.' );
+
+		$this->assertSame(
+			array(),
+			$policy['cookies'],
+			'Block records would keep the visitor\'s session cookie.'
+		);
+
+		$this->assertSame(
+			array(),
+			$policy['body'],
+			'Block records would keep the request body, and a blocked login attempt has the password in it.'
+		);
+
+		$this->assertContains( 'user-agent', $policy['headers'], 'The headers worth keeping were dropped along with the ones that are not.' );
+		$this->assertNotContains( 'cookie', $policy['headers'] );
+		$this->assertNotContains( 'authorization', $policy['headers'] );
+
+		/*
+		 * Everything, deliberately. For a scanner the query string is the
+		 * attack, and this is the bucket the storage screen tells a WordPress
+		 * site to think about rather than the one it narrows on their behalf.
+		 */
+		$this->assertSame( array( '*' ), $policy['query'] );
+	}
+
+	/**
+	 * A bucket nobody has stored takes the default, not silence.
+	 *
+	 * The upgrade case, and the one that would have been missed: a site that
+	 * saved its settings before this key existed has no value for it, and
+	 * reading that as "keep nothing" would strip the user agent and the query
+	 * string out of every record written after the upgrade -- a data loss
+	 * dressed as a privacy improvement.
+	 */
+	public function test_an_unstored_bucket_falls_back_to_the_default(): void {
+		$method = new \ReflectionMethod( \Kanopi\BasicFirewall\Compiler\Config_Compiler::class, 'compile_record_request' );
+		$method->setAccessible( true );
+
+		$policy = $method->invoke( new \Kanopi\BasicFirewall\Compiler\Config_Compiler(), array() );
+
+		$this->assertContains( 'user-agent', $policy['headers'] );
+		$this->assertSame( array( '*' ), $policy['query'] );
+
+		// And an empty string is a choice somebody made, not an absence.
+		$chosen = $method->invoke(
+			new \Kanopi\BasicFirewall\Compiler\Config_Compiler(),
+			array( 'headers' => '' )
+		);
+
+		$this->assertSame( array(), $chosen['headers'] );
+	}
+
+	/**
+	 * A deferred handler wraps the real one, and the credentials still land.
+	 *
+	 * Library 2.31.0 on both counts: `DeferredHandler`, and `logger:` being
+	 * able to carry a nested `{class, args}` at all.
+	 *
+	 * The injection path is the half worth pinning. A deferred handler holds
+	 * the real one as its own first argument, so the connection moves a level
+	 * down -- and this plugin never writes database credentials into the
+	 * compiled file, it injects them at request time by property path. A path
+	 * that misses does not throw; it injects nowhere, and the handler is
+	 * constructed with no connection.
+	 */
+	public function test_a_deferred_handler_wraps_the_real_one(): void {
+		$settings = Plugin::instance()->settings();
+		$snapshot = $settings->all();
+
+		try {
+			$values           = $settings->all();
+			$values['logger'] = array(
+				array(
+					'type'              => 'database',
+					'enabled'           => true,
+					'level'             => 'warning',
+					'connection_source' => 'wordpress',
+					'table'             => 'basic_firewall_log',
+					'retain_days'       => 30,
+					'buffered'          => true,
+					'deferred'          => true,
+				),
+			);
+
+			$settings->replace( $values );
+
+			$compiled = $this->compiled_config();
+			$outer    = $compiled['logger'][0] ?? array();
+
+			$this->assertStringContainsString( 'DeferredHandler', (string) ( $outer['class'] ?? '' ) );
+			$this->assertStringContainsString(
+				'DatabaseHandler',
+				(string) ( $outer['args'][0]['class'] ?? '' ),
+				'The real handler is not nested inside the deferred one, so nothing is deferred.'
+			);
+
+			$this->assertContains(
+				'[logger][0][args][0][args][0][connection]',
+				Plugin::instance()->compiled()->meta()['connection_paths'] ?? array(),
+				'The injection path did not follow the wrapper, so the handler would be built with no connection at all.'
+			);
+		} finally {
+			$settings->replace( $snapshot );
+			Plugin::instance()->compiled()->rebuild();
+		}
+	}
+
+	/**
+	 * The compiled configuration, parsed.
+	 *
+	 * @return array<string, mixed>
+	 */
+	private function compiled_config(): array {
+		Plugin::instance()->compiled()->rebuild();
+
+		$parsed = \Symfony\Component\Yaml\Yaml::parse(
+			(string) Plugin::instance()->compiled()->contents()
+		);
+
+		return is_array( $parsed ) ? $parsed : array();
 	}
 }
