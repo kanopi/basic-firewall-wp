@@ -12,6 +12,10 @@
  *     ddev exec -d /var/www/html/web/wp-content/plugins/basic-firewall \
  *         vendor/bin/phpunit --testsuite integration
  *
+ * Or, where the plugin is not physically inside a site, point it at one:
+ *
+ *     BASIC_FIREWALL_WP_ROOT=/tmp/wp vendor/bin/phpunit --testsuite integration
+ *
  * @package Kanopi\BasicFirewall
  */
 
@@ -21,7 +25,19 @@ require_once __DIR__ . '/../vendor/autoload.php';
 
 $basic_firewall_wp_load = null;
 
-foreach ( array( dirname( __DIR__, 4 ), dirname( __DIR__, 5 ) ) as $candidate ) {
+/*
+ * Walking up from __DIR__ only finds the site when the plugin physically lives
+ * inside it. CI symlinks the checkout into a throwaway WordPress, and PHP
+ * resolves __DIR__ through the symlink to the checkout, which is nowhere near a
+ * wp-load.php. So an explicit root wins when one is given.
+ */
+$basic_firewall_wp_root = getenv( 'BASIC_FIREWALL_WP_ROOT' );
+
+$basic_firewall_candidates = false === $basic_firewall_wp_root || '' === $basic_firewall_wp_root
+	? array( dirname( __DIR__, 4 ), dirname( __DIR__, 5 ) )
+	: array( rtrim( $basic_firewall_wp_root, '/' ) );
+
+foreach ( $basic_firewall_candidates as $candidate ) {
 	if ( is_readable( $candidate . '/wp-load.php' ) ) {
 		$basic_firewall_wp_load = $candidate . '/wp-load.php';
 		break;
@@ -30,7 +46,7 @@ foreach ( array( dirname( __DIR__, 4 ), dirname( __DIR__, 5 ) ) as $candidate ) 
 
 if ( null === $basic_firewall_wp_load ) {
 	// phpcs:ignore WordPress.WP.AlternativeFunctions -- a CLI test bootstrap; WordPress is what we failed to find.
-	fwrite( STDERR, "Could not locate wp-load.php. Run this suite from inside the site.\n" );
+	fwrite( STDERR, "Could not locate wp-load.php. Run this suite from inside the site, or set BASIC_FIREWALL_WP_ROOT to the WordPress root.\n" );
 	exit( 1 );
 }
 

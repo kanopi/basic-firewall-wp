@@ -68,6 +68,11 @@ jobs:
   integration:
     name: Integration, WP ${{ matrix.wordpress }} / PHP ${{ matrix.php }}
     runs-on: ubuntu-latest
+    # The plugin is symlinked into a throwaway site, and PHP resolves __DIR__
+    # through the symlink back to the checkout, so the test bootstrap cannot
+    # find WordPress by walking up. It is told where the site is instead.
+    env:
+      BASIC_FIREWALL_WP_ROOT: /tmp/wp
     strategy:
       fail-fast: false
       matrix:
