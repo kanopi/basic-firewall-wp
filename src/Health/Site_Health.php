@@ -66,13 +66,16 @@ final class Site_Health {
 	private static function test_map(): array {
 		return array(
 			'library'     => __( 'Basic Firewall library', 'basic-firewall' ),
+			'backends'    => __( 'Basic Firewall backends', 'basic-firewall' ),
 			'compiled'    => __( 'Basic Firewall compiled configuration', 'basic-firewall' ),
 			'private_dir' => __( 'Basic Firewall private directory', 'basic-firewall' ),
+			'bootstrap'   => __( 'Basic Firewall wp-config.php snippet', 'basic-firewall' ),
 			'evaluation'  => __( 'Basic Firewall evaluation point', 'basic-firewall' ),
 			'proxy'       => __( 'Basic Firewall client IP', 'basic-firewall' ),
 			'mode'        => __( 'Basic Firewall operating mode', 'basic-firewall' ),
 			'storage'     => __( 'Basic Firewall block list storage', 'basic-firewall' ),
 			'logging'     => __( 'Basic Firewall logging', 'basic-firewall' ),
+			'records'     => __( 'Basic Firewall block records', 'basic-firewall' ),
 			'upgrade'     => __( 'Basic Firewall upgrades', 'basic-firewall' ),
 		);
 	}
@@ -102,16 +105,175 @@ final class Site_Health {
 	public static function check( string $key ): array {
 		return match ( $key ) {
 			'library'     => self::check_library(),
+			'backends'    => self::check_backends(),
 			'compiled'    => self::check_compiled(),
 			'private_dir' => self::check_private_dir(),
+			'bootstrap'   => self::check_bootstrap(),
 			'evaluation'  => self::check_evaluation(),
 			'proxy'       => self::check_proxy(),
 			'mode'        => self::check_mode(),
 			'storage'     => self::check_storage(),
 			'logging'     => self::check_logging(),
+			'records'     => self::check_records(),
 			'upgrade'     => self::check_upgrade(),
 			default       => self::ok( __( 'Unknown test', 'basic-firewall' ), '' ),
 		};
+	}
+
+	/**
+	 * How many query parameters WordPress puts secrets in are sitting in the
+	 * block list.
+	 *
+	 * Library 2.31.0 stopped block records keeping cookies and most headers,
+	 * because the block list is the artifact operators paste into tickets and a
+	 * record outlives the request by the length of the ban. It deliberately kept
+	 * the whole query string, and that is the right default: for a scanner --
+	 * the commonest reason anybody reads a block record -- the query string *is*
+	 * the attack.
+	 *
+	 * It is also the bucket WordPress is unusual about. `wp-login.php` and
+	 * `wp-activate.php` put working secrets in query strings, so a blocked
+	 * request to a password reset link stores a usable password reset. The
+	 * library cannot know that; WordPress can, which is why the check is here
+	 * rather than a note in its documentation.
+	 *
+	 * Narrowing `query` is not offered as the fix, because an allowlist cannot
+	 * express "everything except this" and enumerating the parameters a scanner
+	 * might use is the thing allowlists are bad at. Clearing the affected
+	 * records is the honest instrument, and it is the operator's call because it
+	 * unblocks whoever is in them.
+	 *
+	 * @return array{status: string, label: string, description: string, actions: string}
+	 */
+	private static function check_records(): array {
+		$listing = Plugin::instance()->blocked()->all();
+
+		if ( ! $listing['supported'] ) {
+			return self::ok(
+				__( 'Block records cannot be enumerated on this backend', 'basic-firewall' ),
+				esc_html__( 'Nothing to report, and nothing to check: this storage backend cannot list what it holds.', 'basic-firewall' )
+			);
+		}
+
+		$holding = 0;
+		$stale   = 0;
+
+		foreach ( $listing['clients'] as $client ) {
+			$request = ( $client['record']['request'] ?? null );
+			$request = is_string( $request ) ? json_decode( $request, true ) : $request;
+
+			if ( ! is_array( $request ) ) {
+				continue;
+			}
+
+			if ( self::holds_secret_query( (array) ( $request['query'] ?? array() ) ) ) {
+				++$holding;
+			}
+
+			// Written before the allowlist existed. Redaction happens on the way
+			// in, so these are unaffected by the setting and expire with their
+			// bans.
+			if ( array() !== (array) ( $request['cookies'] ?? array() ) ) {
+				++$stale;
+			}
+		}
+
+		if ( 0 === $holding && 0 === $stale ) {
+			return self::ok(
+				__( 'No block record is holding a credential', 'basic-firewall' ),
+				esc_html(
+					sprintf(
+						/* translators: %d: number of block records. */
+						_n(
+							'%d block record was checked for a session cookie and for the query parameters WordPress puts secrets in.',
+							'%d block records were checked for session cookies and for the query parameters WordPress puts secrets in.',
+							count( $listing['clients'] ),
+							'basic-firewall'
+						),
+						count( $listing['clients'] )
+					)
+				)
+			);
+		}
+
+		$description = '';
+
+		if ( $holding > 0 ) {
+			$description .= '<p>' . esc_html(
+				sprintf(
+					/* translators: %d: number of block records. */
+					_n(
+						'%d block record holds a query parameter of the kind WordPress uses for a secret — a password reset key, an activation key, or an API token somebody put in a URL.',
+						'%d block records hold query parameters of the kind WordPress uses for a secret — a password reset key, an activation key, or an API token somebody put in a URL.',
+						$holding,
+						'basic-firewall'
+					),
+					$holding
+				)
+			) . '</p>';
+
+			$description .= '<p>' . esc_html__( 'A password reset key in the block list is a working password reset, for as long as the ban lasts. The block list is also what gets pasted into a ticket.', 'basic-firewall' ) . '</p>';
+		}
+
+		if ( $stale > 0 ) {
+			$description .= '<p>' . esc_html(
+				sprintf(
+					/* translators: %d: number of block records. */
+					_n(
+						'%d block record still holds the cookies the visitor sent, including their session cookie. It was written before the allowlist existed and is unaffected by it, because redaction happens on the way in.',
+						'%d block records still hold the cookies the visitor sent, including their session cookies. They were written before the allowlist existed and are unaffected by it, because redaction happens on the way in.',
+						$stale,
+						'basic-firewall'
+					),
+					$stale
+				)
+			) . '</p>';
+		}
+
+		$description .= '<p>' . esc_html__( 'These expire with their bans. Clearing the block list removes them sooner, at the cost of unblocking whoever is currently in it.', 'basic-firewall' ) . '</p>';
+
+		return self::recommended(
+			__( 'Block records are holding credentials somebody sent', 'basic-firewall' ),
+			$description,
+			sprintf(
+				'<p><a href="%s">%s</a></p>',
+				esc_url( admin_url( 'admin.php?page=basic-firewall-blocked' ) ),
+				esc_html__( 'Review the block list', 'basic-firewall' )
+			)
+		);
+	}
+
+	/**
+	 * Whether a recorded query string carries something WordPress treats as a
+	 * secret.
+	 *
+	 * Named rather than pattern-matched, and kept short. `_wpnonce` is
+	 * deliberately absent: it is on a large share of admin URLs, it is bound to
+	 * one user and one action, and flagging it would fire on every scan of
+	 * `admin-ajax.php` until nobody read this check any more.
+	 *
+	 * @param array<array-key, mixed> $query Recorded query parameters.
+	 */
+	private static function holds_secret_query( array $query ): bool {
+		$secrets = array(
+			// wp-login.php?action=rp&key=... and wp-activate.php?key=...
+			'key',
+			'token',
+			'access_token',
+			'api_key',
+			'apikey',
+			'secret',
+			'password',
+			'pwd',
+		);
+
+		foreach ( array_keys( $query ) as $name ) {
+			if ( in_array( strtolower( (string) $name ), $secrets, true ) ) {
+				return true;
+			}
+		}
+
+		return false;
 	}
 
 	/**
@@ -266,6 +428,145 @@ final class Site_Health {
 	}
 
 	/**
+	 * Is anything running without the store it was configured with?
+	 *
+	 * Library 2.28.0 and 2.29.0 changed what happens when a backend cannot be
+	 * reached. A log destination that does not exist, and Redis on a host
+	 * without `ext-redis`, used to stop the firewall starting -- which in the
+	 * default blocking mode is not log-only operation, it is no protection at
+	 * all. Both now degrade instead, which is the right call and moves the
+	 * problem: the site runs, and nothing says it is running without its logs.
+	 *
+	 * This is what says so. Recommended rather than critical, because the
+	 * firewall is still evaluating and still refusing -- what is lost is the
+	 * record of it, or in the storage case the durability of it, and the site
+	 * being up is not the emergency.
+	 *
+	 * @return array{status: string, label: string, description: string, actions: string}
+	 */
+	private static function check_backends(): array {
+		$degraded = Plugin::instance()->runner()->degraded_backends();
+
+		if ( array() === $degraded ) {
+			return self::ok(
+				__( 'Every firewall backend is reachable', 'basic-firewall' ),
+				esc_html__( 'Storage, logging and any rule that keeps its own state are all using what they were configured with.', 'basic-firewall' )
+			);
+		}
+
+		$lines = '';
+
+		foreach ( $degraded as $entry ) {
+			$lines .= sprintf(
+				'<li><strong>%s</strong> — %s<br><code>%s</code></li>',
+				esc_html( (string) ( $entry['component'] ?? '' ) ),
+				esc_html( (string) ( $entry['backend'] ?? '' ) ),
+				esc_html( (string) ( $entry['error'] ?? '' ) )
+			);
+		}
+
+		return self::recommended(
+			sprintf(
+				/* translators: %d: number of backends. */
+				_n(
+					'%d firewall backend is running without its store',
+					'%d firewall backends are running without their stores',
+					count( $degraded ),
+					'basic-firewall'
+				),
+				count( $degraded )
+			),
+			'<p>' . esc_html__( 'The firewall is still evaluating and still refusing requests. What is degraded is what it does around that — writing a log, or keeping a block list somewhere it survives.', 'basic-firewall' ) . '</p>'
+			. '<ul>' . $lines . '</ul>'
+			. '<p>' . esc_html__( 'Earlier library versions refused to start for these, which on a blocking site meant no protection at all rather than reduced protection. They degrade now, which is why this check exists.', 'basic-firewall' ) . '</p>'
+		);
+	}
+
+	/**
+	 * Is the snippet in wp-config.php?
+	 *
+	 * Deliberately narrow, and deliberately separate from the evaluation point.
+	 * That test answers "where does this run", which folds together three
+	 * independent things -- the snippet, the mu-plugin loader and any page
+	 * cache -- and so can report a healthy site while the one item somebody is
+	 * actually looking for is missing. This answers one question.
+	 *
+	 * The runtime signal is the truth: a snippet sitting in a file nobody loads
+	 * protects nothing. But when it has not run, the file is read as well,
+	 * because "you never added it" and "you added it and it did not run" are
+	 * different problems with different fixes, and guessing between them is
+	 * what makes this hard to act on.
+	 *
+	 * @return array{status: string, label: string, description: string, actions: string}
+	 */
+	private static function check_bootstrap(): array {
+		if ( self::early_path_active() ) {
+			return self::ok(
+				__( 'wp-config.php calls the firewall', 'basic-firewall' ),
+				esc_html__( 'The bootstrap snippet is present and running, so requests are evaluated before WordPress loads. Nothing to add.', 'basic-firewall' )
+			);
+		}
+
+		$in_file = self::snippet_is_in_wp_config();
+
+		if ( true === $in_file ) {
+			return self::critical(
+				__( 'The wp-config.php snippet is in the file but did not run', 'basic-firewall' ),
+				'<p>' . esc_html__( 'wp-config.php contains a call to the firewall bootstrap, but it did not execute on this request. The usual causes are a conditional around it that is false, an early exit or return above it, or the call sitting below the line that requires wp-settings.php — by which point WordPress has already booted and there is nothing left to skip.', 'basic-firewall' ) . '</p>'
+				. '<p>' . esc_html__( 'The firewall is still running from its mu-plugin, so the site is protected. What is lost is everything the snippet was added for.', 'basic-firewall' ) . '</p>'
+			);
+		}
+
+		$description = '<p>' . esc_html__( 'The firewall is running, but from an mu-plugin rather than from wp-config.php. That is later than it needs to be: a page cache serves from advanced-cache.php, which WordPress loads before any plugin, so a cache hit is never evaluated — and on a busy cached site that is most of your traffic.', 'basic-firewall' ) . '</p>'
+			. '<p>' . esc_html__( 'Add this to wp-config.php, below the DB_NAME, DB_USER, DB_PASSWORD and DB_HOST definitions and immediately above the line that requires wp-settings.php:', 'basic-firewall' ) . '</p>'
+			. '<pre>' . esc_html( self::bootstrap_snippet() ) . '</pre>';
+
+		if ( false === $in_file ) {
+			return self::recommended(
+				__( 'wp-config.php does not call the firewall', 'basic-firewall' ),
+				$description
+			);
+		}
+
+		// The file could not be read, so absence is not proof of absence.
+		return self::recommended(
+			__( 'wp-config.php does not appear to call the firewall', 'basic-firewall' ),
+			$description
+			. '<p>' . esc_html__( 'wp-config.php itself could not be read to confirm this, so this is based only on the snippet not having run.', 'basic-firewall' ) . '</p>'
+		);
+	}
+
+	/**
+	 * Whether wp-config.php mentions the bootstrap, or null if it cannot be read.
+	 *
+	 * Both standard locations are tried: beside WordPress, and one level above
+	 * it, which is where a wp-config.php lives on every install that keeps the
+	 * core files in their own directory.
+	 */
+	private static function snippet_is_in_wp_config(): ?bool {
+		$candidates = array(
+			ABSPATH . 'wp-config.php',
+			dirname( ABSPATH ) . '/wp-config.php',
+		);
+
+		foreach ( $candidates as $candidate ) {
+			if ( ! is_readable( $candidate ) ) {
+				continue;
+			}
+
+			$contents = file_get_contents( $candidate ); // phpcs:ignore WordPress.WP.AlternativeFunctions -- a local file, and this runs before WP_Filesystem is guaranteed.
+
+			if ( false === $contents ) {
+				continue;
+			}
+
+			return false !== strpos( $contents, 'basic_firewall_evaluate' );
+		}
+
+		return null;
+	}
+
+	/**
 	 * How early does the firewall run?
 	 *
 	 * @return array{status: string, label: string, description: string, actions: string}
@@ -276,11 +577,60 @@ final class Site_Health {
 		$early        = self::early_path_active();
 		$cache        = self::detect_page_cache();
 
+		if ( $early && ! self::early_report()['evaluated'] && 'disabled' !== self::early_report()['reason'] ) {
+			/*
+			 * The snippet is there and running, and this request still was not
+			 * evaluated by it. Reported rather than folded into the healthy
+			 * branch, because everything visible says the firewall runs before
+			 * WordPress while in fact the mu-plugin is quietly picking up every
+			 * request -- which is the exact configuration somebody added the
+			 * snippet to avoid, and a page cache defeats it entirely.
+			 *
+			 * `disabled` is excluded on purpose. BASIC_FIREWALL_ENABLED stops
+			 * both paths, so the sentence below -- that the mu-plugin is
+			 * covering for this one -- would be false, and the operating mode
+			 * test already reports that state and names the constant. Two
+			 * checks describing one cause, one of them wrongly, is worse than
+			 * the check that was missing.
+			 */
+			return self::critical(
+				__( 'The wp-config.php snippet is present but is not evaluating requests', 'basic-firewall' ),
+				'<p>' . esc_html__( 'wp-config.php calls the firewall bootstrap, but it returned without evaluating this request. Whatever protection you have is coming from the mu-plugin instead, which loads after advanced-cache.php — so on a cached site, a cache hit is not evaluated at all.', 'basic-firewall' ) . '</p>'
+				. '<p>' . esc_html( self::early_reason_text( self::early_report()['reason'] ) ) . '</p>'
+				. self::rebuild_action()
+			);
+		}
+
 		if ( $early ) {
+			$where = '<p>' . esc_html__( 'wp-config.php calls the firewall bootstrap, which is the earliest any PHP on this site can act. A page cache cannot serve a request without it being evaluated first.', 'basic-firewall' )
+				. ' ' . (
+					self::early_path_has_credentials()
+						? esc_html__( 'The bootstrap sits below wp-config.php\'s DB_ constants, so database-backed block storage works on this path too.', 'basic-firewall' )
+						: esc_html__( 'The bootstrap sits above wp-config.php\'s DB_ constants. That is fine for file storage, which needs no connection, but database-backed block storage cannot be reached from this path — move the snippet below them before switching to it.', 'basic-firewall' )
+				) . '</p>';
+
+			/*
+			 * The fallback is reported even though it is not in use, because
+			 * this branch used to return before the mu-plugin was ever looked
+			 * at. A loader deleted by a deployment, a restore, or a host that
+			 * rewrites wp-config.php left the site one overwrite away from
+			 * evaluating at plugins_loaded, and nothing anywhere said so --
+			 * the early path supersedes the loader, so every screen went on
+			 * reporting the better answer.
+			 */
+			if ( ! $mu_installed ) {
+				return self::recommended(
+					__( 'The firewall evaluates before WordPress loads, but its fallback is missing', 'basic-firewall' ),
+					$where
+					. '<p>' . esc_html__( 'The mu-plugin loader is not installed. Nothing is wrong with the site as it stands — the wp-config.php path supersedes the loader, and is earlier than it. What is missing is what happens if that snippet goes away: a deployment that overwrites wp-config.php, a restore from a backup taken before it was added, or a host that regenerates the file. Without the loader the firewall drops to plugins_loaded, which still works and looks identical from these screens.', 'basic-firewall' ) . '</p>'
+					. ( is_string( $mu_error ) && '' !== $mu_error ? '<p>' . esc_html( $mu_error ) . '</p>' : '' )
+					. '<p>' . esc_html__( 'Deactivating and reactivating the plugin reinstalls it.', 'basic-firewall' ) . '</p>'
+				);
+			}
+
 			return self::ok(
 				__( 'The firewall evaluates before WordPress loads', 'basic-firewall' ),
-				esc_html__( 'wp-config.php calls the firewall bootstrap, which is the earliest any PHP on this site can act. A page cache cannot serve a request without it being evaluated first.', 'basic-firewall' )
-				. ' ' . esc_html__( 'Note that database-backed block storage cannot be used on this path: there is no WordPress yet to read credentials from.', 'basic-firewall' )
+				$where . '<p>' . esc_html__( 'The mu-plugin loader is installed as well, so evaluation stays early even if the wp-config.php snippet is ever removed.', 'basic-firewall' ) . '</p>'
 			);
 		}
 
@@ -308,7 +658,7 @@ final class Site_Health {
 				) . '</p>'
 				. '<p>' . esc_html__( 'Add this to wp-config.php, after any BASIC_FIREWALL_ constants and immediately before the line that requires wp-settings.php:', 'basic-firewall' ) . '</p>'
 				. '<pre>' . esc_html( self::bootstrap_snippet() ) . '</pre>'
-				. '<p>' . esc_html__( 'One limitation is worth knowing before you do: that path runs before WordPress exists, so it cannot read database credentials. Database-backed block storage does not work there — use file storage, or supply a connection explicitly.', 'basic-firewall' ) . '</p>'
+				. '<p>' . esc_html__( 'Placement matters: below the DB_NAME, DB_USER, DB_PASSWORD and DB_HOST definitions, and immediately above the wp-settings.php line. Below them, database-backed block storage keeps working on this path; above them, it cannot be reached and the firewall fails open.', 'basic-firewall' ) . '</p>'
 			);
 		}
 
@@ -323,7 +673,88 @@ final class Site_Health {
 	 * Whether wp-config.php is calling the bootstrap.
 	 */
 	private static function early_path_active(): bool {
-		return defined( 'BASIC_FIREWALL_EVALUATED' ) && function_exists( 'basic_firewall_evaluate' );
+		return true === ( self::early_report()['called'] ?? false );
+	}
+
+	/**
+	 * What the wp-config.php bootstrap recorded about its own run.
+	 *
+	 * The bootstrap is the only thing that can answer these questions, so it
+	 * answers them as its first act and leaves the result here.
+	 *
+	 * The previous test was `defined( 'BASIC_FIREWALL_EVALUATED' ) &&
+	 * function_exists( 'basic_firewall_evaluate' )`, and it was wrong in a way
+	 * that mattered: `function_exists()` only proves the `require_once` line
+	 * ran, and the constant is set by the mu-plugin runner as readily as by the
+	 * bootstrap. A wp-config.php carrying the require without the call — half a
+	 * pasted snippet — therefore reported a healthy early path that did not
+	 * exist, about the single most consequential setting this plugin has.
+	 *
+	 * Public because it is a statement of fact rather than a judgement, and the
+	 * CLI's `status` command needs the same answer. It had been reading
+	 * `defined( 'BASIC_FIREWALL_EVALUATED' )` directly and inherited exactly the
+	 * bug described above -- reporting the early path as active on a site whose
+	 * wp-config.php said nothing about the firewall at all.
+	 *
+	 * @return array{called: bool, credentials: bool, evaluated: bool, reason: string|null}
+	 */
+	public static function early_report(): array {
+		$report = $GLOBALS['basic_firewall_early'] ?? array();
+
+		return array(
+			'called'      => ! empty( $report['called'] ),
+			'credentials' => ! empty( $report['credentials'] ),
+			'evaluated'   => ! empty( $report['evaluated'] ),
+			'reason'      => isset( $report['reason'] ) ? (string) $report['reason'] : null,
+		);
+	}
+
+	/**
+	 * Why the bootstrap ran but did not evaluate this request.
+	 *
+	 * @param string|null $reason Machine-readable reason recorded by the bootstrap.
+	 */
+	private static function early_reason_text( ?string $reason ): string {
+		switch ( $reason ) {
+			case 'disabled':
+				return __( 'BASIC_FIREWALL_ENABLED is defined as false in wp-config.php, which switches the firewall off on both paths.', 'basic-firewall' );
+			case 'no-compiled-file':
+				return __( 'There is no compiled configuration at the path the snippet names. Either the private_path argument is wrong, or the firewall has never been built — the early path cannot build it, because that needs WordPress.', 'basic-firewall' );
+			case 'no-autoloader':
+				return __( 'The plugin\'s vendor autoloader could not be found, so the firewall library was never loaded.', 'basic-firewall' );
+			case 'library-missing':
+				return __( 'The firewall library class was not found after loading the autoloader, which usually means an incomplete install.', 'basic-firewall' );
+			default:
+				return __( 'The bootstrap returned without evaluating and did not say why.', 'basic-firewall' );
+		}
+	}
+
+	/**
+	 * Whether the bootstrap sits below wp-config.php's DB_ constants.
+	 *
+	 * A question about placement, and only that. The constants are read here
+	 * after WordPress has loaded, so by now they are always defined -- what
+	 * matters is whether they existed at the moment the bootstrap ran, which
+	 * only the bootstrap is in a position to answer. It records the answer in a
+	 * global as its first act.
+	 */
+	private static function early_path_has_credentials(): bool {
+		return self::early_report()['credentials'];
+	}
+
+	/**
+	 * Whether the early path can actually build a database connection.
+	 *
+	 * Placement *and* the sidecar naming the injection paths, because the
+	 * option holding the same list needs a WordPress the early path has not
+	 * got. Only meaningful when database storage is selected: file storage
+	 * needs no connection, so no sidecar is written and its absence is correct
+	 * rather than a fault. Asking this question of a file-storage site reported
+	 * a placement problem that did not exist.
+	 */
+	private static function early_path_reaches_database(): bool {
+		return self::early_path_has_credentials()
+			&& is_readable( Plugin::instance()->paths()->connection_paths_file() );
 	}
 
 	/**
@@ -530,15 +961,20 @@ final class Site_Health {
 			);
 		}
 
-		if ( 'database' === $backend && self::early_path_active() ) {
+		if ( 'database' === $backend && self::early_path_active() && ! self::early_path_reaches_database() ) {
 			/*
-			 * The module's one documented fail-open, carried over rather than
-			 * hidden. No CMS on the early path means no credentials, which means
-			 * storage cannot be reached.
+			 * The module's one documented fail-open -- but checked rather than
+			 * assumed. In WordPress the early path can reach the database, so
+			 * this fires only when it demonstrably cannot: the bootstrap was
+			 * required above the DB_ constants, or the sidecar naming the
+			 * injection paths is missing.
 			 */
 			return self::critical(
-				__( 'Database block list storage cannot be used with the wp-config.php evaluation path', 'basic-firewall' ),
-				esc_html__( 'The bootstrap runs before WordPress exists, so it has nothing to read database credentials from. The firewall fails open on every request through that path while reporting itself as enabled and blocking. Switch to file storage, or supply a connection explicitly in the bootstrap options.', 'basic-firewall' )
+				__( 'Database block list storage is not reachable from the wp-config.php evaluation path', 'basic-firewall' ),
+				'<p>' . esc_html__( 'The firewall fails open on every request through that path while reporting itself as enabled and blocking.', 'basic-firewall' ) . '</p>'
+				. '<p>' . esc_html__( 'The usual cause is placement: the bootstrap must be required below the DB_NAME, DB_USER, DB_PASSWORD and DB_HOST definitions and immediately above the line that requires wp-settings.php. Required above them, there are no credentials to read.', 'basic-firewall' ) . '</p>'
+				. '<pre>' . esc_html( self::bootstrap_snippet() ) . '</pre>'
+				. '<p>' . esc_html__( 'If the placement is already right, rebuild the firewall — the list of injection points is written beside the compiled file, and this reports a failure when that file is missing. Switching to file storage also resolves it.', 'basic-firewall' ) . '</p>'
 			);
 		}
 
@@ -633,12 +1069,12 @@ final class Site_Health {
 	}
 
 	/**
-	 * A link to the rebuild screen.
+	 * A link to the rebuild control, which lives on the Compiled screen.
 	 */
 	private static function rebuild_action(): string {
 		return sprintf(
 			'<p><a href="%s" class="button button-primary">%s</a></p>',
-			esc_url( admin_url( 'admin.php?page=basic-firewall-rebuild' ) ),
+			esc_url( admin_url( 'admin.php?page=basic-firewall-compiled' ) ),
 			esc_html__( 'Rebuild the firewall', 'basic-firewall' )
 		);
 	}

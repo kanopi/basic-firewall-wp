@@ -10,6 +10,7 @@ declare( strict_types = 1 );
 namespace Kanopi\BasicFirewall\Compiler;
 
 use Kanopi\Firewall\Logging\Handler\DatabaseHandler;
+use Kanopi\Firewall\Logging\Handler\DeferredHandler;
 use Kanopi\Firewall\RateLimitStorage\DatabaseRateLimitStorage;
 use Kanopi\Firewall\RateLimitStorage\FileRateLimitStorage;
 use Kanopi\Firewall\RateLimitStorage\InMemoryRateLimitStorage;
@@ -17,6 +18,7 @@ use Kanopi\Firewall\RateLimitStorage\RedisRateLimitStorage;
 use Kanopi\Firewall\Storage\DatabaseStorage;
 use Kanopi\Firewall\Storage\FileStorage;
 use Kanopi\Firewall\Storage\InMemoryStorage;
+use Kanopi\Firewall\Storage\RecordedRequest;
 use Monolog\Formatter\JsonFormatter;
 use Monolog\Formatter\LineFormatter;
 use Monolog\Handler\ErrorLogHandler;
@@ -100,6 +102,19 @@ final class Library_Map {
 	public const LOG_HANDLERS_KEYED = array( 'database' );
 
 	/**
+	 * The wrapper that moves a handler off the request path.
+	 *
+	 * Not in LOG_HANDLERS, because it is not a handler anybody chooses: it takes
+	 * another handler as its first argument and holds records until the visitor
+	 * has been served. Needs library 2.31.0, which is also the release that made
+	 * a nested `{class, args}` expressible in `logger:` at all -- before it, a
+	 * wrapping handler could not be configured, only written in PHP.
+	 *
+	 * @var class-string
+	 */
+	public const LOG_HANDLER_DEFERRED = DeferredHandler::class;
+
+	/**
 	 * Log formatters offered in the interface.
 	 *
 	 * @var array<string, class-string>
@@ -133,6 +148,32 @@ final class Library_Map {
 			'alert'     => $enum . '::Alert',
 			'emergency' => $enum . '::Emergency',
 		);
+	}
+
+	/**
+	 * Headers a block record keeps when nothing says otherwise.
+	 *
+	 * Read from the library rather than copied, because the plugin writes all
+	 * four `record_request` buckets out explicitly -- a form cannot express the
+	 * difference between "this bucket is absent, use your default" and "this
+	 * bucket is empty, keep nothing" -- and a copied list would silently stop
+	 * matching the library's the first time upstream adds a header to it.
+	 *
+	 * These are header names, not class names, so scoping does not touch them.
+	 * Reading them through the class means a scoped build still asks the library
+	 * that is actually in the zip.
+	 *
+	 * @return list<string>
+	 */
+	public static function default_recorded_headers(): array {
+		return RecordedRequest::DEFAULT_HEADERS;
+	}
+
+	/**
+	 * What `record_request` spells "keep everything in this bucket".
+	 */
+	public static function record_everything(): string {
+		return RecordedRequest::EVERYTHING;
 	}
 
 	/**

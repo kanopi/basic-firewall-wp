@@ -57,13 +57,6 @@ final class Url extends Condition_Rule_Type_Base {
 	/**
 	 * {@inheritDoc}
 	 */
-	public function supports_sources(): bool {
-		return true;
-	}
-
-	/**
-	 * {@inheritDoc}
-	 */
 	protected function variable_options(): array {
 		return array(
 			'method'       => __( 'HTTP method, such as GET or POST', 'basic-firewall' ),

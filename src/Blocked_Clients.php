@@ -213,9 +213,62 @@ final class Blocked_Clients {
 		}
 
 		$answer['blocked'] = true;
-		$answer['record']  = is_array( $record['value'] ?? null ) ? $record['value'] : $record;
+
+		/*
+		 * isBlocked() answers whether, not until when, and what it returns
+		 * differs by backend: DatabaseStorage hydrates the whole row, so the
+		 * `expire` column comes along, while FileStorage returns the stored
+		 * payload alone and the expiry is nowhere in it. Reading the expiry from
+		 * isBlocked() therefore worked on database storage and reported every
+		 * file-storage block as permanent.
+		 *
+		 * find() is the one that reports it, on both, alongside `expires_at` and
+		 * the offense count -- and a bare address is an indexed lookup there
+		 * rather than a scan. It is on QueryableStorageInterface rather than on
+		 * StorageInterface, so a backend that does not implement it falls back to
+		 * what isBlocked() gave us: no expiry, but still the right answer to the
+		 * question actually asked.
+		 */
+		$answer['record'] = self::flatten( $record );
+
+		if ( ! $storage instanceof QueryableStorageInterface ) {
+			return $answer;
+		}
+
+		try {
+			$found = $storage->find( $ip );
+		} catch ( \Throwable $e ) {
+			return $answer;
+		}
+
+		if ( is_array( $found[ $ip ] ?? null ) ) {
+			$answer['record'] = self::flatten( $found[ $ip ] );
+		}
 
 		return $answer;
+	}
+
+	/**
+	 * One stored record, with the payload brought up to the top level.
+	 *
+	 * A block's own fields live under `value`, with `expire`, `expires_at` and
+	 * `offenses` beside it. Callers want one array, and a caller that read only
+	 * the top level would render every rule and reason blank.
+	 *
+	 * @param array<string, mixed> $record As the storage layer returned it.
+	 *
+	 * @return array<string, mixed>
+	 */
+	private static function flatten( array $record ): array {
+		if ( ! is_array( $record['value'] ?? null ) ) {
+			return $record;
+		}
+
+		$payload = $record['value'];
+
+		unset( $record['value'] );
+
+		return array_merge( $record, $payload );
 	}
 
 	/**

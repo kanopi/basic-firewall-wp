@@ -363,13 +363,17 @@ abstract class Screen {
 	 * @param string $name  Field name.
 	 * @param string $value Current value.
 	 * @param int    $rows  Height.
+	 * @param bool   $yaml  Whether the content is YAML and wants the editor.
 	 */
-	protected static function textarea( string $name, string $value, int $rows = 6 ): string {
+	protected static function textarea( string $name, string $value, int $rows = 6, bool $yaml = false ): string {
 		return sprintf(
-			'<textarea name="%s" id="%s" rows="%d" class="large-text code">%s</textarea>',
+			'<textarea name="%s" id="%s" rows="%d" class="large-text code"%s>%s</textarea>',
 			esc_attr( $name ),
 			esc_attr( $name ),
 			$rows,
+			// Marks it for the editor. An attribute rather than a class so a
+			// theme restyling `.code` cannot turn one on or off by accident.
+			$yaml ? ' data-bfw-yaml="1"' : '',
 			esc_textarea( $value )
 		);
 	}

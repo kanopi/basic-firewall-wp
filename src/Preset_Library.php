@@ -33,6 +33,13 @@ final class Preset_Library {
 	private ?array $presets = null;
 
 	/**
+	 * Problems from the last resolve_paths() call.
+	 *
+	 * @var list<string>
+	 */
+	private array $problems = array();
+
+	/**
 	 * Every available preset.
 	 *
 	 * @return array<string, array<string, mixed>>
@@ -100,10 +107,9 @@ final class Preset_Library {
 			}
 
 			$presets[ $name ] = array(
-				'label'    => $this->humanize( $name ),
-				'file'     => (string) $file,
-				'shipped'  => true,
-				'platform' => $this->platform_for( $name ),
+				'label'   => $this->humanize( $name ),
+				'file'    => (string) $file,
+				'shipped' => true,
 			);
 		}
 
@@ -133,35 +139,69 @@ final class Preset_Library {
 	}
 
 	/**
-	 * Which platform a preset is for, or null when it applies to any.
+	 * Why a preset must not be used on this site, or null when it is fine.
 	 *
-	 * A WordPress site has no use for the Drupal rule sets, and offering them
-	 * invites somebody to enable a few hundred patterns that can never match.
+	 * A preset named for a platform blocks **that platform's own endpoints**,
+	 * which makes it a tool for sites *not* running it. `wordpress.yml` turns
+	 * away requests for `/wp-admin`, `/wp-login.php`, `/xmlrpc.php` and
+	 * `/wp-json` -- exactly right on a Drupal site, where every one of those is
+	 * a probe by definition, and catastrophic here, where they are the
+	 * administrator's own login and the REST API the block editor runs on.
+	 *
+	 * This plugin had the test inverted: it hid the Drupal presets, which block
+	 * paths WordPress does not serve and are harmless here, and offered the
+	 * WordPress one, which is a single tick away from locking somebody out of
+	 * their own site. A preset list is exactly where that kind of mistake is
+	 * least likely to be noticed before it is made.
 	 *
 	 * @param string $name Preset name.
 	 */
-	private function platform_for( string $name ): ?string {
-		if ( 0 === strpos( $name, 'drupal' ) ) {
-			return 'drupal';
+	public function incompatible_reason( string $name ): ?string {
+		if ( 0 !== strpos( $name, 'wordpress' ) ) {
+			return null;
 		}
 
-		if ( 0 === strpos( $name, 'wordpress' ) ) {
-			return 'wordpress';
-		}
-
-		return null;
+		return __( 'This rule set blocks WordPress\'s own endpoints — /wp-admin, /wp-login.php, /xmlrpc.php and the /wp-json REST API. It is written for sites that do not run WordPress, where those paths are only ever probes. Enabling it here would lock every administrator out of this site and break the block editor.', 'basic-firewall' );
 	}
 
 	/**
-	 * Presets applicable to this site.
+	 * Presets this site may use.
 	 *
 	 * @return array<string, array<string, mixed>>
 	 */
 	public function applicable(): array {
-		return array_filter(
-			$this->all(),
-			static fn ( array $preset ): bool => ! isset( $preset['platform'] ) || 'drupal' !== $preset['platform']
-		);
+		$applicable = array();
+
+		foreach ( $this->all() as $name => $preset ) {
+			if ( null === $this->incompatible_reason( (string) $name ) ) {
+				$applicable[ $name ] = $preset;
+			}
+		}
+
+		return $applicable;
+	}
+
+	/**
+	 * Presets excluded from this site, with the reason for each.
+	 *
+	 * Listed rather than silently dropped. A rule set that is simply absent
+	 * invites somebody to go looking for it, or to paste it into the Advanced
+	 * screen by hand -- which is the same mistake with the guard removed.
+	 *
+	 * @return array<string, string>
+	 */
+	public function incompatible(): array {
+		$incompatible = array();
+
+		foreach ( array_keys( $this->all() ) as $name ) {
+			$reason = $this->incompatible_reason( (string) $name );
+
+			if ( null !== $reason ) {
+				$incompatible[ (string) $name ] = $reason;
+			}
+		}
+
+		return $incompatible;
 	}
 
 	/**
@@ -175,10 +215,35 @@ final class Preset_Library {
 		$all   = $this->all();
 		$paths = array();
 
+		$this->problems = array();
+
 		foreach ( $enabled as $name ) {
 			$preset = $all[ (string) $name ] ?? null;
 
 			if ( null === $preset ) {
+				continue;
+			}
+
+			/*
+			 * Refused here, not just hidden on the screen.
+			 *
+			 * Hiding it from the list stops somebody ticking it; it does not
+			 * stop `presets: [wordpress]` arriving in an imported document from
+			 * a Drupal site, where enabling it was the right call. Compiling it
+			 * there would block this site's own login. So the check lives on the
+			 * path everything goes through, and says so rather than dropping it
+			 * quietly.
+			 */
+			$reason = $this->incompatible_reason( (string) $name );
+
+			if ( null !== $reason ) {
+				$this->problems[] = sprintf(
+					/* translators: 1: preset name, 2: why it cannot be used. */
+					__( 'The preset "%1$s" was not enabled. %2$s', 'basic-firewall' ),
+					(string) $name,
+					$reason
+				);
+
 				continue;
 			}
 
@@ -204,6 +269,15 @@ final class Preset_Library {
 		}
 
 		return $paths;
+	}
+
+	/**
+	 * Problems from the last resolve_paths() call.
+	 *
+	 * @return list<string>
+	 */
+	public function problems(): array {
+		return $this->problems;
 	}
 
 	/**

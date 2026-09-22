@@ -25,6 +25,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD="${ROOT}/build"
 SCRATCH="${BUILD}/scratch"
 SCOPED="${BUILD}/scoped"
+TOOLS="${BUILD}/tools"
 STAGE="${BUILD}/stage/${PLUGIN_SLUG}"
 DIST="${BUILD}/dist"
 
@@ -47,10 +48,8 @@ mkdir -p "${SCRATCH}" "${STAGE}" "${DIST}"
 # ---------------------------------------------------------------------------
 # 1. Assemble a scratch copy of the plugin with a production dependency tree.
 #
-# In a scratch directory rather than in place, because php-scoper is a dev
-# dependency and `composer install --no-dev` in the working directory would
-# delete the very tool the next step needs. It also means a build never leaves
-# the working copy without its dev dependencies.
+# In a scratch directory rather than in place, so that `composer install
+# --no-dev` never leaves the working copy without its dev dependencies.
 # ---------------------------------------------------------------------------
 echo "==> Assembling a production tree"
 
@@ -121,15 +120,24 @@ else
 
   echo "==> Scoping under ${PREFIX}"
 
-  test -x "${ROOT}/vendor/bin/php-scoper" || {
-    echo "php-scoper is not installed. Run 'composer install' first." >&2
-    exit 1
-  }
+  # PHP-Scoper lives in its own manifest under build/tools, not in the plugin's
+  # require-dev. The plugin pins config.platform to its PHP 8.1 floor, and
+  # PHP-Scoper cannot be installed there -- 0.18 needs 8.2 and its own
+  # dependencies need 8.3. The builder's PHP does not reach the zip, because
+  # scoping is a text rewrite and the vendored tree comes from the plugin's own
+  # lock, so the two are resolved independently on purpose.
+  if [ ! -x "${TOOLS}/vendor/bin/php-scoper" ]; then
+    echo "==> Installing the build tools"
+    composer install \
+      --no-interaction \
+      --no-progress \
+      --working-dir="${TOOLS}"
+  fi
 
   # Scoping parses the whole tree into an AST at once, which exceeds a default
   # 128M limit partway through and fails with a stack trace rather than a
   # useful message.
-  php -d memory_limit=-1 "${ROOT}/vendor/bin/php-scoper" add-prefix \
+  php -d memory_limit=-1 "${TOOLS}/vendor/bin/php-scoper" add-prefix \
     --config="${ROOT}/scoper.inc.php" \
     --output-dir="${SCOPED}" \
     --force \

@@ -118,6 +118,38 @@ final class Presets_Screen extends Screen {
 		echo '</tbody></table>';
 
 		$this->close_form( __( 'Save presets', 'basic-firewall' ) );
+
+		$this->render_incompatible();
+	}
+
+	/**
+	 * Say which rule sets are withheld on this site, and why.
+	 *
+	 * Named rather than silently absent. A rule set that simply is not there
+	 * invites somebody to go looking for it, or to paste its contents into the
+	 * Advanced screen by hand -- which is the same mistake with the guard taken
+	 * off.
+	 */
+	private function render_incompatible(): void {
+		$incompatible = $this->plugin()->presets()->incompatible();
+
+		if ( array() === $incompatible ) {
+			return;
+		}
+
+		printf( '<h2>%s</h2>', esc_html__( 'Not available on this site', 'basic-firewall' ) );
+
+		echo '<div class="bfw-danger">';
+
+		foreach ( $incompatible as $name => $reason ) {
+			printf(
+				'<p><strong><code>%s</code></strong> — %s</p>',
+				esc_html( (string) $name ),
+				esc_html( $reason )
+			);
+		}
+
+		echo '</div>';
 	}
 
 	/**

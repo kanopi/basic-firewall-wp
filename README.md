@@ -20,6 +20,7 @@ its habit of writing down what does not work.
 - [The private directory, and why WordPress makes this hard](#the-private-directory-and-why-wordpress-makes-this-hard)
 - [Proxies and the client IP](#proxies-and-the-client-ip)
 - [Rule types](#rule-types)
+- [Presets](#presets)
 - [Storage](#storage)
 - [Logging](#logging)
 - [Export and import](#export-and-import)
@@ -90,12 +91,15 @@ or anything behind a CDN, requests served by the platform's own cache layer neve
 reach PHP at all. Nothing in this plugin evaluates them. This is the most
 consequential limitation there is, and no configuration changes it.
 
-**Database-backed block storage does not work on the `wp-config.php` evaluation
-path.** That path runs before WordPress exists, so there is nothing to read
-database credentials from. A site combining the two **fails open on every
-request while the admin screens report it as blocking**. This is the plugin's one
-known fail-open. It is carried over from the Drupal module deliberately rather
-than hidden, Site Health raises it as an error, and there is not a second one.
+**Database-backed block storage depends on where you put the bootstrap.** The
+Drupal module lists this as an outright fail-open — no CMS on the early path
+means no credentials — and the limitation is Drupal's, not the early path's.
+`wp-config.php` defines `DB_NAME`, `DB_USER`, `DB_PASSWORD` and `DB_HOST` as
+plain constants near the top of the file, so a bootstrap required *below* them
+has the credentials already in scope, and database storage works there. Required
+*above* them it does not, and a site combining the two **fails open on every
+request while the admin screens report it as blocking**. Site Health checks
+which of the two you have and says so.
 
 **The private directory is probably readable over the web.** See
 [below](#the-private-directory-and-why-wordpress-makes-this-hard) — WordPress has
@@ -193,8 +197,10 @@ and it needs no configuration, which is why it is the default.
 mu-plugin loads — so on exactly the busy, cached site that most needs a
 firewall, the normal path never runs for a cache hit.
 
-Site Health detects a page cache and prints the snippet with your site's real
-private path filled in. It looks like this:
+The Dashboard always prints the snippet with your site's real private path
+filled in — you cannot write it yourself, because the private directory carries
+a random per-site suffix. Site Health prints it too, when it finds a page cache
+in front of the firewall. It looks like this:
 
 ```php
 // In wp-config.php, AFTER any BASIC_FIREWALL_ constants and immediately
@@ -205,12 +211,21 @@ basic_firewall_evaluate( array(
 ) );
 ```
 
-Placement matters: the snippet uses `ABSPATH`, which `wp-config.php` defines
-near the bottom. Putting it above that line is a fatal error on every request.
+Placement matters twice over:
+
+* The snippet uses `ABSPATH`, which `wp-config.php` defines near the bottom.
+  Putting it above that line is a fatal error on every request.
+* It must sit **below** the `DB_` constants. The bootstrap reads them to build
+  the connection for database-backed block storage. Above them there is nothing
+  to read, no connection is built, and that storage fails open.
 
 `bootstrap.php` contains no WordPress API calls at all, which is what makes it
-safe to require that early — and also what makes database-backed storage
-unusable there.
+safe to require that early. The database connection is not an exception: the
+constants are plain `define()`s, and the injection *paths* come from a small
+JSON sidecar written beside the compiled file, because the option the normal
+path reads them from needs a WordPress that does not exist yet. The sidecar
+holds path strings only — the credentials are read from the constants per
+request and never touch disk, on either path.
 
 ## The private directory, and why WordPress makes this hard
 
@@ -268,7 +283,20 @@ Plainly, with no scheme:
 A relative path keeps the setting portable — it survives an export to another
 site, it is per-site on a network, and it does not embed one environment's
 filesystem layout. An absolute path is used as given, for a site that keeps this
-data somewhere it chose.
+data somewhere it chose. `php://stdout` and `php://stderr` are passed through
+too, for a container that collects logs from the process.
+
+**A relative path stays relative in the compiled file.** The plugin does not
+expand it. The firewall library resolves `storage.config.storage_file`,
+`storage.config.offense_file` and a file log handler's first argument against
+the directory holding the configuration file that named them — and it does so
+whether or not the file exists yet, which on a first run is all of them. The
+compiled file lives in the private directory, so the destination is the same
+either way; the difference is that the document says `blocked.data`, which is
+what you typed, instead of ninety characters of absolute path belonging to one
+machine. What the plugin does not delegate is stripping `..`, because a
+relative path is only safe to hand onward once it cannot climb out of whatever
+it will be resolved against.
 
 The Drupal module writes `private://blocked.data`, because `private://` is a
 real registered stream wrapper there. WordPress has no such thing, so that
@@ -409,6 +437,152 @@ at compile time with a warning.
 Removing a type is equally legitimate. A site that must not offer geolocation
 can `unset( $types['geolocation'] )`, and the screen 404s accordingly.
 
+### Referencing a list instead of copying it
+
+An **IP address** rule can reference published lists by URL instead of carrying
+copies of them. Add as many as the rule needs; each is fetched and shaped
+independently.
+
+The simple case is a URL and nothing else:
+
+```yaml
+- name: uptimerobot
+  upstream: 'https://cdn.uptimerobot.com/api/IPv4andIPv6.txt'
+  format: txt
+  validate: cidr
+  ttl: 86400
+  on_error: last_known_good
+  max_delta: 0.5
+```
+
+Most published lists are not that. AWS publishes ten thousand prefixes as JSON
+and you want one service's:
+
+```yaml
+- name: aws-cloudfront
+  upstream: 'https://ip-ranges.amazonaws.com/ip-ranges.json'
+  format: json
+  select: 'prefixes.*'            # the .* iterates; without it you get one record
+  template: '{value[ip_prefix]}'  # {value} is the record; index into it
+  validate: cidr
+  max_delta: 0.25
+  where:
+    - service@equals:CLOUDFRONT   # 10,517 prefixes in, 211 out
+```
+
+Every field above has a control on the rule screen except `where`, nested
+`template` maps, `header_row`/`delimiter`/`comment`, and `upstream` extras —
+those go in a per-list **Advanced** YAML box that is merged into the definition.
+
+| field | what it is for |
+|---|---|
+| **Format** / **Compression** | `txt`, `json`, `ndjson`, `yaml`, `csv`, `tsv`; gzip. Detected from the URL by default |
+| **Select** | dot-path to the records, ending `.*` to iterate them |
+| **Template** | `{value}` is the record — `{value[ip_prefix]}`, `{value[0]}` for a headerless CSV column, `{value[ip_prefix\|ipv6_prefix]}` for whichever key exists |
+| **Check each entry is** | asserted per entry, so a feed that starts emitting hostnames is rejected rather than contributing entries that match nothing |
+| **Refresh every** | how stale a cached copy may get |
+| **If it cannot be fetched** | keep the last good copy (default), drop the list, or refuse to start |
+| **Reject a change larger than** | a fraction: `0.5` refuses a refresh moving the entry count by more than half. The guard against a provider serving a truncated file — without it, an allow list that briefly returns empty silently stops allowing |
+| **Required** | a load failure stops the firewall starting, overriding the policy above |
+
+Three spellings are worth getting right, because each one fails *silently*:
+`select` needs its trailing `.*`, `template` indexes through `{value[...]}`
+rather than naming the key directly, and the declaration keys are snake_case —
+`on_error`, not `onError`. A camelCase key is not rejected; it is ignored, and
+the default quietly applies.
+
+**Nothing is fetched while a visitor waits.** The request path runs with the
+library's offline flag set: it reads a cached copy and nothing else, so an
+outage at the provider cannot become latency here. The cache is filled out of
+band, by a WP-Cron job on the interval set on the General screen, or by hand:
+
+```bash
+wp basic-firewall refresh-sources            # refresh anything stale
+wp basic-firewall refresh-sources --force    # revalidate everything
+wp basic-firewall refresh-sources --dry-run  # show what is referenced
+```
+
+On a host where WP-Cron is disabled, set the interval to **Never** and call the
+command from your own scheduler or deploy. The General screen reports when the
+last refresh ran and how many entries each list contributed, because "this allow
+rule stopped allowing" is otherwise a hard thing to trace.
+
+A list behind a credential goes in the Advanced box as `upstream.auth`, and is
+stripped from an export like every other credential the plugin holds. Prefer an
+`%env()%` token over the literal value. Two things are refused outright when you
+type them: an absolute path, and any scheme other than `http`/`https` — a source
+is read at the web server's privilege, and this setting travels in an imported
+configuration document. A relative filename resolves inside the private
+directory.
+
+### On rules that match conditions
+
+The same editor appears on the **Request / URL**, **User agent**, **ASN** and
+**Geolocation** rules, with one field more: what to compare each entry against.
+
+```
+List URL                  lists/crawlers.txt
+Match each entry against  [header.user-agent ▾] [contains ▾] ☐ Invert
+```
+
+Each line of the list becomes one condition, so a file holding
+
+```
+GPTBot
+CCBot
+ClaudeBot
+```
+
+blocks all three by user agent, and adding a fourth name to the file changes
+what the firewall enforces without touching the rule. That is the case worth
+having: crawler names, scanner agents and probe paths all change on somebody
+else's schedule.
+
+The entry is compiled into the same structured condition a typed one produces,
+rather than the `variable@operator:{value}` shorthand the library also accepts —
+so a condition from a list and a condition from the form are evaluated by
+identical code, including negation and the operator names this plugin uses. Set
+**Template** by hand if you want something the two selects cannot express, such
+as an AND group; it wins over the selects.
+
+One difference from the IP rule is worth knowing: **a relative file reference is
+resolved to an absolute path at compile time.** The library resolves
+`storage.config.*` and log paths against the directory holding the config file,
+and does *not* do the same for `metadata.sources.*.upstream`. Left relative it
+would resolve against the process working directory — a different answer under
+php-fpm, WP-CLI and cron, and all three wrong — so the list would load nothing
+while the error policy hid the reason.
+
+Not offered on rate limiting, IP reputation, vulnerability score or the Core
+Rule Set: none of those matches a list of values. The rule screen asks each type
+whether it supports references and only offers the fields when it does.
+
+### Naming a header, cookie or query parameter
+
+A condition reads a named value through a **Look at** / **Name** pair, the same
+split the Drupal module uses:
+
+| Look at | Name | reads |
+|---|---|---|
+| `query` | `test` | `?test=…` |
+| `header` | `x-api-key` | the `X-Api-Key` request header |
+| `cookie` | `wordpress_logged_in` | that cookie |
+| `post` | `log` | that posted field |
+| `server` | `request_method` | that server variable |
+
+The Name column appears only for those five families, and a family without a
+name is refused — `query` on its own reads nothing, so a condition on it would
+save, report itself active, and match nothing.
+
+Stored as one string, `query.test`, which is what the library reads and what
+every export, import and CLI command already carries; the two columns are a
+display of it. A dotted variable that is not one of these families — the user
+agent type's `client.name`, `bot.category` — is left whole.
+
+This is a quick way to see a challenge without pretending to be a scanner: a
+rule on `query` / `test` equals `1`, response **challenge**, and `?test=1` on
+any URL raises the interstitial.
+
 ### Use `automated`, not `bot`
 
 The user agent rule offers both, and the difference decides whether the rule
@@ -446,11 +620,122 @@ and closes with a slash (`/api/`) satisfies the library's "is this a regex?" tes
 and matches any path *containing* `api`. Use `/api/*` or `/api`. The rule screen
 rejects the ambiguous form.
 
-### Regular expressions need delimiters
+### Regular expressions
 
-`#^/wp-admin#`, not `^/wp-admin`. The library silently rejects an undelimited
-pattern, so the rule saves, reports itself active, and matches nothing. Every
-screen that takes a pattern validates this.
+**Write the pattern only.** No delimiters, no flags:
+
+```
+^/wp-admin              not   #^/wp-admin#
+(sqlmap|nikto|wpscan)   not   #(sqlmap|nikto|wpscan)#i
+```
+
+The delimiters are added when the rule compiles, and the *Case sensitive* box
+beside the field becomes the `i` flag — so it means the same thing on this
+operator as on every other one. A delimiter that appears in your pattern is
+handled: the plugin picks one that does not, and escapes if it has to.
+
+A pattern pasted with its own delimiters is unwrapped rather than refused,
+because anyone who has written regular expressions before will type them out of
+habit. The box still decides the case, so `#foo#i` saved with *Case sensitive*
+ticked compiles to `#foo#`.
+
+Two problems disappear with this, both of which were silent:
+
+**An undelimited pattern used to match nothing.** The field accepted
+`^/wp-admin`, the library rejected it, and the rule saved and reported itself
+active. There was a validation message about it; now there is nothing to warn
+about.
+
+**Case-insensitivity used to rewrite the pattern.** The library implements it by
+lowercasing both sides of the comparison — and for this operator one side is the
+pattern. Lowercasing a pattern does not make it case-insensitive:
+
+| written | would have run as | |
+|---|---|---|
+| `\D` non-digit | `\d` digit | **inverted** |
+| `\W` non-word | `\w` word | **inverted** |
+| `\S` non-whitespace | `\s` whitespace | **inverted** |
+| `[A-Z]` | `[a-z]` | different class |
+
+So `#\D+#` matched only numbers. The pattern now reaches the library exactly as
+assembled, with case carried by its flag, which is where a regular expression
+has always expressed it.
+
+Patterns stored by an earlier version are rewritten on upgrade — the delimiters
+come off and an `i` flag becomes an unticked box, so nothing changes about what
+a rule matches. Nothing depends on that having run: a delimited value is
+unwrapped wherever one turns up.
+
+## Presets
+
+A preset is a rule set the firewall library ships — AI crawlers, malicious URLs,
+honeypot paths, rate limiting, the Pantheon storage and logging conventions.
+Tick one on the Presets screen and it is included **by reference**, not copied,
+so it updates when the library does. `wp basic-firewall sources` lists what is
+available, and the Compiled screen is the only place that shows what a preset
+actually contributed.
+
+### The `wordpress` preset is withheld
+
+The library ships a `wordpress` preset written for sites that do **not** run
+WordPress, where `/wp-admin`, `/wp-login.php`, `/xmlrpc.php` and `/wp-json` are
+only ever probes. Enabling it on a WordPress site locks every administrator out
+and breaks the block editor.
+
+It is therefore not offered: the Presets screen lists it under *Not available on
+this site* with that reason, and the compiler refuses it with the same reason
+recorded as a problem if it arrives some other way — an imported document, or a
+hand-edited option. Every other preset is unaffected.
+
+### Contributing a preset
+
+`basic_firewall_presets` takes either a path to a YAML file or an inline array:
+
+```php
+add_filter( 'basic_firewall_presets', function ( array $presets ): array {
+    // A YAML file shipped with your plugin.
+    $presets['acme_edge'] = array(
+        'label' => 'Acme edge rules',
+        'file'  => plugin_dir_path( __FILE__ ) . 'firewall/acme-edge.yml',
+    );
+
+    // Or the same thing inline, written out to the private directory on rebuild.
+    $presets['acme_inline'] = array(
+        'label'  => 'Acme inline rules',
+        'config' => array(
+            'plugins' => array(
+                array(
+                    'plugin'   => 'Kanopi\\Firewall\\Plugins\\Url',
+                    'response' => 'block',
+                    'weight'   => 50,
+                    'enable'   => true,
+                    'metadata' => array( 'name' => 'acme_probe' ),
+                    'config'   => array(
+                        array(
+                            'variable' => 'path',
+                            'operator' => 'equals',
+                            'value'    => '/acme-probe',
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    );
+
+    return $presets;
+} );
+```
+
+Contributed presets appear in the list, are ticked and unticked like any other,
+and compile into the same `configs:` includes. As with rule types, a contributed
+preset cannot take the name of one the library ships — the shipped one wins and
+the collision is recorded, so a plugin cannot change what an already-ticked
+preset does without anything in the interface changing.
+
+One thing to know about the merge: an included preset is layered **over** the
+document that includes it, so a preset that writes `storage:` or `global:`
+replaces what the screens produced. Keep a contributed preset to `plugins:`
+unless replacing those is the point.
 
 ## Storage
 
@@ -477,6 +762,33 @@ block()  -> false          the client is not recorded
 request  -> allowed        the firewall fails open
 ```
 
+### What a block record keeps
+
+When a rule blocks a request, the request is recorded alongside the address. That
+record outlives the request by the length of the ban, and the block list is the
+artifact people paste into tickets — so each part of the request is kept by
+**allowlist**, on the Storage screen. One name per line; a single `*` keeps
+everything in that bucket, an empty field keeps nothing.
+
+| Bucket | Default | Why |
+|---|---|---|
+| Cookies | none | A session cookie is not the firewall's to hold |
+| Headers | a short list | The ones that describe a client rather than authenticate it |
+| Query parameters | **everything** | For a scanner, the query string *is* the attack |
+| Request body | none | A blocked login attempt has the password in it |
+
+Query is the one to think about, and the reason is WordPress rather than the
+firewall: `wp-login.php?action=rp&key=…` is a working password reset and
+`wp-activate.php?key=…` is an account, so a blocked request to either stores a
+usable credential. Narrowing the bucket is not much of an answer — an allowlist
+cannot say "everything except this", and enumerating what a scanner might send is
+exactly what allowlists are bad at. **Site Health counts how many of your current
+records hold one**, which is the actionable version of the same warning.
+
+Redaction happens on the way in, so records written before this existed are
+unaffected by the setting. They expire with their bans; clearing the block list
+removes them sooner, at the cost of unblocking whoever is in it.
+
 ## Logging
 
 The firewall logs through Monolog, not through WordPress, because it runs before
@@ -493,6 +805,29 @@ blocked the most clients this week, whether a rule has matched anything at all
 since it was added, what the firewall did to an address before its owner
 complained.
 
+### Off the request path
+
+Every handler has a **Send after the visitor has their response** option. It holds
+records in memory and flushes them after the response has been sent, so a slow
+destination is not a slow page. It buys nothing for a local file, which is already
+fast; it earns itself on anything that makes a network round trip — a database on
+another host, or a handler you add through the advanced YAML that posts to a log
+service. The cost is that a fatal error before shutdown loses the buffer, which is
+the right trade for a firewall log and the wrong one for an audit log.
+
+The advanced YAML can now nest handlers, which the library gained in 2.31.0 —
+before it, a wrapping handler could not be expressed in configuration at all:
+
+```yaml
+logger:
+  # Hold debug records in memory; write them only if something goes wrong.
+  - class: Monolog\Handler\FingersCrossedHandler
+    args:
+      - class: Monolog\Handler\StreamHandler
+        args: [/var/log/firewall/firewall.log, Monolog\Level::Debug]
+      - Monolog\Level::Error
+```
+
 ## Export and import
 
 WordPress has no `drush config:export`, so this **is** the deployment story and
@@ -503,6 +838,28 @@ wp basic-firewall export --file=firewall.yml
 wp basic-firewall import firewall.yml --dry-run
 wp basic-firewall import firewall.yml --mode=replace --yes
 ```
+
+### One rule at a time
+
+A single rule travels on its own, which is how a rule written on one site
+reaches another without carrying that site's storage, logging and challenge
+settings with it:
+
+```bash
+wp basic-firewall export --rule=login-rate-limit --file=login-rate-limit.yml
+wp basic-firewall import login-rate-limit.yml --yes
+```
+
+The Rules screen has both ends of this: **Export** on each row, and **Import a
+rule** below the table, taking a pasted document or an uploaded file. That
+import is always a merge — a document arriving there holds one rule, and the
+mode that empties every other section is not something anyone reaches for from a
+list of rules. A rule whose identifier is already in use is replaced, and you
+are told which rules were added and which were replaced rather than given a
+count.
+
+A single-rule document is an ordinary configuration document with one rule in
+it, so the full Import screen accepts it too.
 
 Three behaviours are guaranteed, and each has a test that fails if it regresses:
 
@@ -522,6 +879,34 @@ goes on reporting "Blocking".
 
 ## wp-config.php options
 
+### The one line that matters
+
+Everything below is optional. **This is not.** Without it the firewall still
+works, but it runs from an mu-plugin — after `advanced-cache.php` has already
+served and exited on a cache hit, which on a busy cached site is most of your
+traffic. The snippet is what moves evaluation ahead of WordPress entirely:
+
+```php
+require_once ABSPATH . 'wp-content/plugins/basic-firewall/bootstrap.php';
+basic_firewall_evaluate( array(
+    'private_path' => '/path/to/uploads/basic-firewall-private-abc123',
+) );
+```
+
+Four ordering rules, and each one has a failure attached to it:
+
+| Put it | Or else |
+|---|---|
+| **below** the `DB_` constants | database block storage cannot build a connection and fails open |
+| **below** `define( 'ABSPATH', … )` | fatal error on every request — the snippet uses `ABSPATH` |
+| **below** any `BASIC_FIREWALL_*` constants | the bootstrap reads them at call time, so ones defined after it are ignored on this path and silently apply only to the mu-plugin one |
+| **above** `require_once ABSPATH . 'wp-settings.php'` | WordPress has already booted; there is nothing left to skip |
+
+The Dashboard prints it with your site's real private path filled in. You cannot
+write it yourself: the directory carries a random per-site suffix.
+
+### Everything else
+
 All optional, all added by hand. This plugin never writes to `wp-config.php`.
 
 ```php
@@ -540,7 +925,23 @@ define( 'BASIC_FIREWALL_TRUSTED_PROXIES', array( '10.0.0.0/8' ) );
 // Allow %file(...)% tokens to read secrets from these directories, and only
 // these. Off entirely when unset.
 define( 'BASIC_FIREWALL_SECRET_DIRECTORIES', array( '/etc/firewall' ) );
+
+// Which forwarding headers a trusted proxy may set. Defaults to
+// X-Forwarded-For, -Proto and -Port; deliberately NOT -Host, because the host
+// decides which site a request belongs to and which URLs get generated, and
+// trusting a forwarded host is how cache poisoning and malicious
+// password-reset links start. Only override it if your proxy needs something
+// else, and pass Symfony's Request::HEADER_* bitmask.
+define( 'BASIC_FIREWALL_TRUSTED_HEADERS', Request::HEADER_X_FORWARDED_FOR );
+
+// Let rule sources fetch over the network during a request. Off unless
+// explicitly false: a firewall that makes an outbound HTTP call while a
+// visitor waits is a firewall that fails when the network does.
+define( 'BASIC_FIREWALL_SOURCES_OFFLINE', false );
 ```
+
+Both of the last two are read on **both** evaluation paths, so they belong above
+the bootstrap snippet like the rest.
 
 The interface reports when any of these is in effect, so nobody wonders why the
 setting they saved is being ignored.

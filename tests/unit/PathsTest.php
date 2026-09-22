@@ -102,4 +102,72 @@ final class PathsTest extends TestCase {
 			'A legacy path must not be mistaken for an absolute one, or it would resolve outside the private directory.'
 		);
 	}
+
+	/**
+	 * What gets written into the compiled file.
+	 *
+	 * @dataProvider portable_paths
+	 *
+	 * @param string $stored   What the administrator typed.
+	 * @param string $expected What belongs in the compiled document.
+	 * @param string $because  Why.
+	 */
+	public function test_portable_keeps_what_was_typed( string $stored, string $expected, string $because ): void {
+		$this->assertSame( $expected, ( new Paths() )->portable( $stored ), $because );
+	}
+
+	/**
+	 * Every shape a stored path arrives in.
+	 *
+	 * @return array<string, array{0: string, 1: string, 2: string}>
+	 */
+	public static function portable_paths(): array {
+		return array(
+			'a bare filename stays relative'   => array(
+				'blocked.data',
+				'blocked.data',
+				'The library resolves this against the directory holding the compiled file, which is where an absolute path would have pointed anyway -- so resolving it here only replaced what the administrator typed with something they did not.',
+			),
+			'a subdirectory stays relative'    => array(
+				'logs/firewall.log',
+				'logs/firewall.log',
+				'Nested relative paths resolve the same way and must survive intact.',
+			),
+			'an absolute path is untouched'    => array(
+				'/srv/firewall/blocked.data',
+				'/srv/firewall/blocked.data',
+				'Somebody who typed an absolute path chose it deliberately; the library leaves absolute values alone and so must this.',
+			),
+			'a stream wrapper is untouched'    => array(
+				'php://stdout',
+				'php://stdout',
+				'A containerised host logs to stdout. Split on its slashes this became php:/stdout inside the private directory -- a directory named "php:" holding a file nobody reads.',
+			),
+			'parent traversal is stripped'     => array(
+				'../../wp-config.php',
+				'wp-config.php',
+				'A relative path is handed onward for the library to resolve, so it has to be unable to climb out of whatever it is resolved against. This arrives from an imported document as readily as from a form.',
+			),
+			'traversal mid-path is stripped'   => array(
+				'./x/../../../etc/passwd',
+				'x/etc/passwd',
+				'Traversal has to be stripped wherever it appears, not only at the front.',
+			),
+			'the legacy scheme is dropped'     => array(
+				Paths::LEGACY_SCHEME . 'blocked.data',
+				'blocked.data',
+				'private:// is Drupal\'s stream wrapper and nothing in WordPress. It is understood on read and never written back.',
+			),
+			'nothing but traversal is refused' => array(
+				'..',
+				'',
+				'An empty result tells the compiler to fall back to its default rather than write a path meaning "the directory itself".',
+			),
+			'blank stays blank'                => array(
+				'',
+				'',
+				'A blank field means "use the default", which is the compiler\'s decision and not this method\'s.',
+			),
+		);
+	}
 }

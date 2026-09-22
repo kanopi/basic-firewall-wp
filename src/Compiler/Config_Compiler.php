@@ -13,6 +13,7 @@ use Kanopi\BasicFirewall\Database_Credentials;
 use Kanopi\BasicFirewall\Library_Capabilities;
 use Kanopi\BasicFirewall\Install\Challenge_Secret;
 use Kanopi\BasicFirewall\Plugin;
+use Kanopi\BasicFirewall\Support\Schema;
 use Symfony\Component\Yaml\Yaml;
 
 /**
@@ -77,6 +78,10 @@ final class Config_Compiler {
 		 * several hundred patterns never appear in a diff.
 		 */
 		$presets = $plugin->presets()->resolve_paths( (array) $settings->get( 'presets', array() ) );
+
+		foreach ( $plugin->presets()->problems() as $problem ) {
+			$this->problems[] = $problem;
+		}
 
 		if ( array() !== $presets ) {
 			$compiled['configs'] = $presets;
@@ -260,6 +265,78 @@ final class Config_Compiler {
 	 * @return array<string, mixed>
 	 */
 	private function compile_storage( array $storage ): array {
+		$compiled = $this->compile_storage_backend( $storage );
+
+		/*
+		 * Applied here rather than inside each backend, because it is the same
+		 * policy whichever store holds the record and the library reads it from
+		 * `storage.config` for all of them.
+		 */
+		$compiled['config'] = ( $compiled['config'] ?? array() )
+			+ array( 'record_request' => $this->compile_record_request( (array) ( $storage['record_request'] ?? array() ) ) );
+
+		return $compiled;
+	}
+
+	/**
+	 * What a block record keeps about the request that caused it.
+	 *
+	 * All four buckets are written out. The library would default any bucket
+	 * left absent, and three of its four defaults are what this plugin wants --
+	 * but a textarea cannot say "absent", only "empty", and empty means keep
+	 * nothing. Writing all four means the compiled file says what the screen
+	 * says, which is the same reason `challenge.ttl` is written out.
+	 *
+	 * @param array<string, mixed> $declared Stored record_request settings.
+	 *
+	 * @return array<string, list<string>>
+	 */
+	private function compile_record_request( array $declared ): array {
+		$buckets  = array();
+		$defaults = Schema::defaults()['storage']['record_request'] ?? array();
+
+		foreach ( array( 'cookies', 'headers', 'query', 'body' ) as $bucket ) {
+			/*
+			 * Absent and empty are different answers, and only one of them is
+			 * the operator's. A site upgrading from before this setting existed
+			 * has no value stored, and reading that as "keep nothing" would
+			 * silently strip the user agent and the query string out of every
+			 * record it writes next. Absent takes the default; empty is a choice
+			 * somebody made in the form.
+			 */
+			$stored = array_key_exists( $bucket, $declared )
+				? $declared[ $bucket ]
+				: ( $defaults[ $bucket ] ?? '' );
+
+			$names = preg_split( '/\R/', (string) $stored );
+			$names = array_values(
+				array_filter(
+					array_map( 'trim', is_array( $names ) ? $names : array() ),
+					static fn( string $name ): bool => '' !== $name
+				)
+			);
+
+			/*
+			 * Header names are matched lowercased by the library and everything
+			 * else is not, because the others are the application's own names
+			 * and `Token` and `token` are two of them.
+			 */
+			$buckets[ $bucket ] = 'headers' === $bucket
+				? array_map( 'strtolower', $names )
+				: $names;
+		}
+
+		return $buckets;
+	}
+
+	/**
+	 * The backend half of the storage section.
+	 *
+	 * @param array<string, mixed> $storage Stored storage settings.
+	 *
+	 * @return array<string, mixed>
+	 */
+	private function compile_storage_backend( array $storage ): array {
 		$backend = (string) ( $storage['backend'] ?? 'file' );
 
 		if ( 'database' === $backend ) {
@@ -275,10 +352,23 @@ final class Config_Compiler {
 		}
 
 		if ( 'file' === $backend ) {
-			$paths        = Plugin::instance()->paths();
-			$file         = (array) ( $storage['file'] ?? array() );
-			$storage_file = $paths->resolve( (string) ( $file['storage_file'] ?? 'blocked.data' ) );
-			$offense_file = trim( (string) ( $file['offense_file'] ?? '' ) );
+			$paths = Plugin::instance()->paths();
+			$file  = (array) ( $storage['file'] ?? array() );
+
+			/*
+			 * Written as the administrator typed it. A relative filename stays
+			 * relative: the library resolves these two keys against the
+			 * directory holding the file that named them, which is the private
+			 * directory, so the result is identical and the document says what
+			 * the form said. See Paths::portable().
+			 */
+			$storage_file = $paths->portable( (string) ( $file['storage_file'] ?? 'blocked.data' ) );
+
+			if ( '' === $storage_file ) {
+				$storage_file = 'blocked.data';
+			}
+
+			$offense_file = $paths->portable( (string) ( $file['offense_file'] ?? '' ) );
 
 			$config = array( 'storage_file' => $storage_file );
 
@@ -291,7 +381,7 @@ final class Config_Compiler {
 			 * escalated each other's clients.
 			 */
 			$config['offense_file'] = '' !== $offense_file
-				? $paths->resolve( $offense_file )
+				? $offense_file
 				: $storage_file . '.offenses';
 
 			return array(
@@ -518,6 +608,23 @@ final class Config_Compiler {
 			'path'        => (string) ( $challenge['path'] ?? '/basic-firewall/challenge' ),
 			'cookie_name' => (string) ( $challenge['cookie_name'] ?? 'bfw_pass' ),
 			'header_name' => (string) ( $challenge['header_name'] ?? 'X-Firewall-Pass' ),
+
+			/*
+			 * A ceiling as well as a default, which is the whole point of it.
+			 *
+			 * Needs library 2.30.0. Before it, the lifetime that signs a pass
+			 * token was whatever the interstitial's POST body asked for --
+			 * solve one arithmetic puzzle, post a lifetime of thirty-one years,
+			 * and hold a signed exemption from every challenge rule for three
+			 * decades. The signature was valid; it covered the number the
+			 * client chose.
+			 *
+			 * Written out rather than left to the library's own default so the
+			 * value is visible in the compiled file and on the screen that sets
+			 * it, because a rule asking for longer than this is silently
+			 * granted this instead.
+			 */
+			'ttl'         => max( 60, (int) ( $challenge['ttl'] ?? 3600 ) ),
 		);
 
 		$secret = Challenge_Secret::resolve();
@@ -573,13 +680,37 @@ final class Config_Compiler {
 			$level = $levels[ (string) ( $handler['level'] ?? 'warning' ) ] ?? $levels['warning'];
 
 			if ( in_array( $type, Library_Map::LOG_HANDLERS_KEYED, true ) ) {
+				/*
+				 * Every key here is the library's own spelling, and two of them
+				 * were not.
+				 *
+				 * The handler reads `buffer` and `retention_days`; this wrote
+				 * `buffered` and `retain_days`. A declaration is read with array
+				 * keys, so neither was an error -- both were ignored and the
+				 * defaults applied. The Buffering checkbox therefore did
+				 * nothing and the handler always buffered, and "Keep history
+				 * for" did nothing and retention stayed at zero, which is the
+				 * table that only grows the field's own help text warns about.
+				 */
 				$options = array(
-					'table'       => 'wordpress' === ( $handler['connection_source'] ?? 'wordpress' )
+					'table'                    => 'wordpress' === ( $handler['connection_source'] ?? 'wordpress' )
 						? $credentials->prefix_table( (string) ( $handler['table'] ?? 'basic_firewall_log' ) )
 						: (string) ( $handler['table'] ?? 'basic_firewall_log' ),
-					'level'       => $level,
-					'buffered'    => ! empty( $handler['buffered'] ),
-					'retain_days' => (int) ( $handler['retain_days'] ?? 30 ),
+					'level'                    => $level,
+					'buffer'                   => ! empty( $handler['buffered'] ),
+					'retention_days'           => (int) ( $handler['retain_days'] ?? 30 ),
+
+					/*
+					 * The library checks its schema on one write in a hundred,
+					 * which is the right cost on a table that exists and the
+					 * wrong behaviour on one that does not: a fresh install
+					 * loses roughly its first hundred events while the handler
+					 * waits for its turn to notice there is nowhere to put
+					 * them. Checked on every write for the first few instead --
+					 * the check is one query against a table this handler is
+					 * about to write to anyway.
+					 */
+					'schema_check_probability' => 1.0,
 				);
 
 				$entry = array(
@@ -587,39 +718,98 @@ final class Config_Compiler {
 					'args'  => array( $options ),
 				);
 
+				$deferred = ! empty( $handler['deferred'] );
+
 				if ( 'wordpress' === ( $handler['connection_source'] ?? 'wordpress' ) ) {
-					$this->connection_paths[] = sprintf( '[logger][%d][args][0][connection]', count( $compiled ) );
+					/*
+					 * The injection path has to follow the wrapping. A deferred
+					 * handler holds the real one as its own first argument, so
+					 * the connection moves a level down -- and a path that
+					 * misses injects the credentials nowhere, silently, leaving
+					 * the handler with no connection at all.
+					 */
+					$this->connection_paths[] = sprintf(
+						$deferred
+							? '[logger][%d][args][0][args][0][connection]'
+							: '[logger][%d][args][0][connection]',
+						count( $compiled )
+					);
 				} elseif ( '' !== trim( (string) ( $handler['dsn'] ?? '' ) ) ) {
 					$entry['args'][0]['connection'] = array( 'dsn' => trim( (string) $handler['dsn'] ) );
 				}
 
-				$compiled[] = $entry;
+				$compiled[] = $deferred ? self::defer( $entry, $level ) : $entry;
 
 				continue;
 			}
 
-			// Positional constructor arguments, ordered per handler.
+			/*
+			 * Positional constructor arguments, ordered per handler.
+			 *
+			 * The path is written as typed, for the same reason the storage
+			 * file is: the library resolves a relative `args.0` on a stream or
+			 * rotating-file handler against the directory holding the config
+			 * that named it, missing file and all. See Paths::portable().
+			 */
+			$log_path = $paths->portable( (string) ( $handler['path'] ?? 'logs/firewall.log' ) );
+
+			if ( '' === $log_path ) {
+				$log_path = 'logs/firewall.log';
+			}
+
 			$args = match ( $type ) {
 				'rotating_file' => array(
-					$paths->resolve( (string) ( $handler['path'] ?? 'logs/firewall.log' ) ),
+					$log_path,
 					(int) ( $handler['max_files'] ?? 14 ),
 					$level,
 				),
 				'stream'        => array(
-					$paths->resolve( (string) ( $handler['path'] ?? 'logs/firewall.log' ) ),
+					$log_path,
 					$level,
 				),
 				// ErrorLogHandler takes a message type first, then the level.
 				default         => array( 0, $level ),
 			};
 
-			$compiled[] = array(
+			$entry = array(
 				'class' => Library_Map::LOG_HANDLERS[ $type ],
 				'args'  => $args,
 			);
+
+			$compiled[] = empty( $handler['deferred'] ) ? $entry : self::defer( $entry, $level );
 		}
 
 		return $compiled;
+	}
+
+	/**
+	 * Wrap a handler so it writes after the visitor has been served.
+	 *
+	 * Needs library 2.31.0 twice over: for `DeferredHandler` itself, and for
+	 * `logger:` being able to carry a nested `{class, args}` at all. Before it,
+	 * a wrapping handler could not be expressed in configuration -- the args
+	 * list took scalars, and the documented answer was to write PHP.
+	 *
+	 * @param array<string, mixed> $entry The handler to wrap.
+	 * @param string               $level Minimum level, as a Monolog enum reference.
+	 *
+	 * @return array<string, mixed>
+	 */
+	private static function defer( array $entry, string $level ): array {
+		return array(
+			'class' => Library_Map::LOG_HANDLER_DEFERRED,
+			'args'  => array(
+				$entry,
+
+				/*
+				 * Zero, meaning hold every record until shutdown. Any other
+				 * limit flushes the moment it is reached, which is mid-request,
+				 * which is the thing being avoided.
+				 */
+				0,
+				$level,
+			),
+		);
 	}
 
 	/**

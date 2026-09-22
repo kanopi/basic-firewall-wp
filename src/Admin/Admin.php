@@ -20,7 +20,6 @@ use Kanopi\BasicFirewall\Admin\Screen\Import_Screen;
 use Kanopi\BasicFirewall\Admin\Screen\Log_Screen;
 use Kanopi\BasicFirewall\Admin\Screen\Logging_Screen;
 use Kanopi\BasicFirewall\Admin\Screen\Presets_Screen;
-use Kanopi\BasicFirewall\Admin\Screen\Rebuild_Screen;
 use Kanopi\BasicFirewall\Admin\Screen\Rule_Edit_Screen;
 use Kanopi\BasicFirewall\Admin\Screen\Rules_Screen;
 use Kanopi\BasicFirewall\Admin\Screen\Storage_Screen;
@@ -69,23 +68,39 @@ final class Admin {
 			return self::$screens;
 		}
 
+		/*
+		 * Menu order, and the first entry is also the top-level page.
+		 *
+		 * Grouped by what somebody is doing rather than by what the code is:
+		 * where things stand, then what the firewall is configured to do, then
+		 * what it has actually done, then moving a configuration between sites.
+		 */
 		$screens = array(
+			// Where things stand.
 			new Dashboard_Screen(),
-			new Rules_Screen(),
-			new Rule_Edit_Screen(),
+
+			// What it is configured to do.
 			new General_Screen(),
 			new Storage_Screen(),
+			new Rules_Screen(),
 			new Logging_Screen(),
 			new Challenge_Screen(),
 			new Presets_Screen(),
 			new Advanced_Screen(),
-			new Test_Screen(),
-			new Compiled_Screen(),
-			new Export_Screen(),
-			new Import_Screen(),
+
+			// What it has done.
 			new Log_Screen(),
 			new Blocked_Screen(),
-			new Rebuild_Screen(),
+			new Compiled_Screen(),
+
+			// Moving it somewhere else.
+			new Export_Screen(),
+			new Import_Screen(),
+
+			new Test_Screen(),
+
+			// Reached from the Rules screen rather than the menu.
+			new Rule_Edit_Screen(),
 		);
 
 		self::$screens = array();
@@ -122,16 +137,33 @@ final class Admin {
 				);
 
 				$top = $screen->slug();
-			} else {
-				add_submenu_page(
-					(string) $top,
-					$screen->page_title(),
-					$screen->menu_title(),
-					$screen->capability(),
-					$screen->slug(),
-					static fn() => self::render( $screen->slug() )
-				);
 			}
+
+			/*
+			 * The first screen is added twice on purpose: once as the top-level
+			 * page, and again as a child of itself.
+			 *
+			 * That second call is how the first child gets a label of its own.
+			 * Left out, WordPress repeats the parent's -- so the sidebar read
+			 * "Firewall / Firewall", and the one entry that says whether
+			 * anything is wrong was indistinguishable from the section
+			 * containing it.
+			 *
+			 * It is registered with **no callback**, and that is the whole
+			 * point of the distinction. A submenu whose slug equals its
+			 * parent's resolves to the same page hook as the parent, so passing
+			 * a callback here adds a second listener to the hook `add_menu_page`
+			 * has already registered one on -- and the Status page rendered
+			 * twice, top to bottom, on every load.
+			 */
+			add_submenu_page(
+				(string) $top,
+				$screen->page_title(),
+				$screen->menu_title(),
+				$screen->capability(),
+				$screen->slug(),
+				$screen->slug() === $top ? '' : static fn() => self::render( $screen->slug() )
+			);
 		}
 
 		/*
@@ -247,6 +279,56 @@ final class Admin {
 			array(),
 			BASIC_FIREWALL_VERSION,
 			true
+		);
+
+		self::enqueue_yaml_editor();
+	}
+
+	/**
+	 * Turn the YAML fields into a real editor.
+	 *
+	 * WordPress has shipped CodeMirror since 4.9 and exposes it through
+	 * `wp_enqueue_code_editor()`, so this needs nothing bundled, nothing from a
+	 * CDN, and no second copy of a library to keep patched. It also means the
+	 * editor honours the user's own "syntax highlighting" profile setting: the
+	 * function returns false when they have turned it off, and the field stays
+	 * the plain textarea they asked for.
+	 *
+	 * Two of the defaults are overridden, and the first is not cosmetic:
+	 *
+	 * `indentWithTabs` is true by default and **YAML forbids tabs for
+	 * indentation**. Left alone, every press of Tab in a firewall configuration
+	 * would produce a document the parser rejects -- in an editor that exists
+	 * to make writing that document easier.
+	 *
+	 * `indentUnit` is four; the plugin dumps YAML at two, so leaving it would
+	 * have the editor fight the formatting of everything it renders.
+	 */
+	private static function enqueue_yaml_editor(): void {
+		$settings = wp_enqueue_code_editor(
+			array(
+				'type'       => 'text/yaml',
+				'codemirror' => array(
+					'indentWithTabs' => false,
+					'indentUnit'     => 2,
+					'tabSize'        => 2,
+					'lineNumbers'    => true,
+					'lineWrapping'   => true,
+					'matchBrackets'  => false,
+				),
+			)
+		);
+
+		// False when the user has syntax highlighting off, or when the editor
+		// is unavailable. Either way there is nothing to initialise.
+		if ( false === $settings ) {
+			return;
+		}
+
+		wp_add_inline_script(
+			'basic-firewall-admin',
+			sprintf( 'window.basicFirewallEditor = %s;', wp_json_encode( $settings ) ),
+			'before'
 		);
 	}
 

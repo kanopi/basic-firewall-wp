@@ -98,6 +98,9 @@ final class Settings {
 	 * @return list<array{path: string, message: string}>
 	 */
 	public function replace( array $values ): array {
+		$values = self::drop_empty_log_handlers( $values );
+		$values = self::normalise_rule_settings( $values );
+
 		$validator = new Validator();
 		$clean     = $validator->validate( $values );
 
@@ -125,6 +128,102 @@ final class Settings {
 		do_action( 'basic_firewall_settings_saved', $clean );
 
 		return $this->errors;
+	}
+
+	/**
+	 * Put every rule's settings through its own type's validator.
+	 *
+	 * The schema validates the shape of a rule -- id, type, response, weight --
+	 * but treats `settings` as opaque, because only the rule type knows what
+	 * belongs in it. For a long time the rule form was the only thing that
+	 * asked the type, which left every other writer storing whatever it was
+	 * handed: a seed script, `wp option update`, a deployment, an imported
+	 * document.
+	 *
+	 * The shapes are not interchangeable. A rate limit path is
+	 * `"/wp-login.php 20 60"` as typed and a map of pattern, limit and window
+	 * once validated, and a type given the wrong one threw where the value was
+	 * read -- which was the rules listing, so writing settings the wrong way
+	 * could leave the screen you would use to find the bad rule unable to load.
+	 *
+	 * Safe to run over settings that are already valid: every type is required
+	 * to be able to read back its own output, and there is a test across all of
+	 * them that fails if one cannot.
+	 *
+	 * Errors are discarded here rather than reported. This is the last line
+	 * rather than the first: the form and the importer both validate before
+	 * calling this and report properly, and a writer that reaches here without
+	 * having done so has nowhere to display a message anyway.
+	 *
+	 * @param array<string, mixed> $values Incoming settings.
+	 *
+	 * @return array<string, mixed>
+	 */
+	private static function normalise_rule_settings( array $values ): array {
+		if ( ! isset( $values['rules'] ) || ! is_array( $values['rules'] ) ) {
+			return $values;
+		}
+
+		foreach ( $values['rules'] as $index => $rule ) {
+			if ( ! is_array( $rule ) ) {
+				continue;
+			}
+
+			$type = Plugin::instance()->rule_types()->get( (string) ( $rule['type'] ?? '' ) );
+
+			if ( null === $type ) {
+				continue;
+			}
+
+			$errors = array();
+
+			try {
+				$values['rules'][ $index ]['settings'] = $type->validate_settings(
+					(array) ( $rule['settings'] ?? array() ),
+					$errors
+				);
+			} catch ( \Throwable $e ) {
+				// A type that cannot read what it was given keeps what it was
+				// given. The listing copes with either, and refusing the whole
+				// write would lose the rest of the document over one rule.
+				continue;
+			}
+		}
+
+		return $values;
+	}
+
+	/**
+	 * Remove log handlers that name no type.
+	 *
+	 * Done before validation rather than after, because validation is what
+	 * makes them dangerous. The handler `type` field carries a list of choices
+	 * and a default, so an empty type is not rejected -- it is replaced with
+	 * `rotating_file`. A handler somebody had just set back to "none"
+	 * therefore came back as a file logger writing to `logs/firewall.log` at
+	 * whatever level the removed one had.
+	 *
+	 * The logging screen already dropped these on its way in, so the interface
+	 * never showed the resurrection. Everything else that writes settings --
+	 * an imported document, `wp option update`, a deploy -- got it.
+	 *
+	 * @param array<string, mixed> $values Incoming settings.
+	 *
+	 * @return array<string, mixed>
+	 */
+	private static function drop_empty_log_handlers( array $values ): array {
+		if ( ! isset( $values['logger'] ) || ! is_array( $values['logger'] ) ) {
+			return $values;
+		}
+
+		$values['logger'] = array_values(
+			array_filter(
+				$values['logger'],
+				static fn ( $handler ): bool => is_array( $handler ) && '' !== trim( (string) ( $handler['type'] ?? '' ) )
+			)
+		);
+
+		return $values;
 	}
 
 	/**

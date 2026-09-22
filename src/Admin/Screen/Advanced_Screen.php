@@ -99,7 +99,7 @@ final class Advanced_Screen extends Screen {
 
 		$this->row(
 			__( 'Additional YAML', 'basic-firewall' ),
-			self::textarea( 'advanced_yaml', (string) $this->plugin()->settings()->get( 'advanced_yaml', '' ), 20 ),
+			self::textarea( 'advanced_yaml', (string) $this->plugin()->settings()->get( 'advanced_yaml', '' ), 20, true ),
 			__( 'Parsed on save. Invalid YAML is refused rather than stored, because a configuration the firewall cannot load means it starts with an empty rule set that allows everything.', 'basic-firewall' )
 		);
 

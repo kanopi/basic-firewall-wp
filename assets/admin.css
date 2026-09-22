@@ -64,4 +64,217 @@
 /* The rule type chooser. */
 .basic-firewall .bfw-rule-types td { vertical-align: middle; }
 .basic-firewall .bfw-rule-types td:last-child { white-space: nowrap; text-align: right; }
+
+/* The chooser lists the same type names, and wraps them for the same reason. */
+.basic-firewall .bfw-rule-types td:first-child,
+.basic-firewall .bfw-rule-types th:first-child {
+	white-space: nowrap;
+	width: 1%;
+	min-width: 14em;
+}
 .basic-firewall .bfw-unavailable { color: #b32d2e; }
+
+/*
+ * The wp-config.php snippet. Meant to be selected and copied whole, so it
+ * scrolls rather than wraps: a line break introduced by the stylesheet is a
+ * line break the administrator pastes into their configuration file.
+ */
+.basic-firewall .bfw-snippet {
+	overflow-x: auto;
+	padding: 1em;
+	background: #f6f7f7;
+	border-left: 4px solid #2271b1;
+	white-space: pre;
+	tab-size: 4;
+}
+
+/* A neutral, non-alarming result block: an answer, not a finding. */
+.basic-firewall .bfw-notice {
+	padding: 0.75em 1em;
+	margin: 1em 0;
+	background: #f6f7f7;
+	border-left: 4px solid #72aee6;
+}
+
+/*
+ * Repeatable blocks, grouped as cards.
+ *
+ * Shared by the referenced lists on a rule and the handlers on the logging
+ * screen. Both had the same problem: a dozen fields per entry run together in
+ * one table, with nothing to say where one entry ended and the next began, and
+ * the settings only a minority need sitting in front of everybody.
+ */
+.basic-firewall .bfw-repeat-intro {
+	max-width: 48rem;
+}
+
+.basic-firewall .bfw-repeat__item {
+	margin: 0 0 1em;
+	padding: 0 1em 0.5em;
+	background: #fff;
+	border: 1px solid #c3c4c7;
+	border-left: 4px solid #2271b1;
+	border-radius: 2px;
+}
+
+/* The empty card reads as an invitation rather than an unfilled form. */
+.basic-firewall .bfw-repeat__item--new {
+	border-left-color: #c3c4c7;
+	border-style: dashed;
+	background: #fbfbfc;
+}
+
+.basic-firewall .bfw-repeat__head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 1em;
+	padding: 0.75em 0 0;
+	font-size: 1.05em;
+}
+
+.basic-firewall .bfw-repeat__remove {
+	color: #b32d2e;
+}
+
+.basic-firewall .bfw-repeat__more summary {
+	cursor: pointer;
+	padding: 0.5em 0;
+	font-weight: 600;
+}
+
+/* The card supplies the spacing; the tables inside should not add their own. */
+.basic-firewall .bfw-repeat__item .form-table {
+	margin-top: 0;
+}
+
+.basic-firewall .bfw-repeat__item .form-table th {
+	width: 12em;
+	padding-left: 0;
+}
+
+/* Import a rule: the rarer half of the export/import pair, folded away. */
+.basic-firewall .bfw-import {
+	max-width: 48rem;
+	margin-top: 2em;
+	padding: 0 1em 0.5em;
+	background: #fff;
+	border: 1px solid #c3c4c7;
+	border-radius: 2px;
+}
+
+.basic-firewall .bfw-import summary {
+	cursor: pointer;
+	padding: 0.75em 0;
+	font-weight: 600;
+}
+
+/*
+ * The rules table.
+ *
+ * Every column here holds a short, known value except the summary, which holds
+ * whatever a rule type has to say about itself. Left to the browser, the
+ * summary took the width and everything else wrapped -- "IP reputation
+ * (AbuseIPDB)" over three lines beside a one-line summary, which is the wrong
+ * way round. The short columns are given what they need and the summary takes
+ * the rest.
+ */
+.basic-firewall .bfw-rules .column-type,
+.basic-firewall .bfw-rules .column-response,
+.basic-firewall .bfw-rules .column-weight,
+.basic-firewall .bfw-rules .column-actions {
+	white-space: nowrap;
+	width: 1%;
+}
+
+/* Wide enough for the longest shipped label, "IP reputation (AbuseIPDB)". */
+.basic-firewall .bfw-rules .column-type {
+	min-width: 14em;
+}
+
+.basic-firewall .bfw-rules .column-weight {
+	text-align: right;
+}
+
+/*
+ * The identifier under a rule's name is the one thing here that can be
+ * arbitrarily long, and it is the column that should give way rather than the
+ * type beside it.
+ */
+.basic-firewall .bfw-rules .column-rule code {
+	word-break: break-all;
+}
+
+/* Everything left over, which is where a long summary belongs. */
+.basic-firewall .bfw-rules .column-summary {
+	width: auto;
+}
+
+/*
+ * The unavailable-type and unknown-type notes, which were inline styles on a
+ * span. Same colour, in the stylesheet where a theme can see it.
+ */
+.basic-firewall .bfw-rules .column-type span {
+	color: #d63638;
+}
+
+/*
+ * The firewall log.
+ *
+ * Scanned rather than read: the columns that identify a row stay narrow and on
+ * one line, and the detail behind each row is folded away. Open by default, six
+ * columns of user-agent strings push everything that identifies a row off the
+ * side of the screen.
+ */
+.basic-firewall .bfw-log-filters {
+	margin: 1em 0;
+}
+
+.basic-firewall .bfw-log .column-when,
+.basic-firewall .bfw-log .column-level,
+.basic-firewall .bfw-log .column-rule,
+.basic-firewall .bfw-log .column-client {
+	white-space: nowrap;
+	width: 1%;
+}
+
+.basic-firewall .bfw-log .column-request code {
+	word-break: break-all;
+}
+
+.basic-firewall .bfw-log__detail summary {
+	cursor: pointer;
+	color: #2271b1;
+	font-size: 0.9em;
+	margin-top: 0.35em;
+}
+
+.basic-firewall .bfw-log__detail div {
+	margin: 0.25em 0;
+	font-size: 0.9em;
+}
+
+.basic-firewall .bfw-log__label {
+	display: inline-block;
+	min-width: 8em;
+	color: #646970;
+}
+
+/*
+ * Severity, as a word rather than a colour alone -- the level is already
+ * spelled out, so this only has to make a scan land on the right rows.
+ */
+.basic-firewall .bfw-level {
+	font-weight: 600;
+	font-size: 0.85em;
+	letter-spacing: 0.02em;
+}
+
+.basic-firewall .bfw-level--emergency,
+.basic-firewall .bfw-level--alert,
+.basic-firewall .bfw-level--critical,
+.basic-firewall .bfw-level--error { color: #b32d2e; }
+.basic-firewall .bfw-level--warning { color: #bd8600; }
+.basic-firewall .bfw-level--notice { color: #2271b1; }
+.basic-firewall .bfw-level--info,
+.basic-firewall .bfw-level--debug { color: #646970; }

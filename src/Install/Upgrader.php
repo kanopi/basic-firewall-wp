@@ -10,6 +10,7 @@ declare( strict_types = 1 );
 namespace Kanopi\BasicFirewall\Install;
 
 use Kanopi\BasicFirewall\Plugin;
+use Kanopi\BasicFirewall\RuleType\Condition_Rule_Type_Base;
 use Kanopi\BasicFirewall\Support\Paths;
 use Kanopi\BasicFirewall\Support\Schema;
 
@@ -93,6 +94,18 @@ final class Upgrader {
 			update_option( Schema::VERSION_OPTION, $version, false );
 		}
 
+		/*
+		 * And then to current, which is not the same thing.
+		 *
+		 * The loop above only advances as far as the highest routine, so a
+		 * release that raises the schema version without needing a migration --
+		 * a settings key added with a harmless default, which is most of them --
+		 * left the stored version behind the constant permanently. Nothing
+		 * broke, and `maybe_upgrade()` ran its whole loop on every single
+		 * request forever, re-running the last routine each time.
+		 */
+		update_option( Schema::VERSION_OPTION, Schema::VERSION, false );
+
 		delete_option( self::FAILURE_OPTION );
 
 		/**
@@ -149,7 +162,94 @@ final class Upgrader {
 
 				$settings->replace( $values );
 			},
+
+			/*
+			 * 3: store a regular expression as its body, not as `#body#i`.
+			 *
+			 * The delimiters and the case flag are now added at compile time
+			 * from the condition's own case-sensitivity box, which makes that
+			 * box behave here as it does on every other operator and removes a
+			 * requirement nobody should have had to know about -- an
+			 * undelimited pattern used to save, report itself active, and match
+			 * nothing.
+			 *
+			 * The flag is read back out rather than discarded: a pattern stored
+			 * as `#bot#i` was case-insensitive, so the condition it becomes has
+			 * to be too, or this upgrade would quietly narrow what every such
+			 * rule matches.
+			 *
+			 * Nothing depends on the routine having run. `regex_body()` unwraps
+			 * a delimited pattern wherever one turns up, so a site that skips
+			 * this keeps working; the routine is what stops the old spelling
+			 * being shown back to somebody on the rule screen.
+			 */
+			3 => static function (): void {
+				$settings = Plugin::instance()->settings();
+				$values   = $settings->all();
+
+				self::unwrap_regex_conditions( $values );
+
+				$settings->replace( $values );
+			},
+
+			/*
+			 * 6: seed `storage.record_request`, new in library 2.31.0.
+			 *
+			 * Writing the document back through the validator fills in every key
+			 * the schema has gained since it was last saved, which is what this
+			 * is for -- the compiler defaults an absent bucket too, but only the
+			 * stored document is what the storage screen shows, and a screen
+			 * whose fields are blank while the compiled file has the defaults is
+			 * a screen that lies.
+			 */
+			6 => static function (): void {
+				$settings = Plugin::instance()->settings();
+
+				$settings->replace( $settings->all() );
+			},
 		);
+	}
+
+	/**
+	 * Take the delimiters off every stored regular expression.
+	 *
+	 * @param array<string, mixed> $values Settings, modified in place.
+	 */
+	private static function unwrap_regex_conditions( array &$values ): void {
+		if ( ! isset( $values['rules'] ) || ! is_array( $values['rules'] ) ) {
+			return;
+		}
+
+		foreach ( $values['rules'] as $rule_index => $rule ) {
+			if ( ! is_array( $rule ) || ! is_array( $rule['settings']['conditions'] ?? null ) ) {
+				continue;
+			}
+
+			foreach ( $rule['settings']['conditions'] as $index => $condition ) {
+				if ( ! is_array( $condition ) || 'regex' !== ( $condition['operator'] ?? '' ) ) {
+					continue;
+				}
+
+				$stored = (string) ( $condition['value'] ?? '' );
+				$body   = Condition_Rule_Type_Base::regex_body( $stored );
+
+				if ( $body === $stored ) {
+					continue;
+				}
+
+				$values['rules'][ $rule_index ]['settings']['conditions'][ $index ]['value'] = $body;
+
+				/*
+				 * An `i` flag meant case-insensitive, which is now the
+				 * unchecked box. Read from the tail of the stored pattern,
+				 * because that is where the answer was.
+				 */
+				$flags = substr( $stored, strrpos( $stored, $stored[0] ) + 1 );
+
+				$values['rules'][ $rule_index ]['settings']['conditions'][ $index ]['case_sensitive'] =
+					false === stripos( $flags, 'i' );
+			}
+		}
 	}
 
 	/**

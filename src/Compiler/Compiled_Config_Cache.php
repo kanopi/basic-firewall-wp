@@ -190,6 +190,8 @@ TXT;
 	 * @param list<string> $problems         Problems encountered.
 	 */
 	private function record_meta( array $connection_paths, bool $written, array $problems ): void {
+		$this->write_connection_paths( $connection_paths );
+
 		update_option(
 			self::META_OPTION,
 			array(
@@ -201,6 +203,39 @@ TXT;
 			),
 			false
 		);
+	}
+
+	/**
+	 * Mirror the connection paths into the private directory.
+	 *
+	 * The normal path reads this list from an option. The wp-config.php path
+	 * runs before WordPress exists and has no options, so without a copy on
+	 * disk it could not inject credentials and database-backed block storage
+	 * fell open there. The file carries path strings only -- `[storage][...]`
+	 * and the like -- and never a credential, so the invariant that no password
+	 * reaches disk is unchanged.
+	 *
+	 * A failure to write is not fatal: the early path then finds no file and
+	 * behaves as it did before, which Site Health reports.
+	 *
+	 * @param list<string> $connection_paths Where credentials must be injected.
+	 */
+	private function write_connection_paths( array $connection_paths ): void {
+		$path = Plugin::instance()->paths()->connection_paths_file();
+
+		if ( array() === $connection_paths ) {
+			if ( file_exists( $path ) ) {
+				wp_delete_file( $path );
+			}
+
+			return;
+		}
+
+		$json = wp_json_encode( array_values( $connection_paths ) );
+
+		if ( is_string( $json ) ) {
+			$this->write_atomically( $path, $json );
+		}
 	}
 
 	/**
@@ -255,6 +290,12 @@ TXT;
 
 		if ( is_readable( $path ) ) {
 			wp_delete_file( $path );
+		}
+
+		$sidecar = Plugin::instance()->paths()->connection_paths_file();
+
+		if ( file_exists( $sidecar ) ) {
+			wp_delete_file( $sidecar );
 		}
 
 		delete_option( self::META_OPTION );

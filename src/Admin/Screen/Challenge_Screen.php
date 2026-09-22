@@ -58,6 +58,7 @@ final class Challenge_Screen extends Screen {
 		$all['challenge']['cookie_name'] = $this->posted( 'cookie_name' );
 		$all['challenge']['header_name'] = $this->posted( 'header_name' );
 		$all['challenge']['audience']    = $this->posted( 'audience' );
+		$all['challenge']['ttl']         = (int) $this->posted( 'ttl', '3600' );
 
 		$secret = $this->posted( 'secret' );
 
@@ -147,6 +148,14 @@ final class Challenge_Screen extends Screen {
 		);
 
 		$this->row(
+			__( 'A solved challenge lasts', 'basic-firewall' ),
+			self::text( 'ttl', (string) $settings->get( 'challenge.ttl', 3600 ), 'number', 'min="60" max="2592000"' ) . ' ' . esc_html__( 'seconds', 'basic-firewall' ),
+			wp_kses_post(
+				__( 'A <strong>ceiling as well as a default</strong>. A challenge rule asking for longer than this is granted this instead, quietly — so if a rule\'s expiry looks like it is being ignored, this is why.<br><br>It is a ceiling because the lifetime used to arrive in the interstitial\'s own form: solve one puzzle, ask for thirty-one years, and hold a signed exemption from every challenge rule for three decades. An hour suits a visitor who hit a rule once; raise it for a rule people trip over repeatedly, and weigh that against how long a pass earned by a script stays good.', 'basic-firewall' )
+			)
+		);
+
+		$this->row(
 			__( 'Challenge path', 'basic-firewall' ),
 			self::text( 'path', (string) $settings->get( 'challenge.path', '' ) ),
 			__( 'Where the interstitial posts its answer. It must not collide with a real route on this site.', 'basic-firewall' )
@@ -165,7 +174,23 @@ final class Challenge_Screen extends Screen {
 
 		echo '</tbody></table>';
 
-		$this->render_provider_options( $provider );
+		/*
+		 * Every provider's settings, shown by condition on the select above.
+		 *
+		 * Only the saved provider's section used to render, which made the
+		 * settings unreachable at the one moment somebody wants them: pick
+		 * Google reCAPTCHA, and nothing appears -- no keys, and no way to say
+		 * whether you want the checkbox or the invisible scoring one -- until
+		 * the form has been saved and reloaded. Choosing a provider and
+		 * configuring it is one decision, so it is one screenful.
+		 */
+		foreach ( array_keys( Library_Map::CHALLENGE_PROVIDERS ) as $name ) {
+			printf( '<div data-bfw-show-when="provider:%s">', esc_attr( (string) $name ) );
+
+			$this->render_provider_options( (string) $name );
+
+			echo '</div>';
+		}
 
 		$this->close_form();
 	}
@@ -272,16 +297,45 @@ final class Challenge_Screen extends Screen {
 				__( '<strong>Prefer v2 unless you have a reason not to.</strong> v3 never asks the visitor for anything, which sounds strictly better and is not: a real person who scores below your threshold has no puzzle to solve and no retry that helps. On a route people actually need, that is a lockout with no way out.', 'basic-firewall' )
 			);
 
+			/*
+			 * The version decides which of the rest apply, so it decides which
+			 * are shown. Four options labelled "(v2 only)" and "(v3 only)" in a
+			 * flat list is a reader working out which half to ignore.
+			 */
 			$this->row(
-				__( 'Minimum score (v3)', 'basic-firewall' ),
-				self::text( 'options[recaptcha][min_score]', (string) ( $options['min_score'] ?? 0.5 ), 'number', 'min="0" max="1" step="0.05"' ),
-				__( 'Pick this from your own traffic rather than from the 0.5 in Google\'s documentation.', 'basic-firewall' )
+				__( 'Widget appearance', 'basic-firewall' ),
+				self::select(
+					'options[recaptcha][theme]',
+					array(
+						'light' => __( 'Light', 'basic-firewall' ),
+						'dark'  => __( 'Dark', 'basic-firewall' ),
+					),
+					(string) ( $options['theme'] ?? 'light' )
+				)
+				. ' ' . self::select(
+					'options[recaptcha][size]',
+					array(
+						'normal'  => __( 'Normal', 'basic-firewall' ),
+						'compact' => __( 'Compact', 'basic-firewall' ),
+					),
+					(string) ( $options['size'] ?? 'normal' )
+				),
+				esc_html__( 'How the checkbox looks on the interstitial. The firewall\'s page is plain, so light and normal suit it; dark and compact are there for a site where they do not.', 'basic-firewall' ),
+				'options[recaptcha][version]:v2'
 			);
 
 			$this->row(
-				__( 'Action name (v3)', 'basic-firewall' ),
+				__( 'Minimum score', 'basic-firewall' ),
+				self::text( 'options[recaptcha][min_score]', (string) ( $options['min_score'] ?? 0.5 ), 'number', 'min="0" max="1" step="0.05"' ),
+				esc_html__( 'Pick this from your own traffic rather than from the 0.5 in Google\'s documentation. Anyone scoring below it is refused with no puzzle to solve.', 'basic-firewall' ),
+				'options[recaptcha][version]:v3'
+			);
+
+			$this->row(
+				__( 'Action name', 'basic-firewall' ),
 				self::text( 'options[recaptcha][action]', (string) ( $options['action'] ?? 'firewall' ) ),
-				__( 'Minted into the token and required back unchanged. A v3 token comes from the site key rather than from any particular page, so without this check a token produced by any other reCAPTCHA v3 call on your site — a search box, a newsletter signup — would satisfy the firewall challenge too.', 'basic-firewall' )
+				esc_html__( 'Minted into the token and required back unchanged. A v3 token comes from the site key rather than from any particular page, so without this check a token produced by any other reCAPTCHA v3 call on your site — a search box, a newsletter signup — would satisfy the firewall challenge too.', 'basic-firewall' ),
+				'options[recaptcha][version]:v3'
 			);
 		}
 

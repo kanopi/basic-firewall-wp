@@ -9,7 +9,10 @@ declare( strict_types = 1 );
 
 namespace Kanopi\BasicFirewall\RuleType\Types;
 
+use Kanopi\BasicFirewall\RuleType\Has_Sources;
 use Kanopi\BasicFirewall\RuleType\Rule_Type_Base;
+use Kanopi\BasicFirewall\Support\Paths;
+use Symfony\Component\Yaml\Yaml;
 use Kanopi\Firewall\Plugins\IpAddress;
 
 /**
@@ -21,6 +24,8 @@ use Kanopi\Firewall\Plugins\IpAddress;
  * itself.
  */
 final class Ip_Address extends Rule_Type_Base {
+
+	use Has_Sources;
 
 	/**
 	 * {@inheritDoc}
@@ -68,7 +73,22 @@ final class Ip_Address extends Rule_Type_Base {
 	 * {@inheritDoc}
 	 */
 	public function default_settings(): array {
-		return array( 'addresses' => array() );
+		return array(
+			'addresses' => array(),
+			'sources'   => array(),
+		);
+	}
+
+	/**
+	 * {@inheritDoc}
+	 */
+	public function settings_help(): array {
+		return array(
+			'addresses' => array(
+				'label'       => __( 'Addresses', 'basic-firewall' ),
+				'description' => __( 'One per line. A single address, a CIDR block such as <code>203.0.113.0/24</code>, or a start-end range. IPv4 and IPv6. Leave this empty when the rule takes its addresses from a referenced list below.', 'basic-firewall' ),
+			),
+		);
 	}
 
 	/**
@@ -95,8 +115,13 @@ final class Ip_Address extends Rule_Type_Base {
 			$clean[] = $address;
 		}
 
-		return array( 'addresses' => $clean );
+		return array(
+			'addresses' => $clean,
+			'sources'   => $this->validate_sources( (array) ( $settings['sources'] ?? array() ), $errors ),
+		);
 	}
+
+
 
 	/**
 	 * Whether an entry is an address, a CIDR block, or a start-end range.
@@ -137,6 +162,52 @@ final class Ip_Address extends Rule_Type_Base {
 	/**
 	 * {@inheritDoc}
 	 *
+	 * `cidr`, because the library's validator of that name accepts an address,
+	 * a CIDR block or a start-end range -- exactly what the IpAddress plugin
+	 * accepts. A feed that starts emitting hostnames is then rejected at
+	 * refresh rather than contributing entries that match nothing.
+	 */
+	public static function source_validator_default(): string {
+		return 'cidr';
+	}
+
+	/**
+	 * No template: an entry from an address list is already an address.
+	 *
+	 * The IpAddress plugin is the one that takes bare values, which is why
+	 * every other type has to shape its entries into rules and this one does
+	 * not.
+	 *
+	 * @param array<string, mixed> $source The referenced list.
+	 *
+	 * @return string|null
+	 */
+	protected function source_template( array $source ) {
+		$template = trim( (string) ( $source['template'] ?? '' ) );
+
+		return '' !== $template ? $template : null;
+	}
+
+	/**
+	 * {@inheritDoc}
+	 *
+	 * A referenced list can be behind a credential -- a paid threat feed, an
+	 * internal allowlist service. Those live in the advanced block as
+	 * `upstream.auth`, and are named here so the exporter strips them and says
+	 * it did, exactly as it does for a Turnstile secret or a database password.
+	 */
+	public function secret_settings(): array {
+		return array(
+			'sources.*.advanced.upstream.auth.token',
+			'sources.*.advanced.upstream.auth.password',
+			'sources.*.advanced.upstream.auth.value',
+			'sources.*.advanced.upstream.headers.*',
+		);
+	}
+
+	/**
+	 * {@inheritDoc}
+	 *
 	 * @param array<string, mixed> $rule Described by the interface.
 	 */
 	public function compile( array $rule ): array {
@@ -147,8 +218,15 @@ final class Ip_Address extends Rule_Type_Base {
 		// YAML rather than a sequence.
 		$entry['config'] = array_values( $rule['settings']['addresses'] ?? array() );
 
+		$sources = $this->compile_sources( $rule );
+
+		if ( array() !== $sources ) {
+			$entry['metadata']['sources'] = $sources;
+		}
+
 		return $entry;
 	}
+
 
 	/**
 	 * {@inheritDoc}

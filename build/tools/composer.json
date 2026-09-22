@@ -1,0 +1,14 @@
+{
+    "name": "kanopi/basic-firewall-wp-build-tools",
+    "description": "Build-only tooling. Kept out of the plugin's own composer.json because the plugin pins config.platform to its PHP floor, and PHP-Scoper does not run there: 0.18 needs PHP 8.2 and its own dependencies need 8.3. The builder's PHP does not affect the zip -- scoping rewrites namespaces in text -- so the two trees are resolved independently.",
+    "license": "GPL-2.0-or-later",
+    "require": {
+        "humbug/php-scoper": "^0.18"
+    },
+    "config": {
+        "platform": {
+            "php": "8.3.0"
+        },
+        "sort-packages": true
+    }
+}

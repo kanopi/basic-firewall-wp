@@ -70,13 +70,14 @@ final class Log_Reader {
 	}
 
 	/**
-	 * The most recent entries.
+	 * The most recent entries, optionally filtered.
 	 *
-	 * @param int $limit How many.
+	 * @param int                  $limit   How many.
+	 * @param array<string, mixed> $filters Rule, level, and since as a timestamp.
 	 *
 	 * @return list<array<string, mixed>>
 	 */
-	public function recent( int $limit = 200 ): array {
+	public function recent( int $limit = 200, array $filters = array() ): array {
 		global $wpdb;
 
 		$table = $this->table();
@@ -86,20 +87,16 @@ final class Log_Reader {
 		}
 
 		$limit = max( 1, min( 1000, $limit ) );
+		$safe  = $this->quoted_table( $table );
 
-		/*
-		 * The table name is assembled from a stored setting plus this site's
-		 * prefix, so it cannot be parameterised -- an identifier is not a value.
-		 * It is passed through esc_sql() and stripped of backticks rather than
-		 * trusted, because the stored value reaches here from an imported
-		 * document as readily as from the form.
-		 */
-		$safe = '`' . str_replace( '`', '', esc_sql( $table ) ) . '`';
+		list( $where, $parameters ) = $this->where( $filters );
+
+		$parameters[] = $limit;
 
 		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 		$rows = $wpdb->get_results(
 			// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-			$wpdb->prepare( "SELECT * FROM {$safe} ORDER BY id DESC LIMIT %d", $limit ),
+			$wpdb->prepare( "SELECT * FROM {$safe} {$where} ORDER BY id DESC LIMIT %d", $parameters ),
 			ARRAY_A
 		);
 
@@ -113,16 +110,140 @@ final class Log_Reader {
 			$context = json_decode( (string) ( $row['context'] ?? '{}' ), true );
 			$context = is_array( $context ) ? $context : array();
 
+			/*
+			 * Read from the columns, falling back to the context.
+			 *
+			 * The library gives this table dedicated columns for everything
+			 * worth asking about -- who, what they asked for, which rule
+			 * answered -- and this method used to read three of them out of the
+			 * JSON blob instead. `time` was read from `created_at`, a column
+			 * that does not exist, so the When column on the log screen was
+			 * empty for every row ever written.
+			 */
+			$logged = (int) ( $row['logged_at'] ?? 0 );
+
 			$entries[] = array(
-				'time'    => (string) ( $row['created_at'] ?? $row['time'] ?? '' ),
-				'level'   => (string) ( $row['level_name'] ?? $row['level'] ?? '' ),
-				'rule'    => (string) ( $context['name'] ?? $context['plugin'] ?? '' ),
-				'ip'      => (string) ( $context['ip'] ?? $context['client_ip'] ?? '' ),
-				'message' => (string) ( $row['message'] ?? '' ),
-				'context' => $context,
+				'id'         => (int) ( $row['id'] ?? 0 ),
+				'timestamp'  => $logged,
+				'time'       => $logged > 0 ? wp_date( 'Y-m-d H:i:s', $logged ) : '',
+				'level'      => (string) ( $row['level'] ?? $context['level'] ?? '' ),
+				'rule'       => (string) ( $row['plugin_name'] ?? $context['name'] ?? '' ),
+				'rule_type'  => (string) ( $row['plugin_type'] ?? '' ),
+				'ip'         => (string) ( $row['client_ip'] ?? $context['client_ip'] ?? '' ),
+				'method'     => (string) ( $row['method'] ?? '' ),
+				'path'       => (string) ( $row['path'] ?? '' ),
+				'host'       => (string) ( $row['host'] ?? '' ),
+				'user_agent' => (string) ( $row['user_agent'] ?? '' ),
+				'request_id' => (string) ( $row['request_id'] ?? '' ),
+				'message'    => (string) ( $row['message'] ?? '' ),
+				'context'    => $context,
 			);
 		}
 
 		return $entries;
+	}
+
+	/**
+	 * The rules that appear in the log, for the filter.
+	 *
+	 * Read from the log rather than from the settings, deliberately: the useful
+	 * question is "which rules have actually fired", and a rule deleted last
+	 * week is still the reason a client was blocked last week.
+	 *
+	 * @return list<string>
+	 */
+	public function rules(): array {
+		return $this->distinct( 'plugin_name' );
+	}
+
+	/**
+	 * The levels that appear in the log, for the filter.
+	 *
+	 * @return list<string>
+	 */
+	public function levels(): array {
+		return $this->distinct( 'level' );
+	}
+
+	/**
+	 * Distinct non-empty values of one column.
+	 *
+	 * @param string $column Column name, from this class only.
+	 *
+	 * @return list<string>
+	 */
+	private function distinct( string $column ): array {
+		global $wpdb;
+
+		$table = $this->table();
+
+		if ( null === $table || ! $this->is_available() ) {
+			return array();
+		}
+
+		$safe   = $this->quoted_table( $table );
+		$column = '`' . str_replace( '`', '', $column ) . '`';
+
+		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		$values = $wpdb->get_col( "SELECT DISTINCT {$column} FROM {$safe} WHERE {$column} != '' ORDER BY {$column} ASC" );
+
+		return is_array( $values ) ? array_values( array_map( 'strval', $values ) ) : array();
+	}
+
+	/**
+	 * Build the WHERE clause and its parameters.
+	 *
+	 * Every filter is a value rather than an identifier, so every one of them
+	 * is parameterised. The table name is the only thing here that cannot be,
+	 * and it is quoted rather than trusted -- see quoted_table().
+	 *
+	 * @param array<string, mixed> $filters Rule, level and since.
+	 *
+	 * @return array{0: string, 1: list<mixed>}
+	 */
+	private function where( array $filters ): array {
+		$clauses    = array();
+		$parameters = array();
+
+		$rule = trim( (string) ( $filters['rule'] ?? '' ) );
+
+		if ( '' !== $rule ) {
+			$clauses[]    = 'plugin_name = %s';
+			$parameters[] = $rule;
+		}
+
+		$level = trim( (string) ( $filters['level'] ?? '' ) );
+
+		if ( '' !== $level ) {
+			$clauses[]    = 'level = %s';
+			$parameters[] = $level;
+		}
+
+		$since = (int) ( $filters['since'] ?? 0 );
+
+		if ( $since > 0 ) {
+			$clauses[]    = 'logged_at >= %d';
+			$parameters[] = $since;
+		}
+
+		return array(
+			array() === $clauses ? '' : 'WHERE ' . implode( ' AND ', $clauses ),
+			$parameters,
+		);
+	}
+
+	/**
+	 * The table name, quoted for interpolation.
+	 *
+	 * The name is assembled from a stored setting plus this site's prefix, so
+	 * it cannot be parameterised -- an identifier is not a value. It is passed
+	 * through esc_sql() and stripped of backticks rather than trusted, because
+	 * the stored value reaches here from an imported document as readily as
+	 * from the form.
+	 *
+	 * @param string $table Table name.
+	 */
+	private function quoted_table( string $table ): string {
+		return '`' . str_replace( '`', '', esc_sql( $table ) ) . '`';
 	}
 }

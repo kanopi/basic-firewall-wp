@@ -82,6 +82,19 @@ interface Rule_Type {
 	public function supports_sources(): bool;
 
 	/**
+	 * Presentation for individual settings keys.
+	 *
+	 * Keyed by settings key, each entry optionally carrying `label`,
+	 * `description` and `choices`. Anything absent falls back to what the rule
+	 * screen can derive from the default value, which is a humanised key and a
+	 * control picked from the type -- adequate for `addresses`, and not for a
+	 * field whose whole meaning is in what it does rather than what it holds.
+	 *
+	 * @return array<string, array<string, mixed>>
+	 */
+	public function settings_help(): array;
+
+	/**
 	 * The settings a new rule of this type starts with.
 	 *
 	 * @return array<string, mixed>

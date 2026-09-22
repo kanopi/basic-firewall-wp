@@ -12,7 +12,9 @@ namespace Kanopi\BasicFirewall\Admin\Screen;
 use Kanopi\BasicFirewall\Admin\Admin;
 use Kanopi\BasicFirewall\Admin\Notices;
 use Kanopi\BasicFirewall\Admin\Screen;
+use Kanopi\BasicFirewall\RuleType\Rule_Type;
 use Kanopi\BasicFirewall\Transfer\Exporter;
+use Kanopi\BasicFirewall\Transfer\Importer;
 
 /**
  * Lists the rules, and the rule-type chooser for adding one.
@@ -61,7 +63,140 @@ final class Rules_Screen extends Screen {
 
 		if ( 'export' === $action ) {
 			$this->handle_export();
+
+			return;
 		}
+
+		if ( 'import' === $action ) {
+			$this->handle_import();
+		}
+	}
+
+	/**
+	 * Bring one exported rule back in.
+	 *
+	 * The counterpart to the export button, and it was missing: a rule could be
+	 * sent out of a site and there was nowhere on this screen to send one back.
+	 * The full Import screen would take the document -- it is an ordinary
+	 * configuration document with one rule in it -- but only somebody who
+	 * already knew that would find it, and "paste your rule into the screen
+	 * labelled Import a configuration" reads like a way to overwrite the site.
+	 *
+	 * Always a merge, never a replace. A document arriving here holds one rule,
+	 * and the mode that empties every other section is not a thing anyone
+	 * reaches for from a list of rules.
+	 */
+	private function handle_import(): void {
+		if ( ! $this->verify() ) {
+			return;
+		}
+
+		$yaml = $this->uploaded_document();
+
+		if ( '' === trim( $yaml ) ) {
+			$yaml = $this->posted_textarea( 'document' );
+		}
+
+		if ( '' === trim( $yaml ) ) {
+			Notices::add( __( 'Paste a rule, or choose a file to upload.', 'basic-firewall' ), 'error' );
+
+			$this->redirect( $this->slug() );
+		}
+
+		$importer = new Importer();
+		$preview  = $importer->preview( $yaml, 'merge' );
+
+		if ( ! $preview['ok'] ) {
+			Notices::add(
+				sprintf(
+					/* translators: %s: the parser's complaint. */
+					__( 'That document could not be read, so nothing was imported: %s', 'basic-firewall' ),
+					esc_html( (string) $preview['error'] )
+				),
+				'error'
+			);
+
+			$this->redirect( $this->slug() );
+		}
+
+		$summary = (array) $preview['summary'];
+		$new     = (array) ( $summary['rules_new'] ?? array() );
+		$changed = (array) ( $summary['rules_overwritten'] ?? array() );
+
+		if ( array() === $new && array() === $changed ) {
+			Notices::add(
+				__( 'That document contains no rules. Use the Import screen for a whole configuration.', 'basic-firewall' ),
+				'error'
+			);
+
+			$this->redirect( $this->slug() );
+		}
+
+		$result = $importer->import( $yaml, 'merge' );
+
+		foreach ( $result['problems'] as $problem ) {
+			Notices::add(
+				sprintf( '<strong>%s</strong>: %s', esc_html( (string) $problem['path'] ), esc_html( (string) $problem['message'] ) ),
+				'warning'
+			);
+		}
+
+		if ( ! $result['ok'] ) {
+			Notices::add(
+				sprintf(
+					/* translators: %s: the reason. */
+					__( 'Nothing was imported: %s', 'basic-firewall' ),
+					esc_html( (string) $result['error'] )
+				),
+				'error'
+			);
+
+			$this->redirect( $this->slug() );
+		}
+
+		/*
+		 * Both counts are reported, and overwriting is named rather than
+		 * folded into a total. Importing a rule whose identifier a site already
+		 * uses replaces that rule, and somebody who meant to add one needs to
+		 * be told that is not what happened.
+		 */
+		Notices::add(
+			sprintf(
+				/* translators: 1: comma-separated new rule ids, 2: comma-separated replaced rule ids. */
+				__( 'Imported. Added: %1$s. Replaced: %2$s.', 'basic-firewall' ),
+				array() === $new ? __( 'nothing', 'basic-firewall' ) : esc_html( implode( ', ', array_map( 'strval', $new ) ) ),
+				array() === $changed ? __( 'nothing', 'basic-firewall' ) : esc_html( implode( ', ', array_map( 'strval', $changed ) ) )
+			)
+		);
+
+		$this->redirect( $this->slug() );
+	}
+
+	/**
+	 * The uploaded file's contents, or an empty string.
+	 *
+	 * Read from the temporary upload rather than moved into the site: the
+	 * document is parsed and thrown away, and a configuration file left in
+	 * the uploads directory would be readable over the web.
+	 */
+	private function uploaded_document(): string {
+		// phpcs:ignore WordPress.Security.NonceVerification.Missing -- verify() ran in handle_import() before this was called.
+		$upload = isset( $_FILES['document']['tmp_name'] ) ? sanitize_text_field( wp_unslash( (string) $_FILES['document']['tmp_name'] ) ) : '';
+
+		/*
+		 * is_uploaded_file() is the check that matters, and it is not
+		 * interchangeable with checking the path looks reasonable: it asks PHP
+		 * whether this exact path came from this request's upload, which is
+		 * what stops a crafted field naming a file already on disk and having
+		 * the importer read it back to us.
+		 */
+		if ( '' === $upload || ! is_uploaded_file( $upload ) ) {
+			return '';
+		}
+
+		$contents = file_get_contents( $upload ); // phpcs:ignore WordPress.WP.AlternativeFunctions -- a local temporary file this request just created, not a remote URL.
+
+		return false === $contents ? '' : $contents;
 	}
 
 	/**
@@ -149,6 +284,58 @@ final class Rules_Screen extends Screen {
 		);
 
 		$this->render_table();
+		$this->render_import();
+	}
+
+	/**
+	 * Bring a rule in from a file or the clipboard.
+	 *
+	 * Below the table and folded away, because it is the rarer half of a pair:
+	 * the export button sits on every row, and this is where what comes out of
+	 * one site goes back into another.
+	 */
+	private function render_import(): void {
+		if ( ! Admin::can_manage() ) {
+			return;
+		}
+
+		printf(
+			'<details class="bfw-import"><summary>%s</summary>',
+			esc_html__( 'Import a rule', 'basic-firewall' )
+		);
+
+		printf(
+			'<p>%s</p>',
+			esc_html__( 'Paste a rule exported from this or another site, or upload the file. It is merged into the rules below: a rule whose identifier is already in use here is replaced, and every other rule and setting is left alone.', 'basic-firewall' )
+		);
+
+		printf(
+			'<form method="post" enctype="multipart/form-data" action="%s">',
+			esc_url( Admin::url( $this->slug(), array( 'action' => 'import' ) ) )
+		);
+
+		$this->nonce_field();
+
+		printf(
+			'<p><input type="file" name="document" accept=".yml,.yaml,text/yaml,text/plain" /></p><p>%s</p>',
+			esc_html__( 'or paste it:', 'basic-firewall' )
+		);
+
+		printf(
+			'<p><textarea name="document" rows="8" class="large-text code" data-bfw-yaml="1" placeholder="%s"></textarea></p>',
+			esc_attr__( "version: 1\nrules:\n  - id: my-rule\n    type: ip_address\n    ...", 'basic-firewall' )
+		);
+
+		printf(
+			'<p>%s</p>',
+			wp_kses_post(
+				__( 'An export has its credentials stripped, so a rule that needed one — a reputation API key, a list behind a token — arrives without it and keeps whatever this site already had under that identifier. Nothing is overwritten with a blank.', 'basic-firewall' )
+			)
+		);
+
+		submit_button( __( 'Import rule', 'basic-firewall' ), 'secondary' );
+
+		echo '</form></details>';
 	}
 
 	/**
@@ -172,17 +359,23 @@ final class Rules_Screen extends Screen {
 			static fn ( array $a, array $b ): int => ( (int) ( $a['weight'] ?? 0 ) ) <=> ( (int) ( $b['weight'] ?? 0 ) )
 		);
 
-		echo '<table class="widefat striped"><thead><tr>';
+		echo '<table class="widefat striped bfw-rules"><thead><tr>';
 
+		/*
+		 * Keyed by column rather than positional, following the `column-*`
+		 * convention WordPress uses on its own list tables. The stylesheet
+		 * needs to reach the type column to stop it wrapping, and nth-child
+		 * would have tied that to the order the columns happen to be in today.
+		 */
 		foreach ( array(
-			__( 'Rule', 'basic-firewall' ),
-			__( 'Type', 'basic-firewall' ),
-			__( 'Response', 'basic-firewall' ),
-			__( 'Weight', 'basic-firewall' ),
-			__( 'Summary', 'basic-firewall' ),
-			__( 'Actions', 'basic-firewall' ),
-		) as $heading ) {
-			printf( '<th>%s</th>', esc_html( $heading ) );
+			'rule'     => __( 'Rule', 'basic-firewall' ),
+			'type'     => __( 'Type', 'basic-firewall' ),
+			'response' => __( 'Response', 'basic-firewall' ),
+			'weight'   => __( 'Weight', 'basic-firewall' ),
+			'summary'  => __( 'Summary', 'basic-firewall' ),
+			'actions'  => __( 'Actions', 'basic-firewall' ),
+		) as $column => $heading ) {
+			printf( '<th class="column-%s">%s</th>', esc_attr( $column ), esc_html( $heading ) );
 		}
 
 		echo '</tr></thead><tbody>';
@@ -194,7 +387,7 @@ final class Rules_Screen extends Screen {
 			echo '<tr>';
 
 			printf(
-				'<td><strong>%s</strong>%s<br><code>%s</code></td>',
+				'<td class="column-rule"><strong>%s</strong>%s<br><code>%s</code></td>',
 				esc_html( (string) ( $rule['label'] ?? $id ) ),
 				empty( $rule['enabled'] ) ? ' <em>(' . esc_html__( 'disabled', 'basic-firewall' ) . ')</em>' : '',
 				esc_html( $id )
@@ -202,31 +395,26 @@ final class Rules_Screen extends Screen {
 
 			if ( null === $type ) {
 				printf(
-					'<td><span style="color:#d63638">%s</span><br><code>%s</code></td>',
+					'<td class="column-type"><span>%s</span><br><code>%s</code></td>',
 					esc_html__( 'Unknown type', 'basic-firewall' ),
 					esc_html( (string) ( $rule['type'] ?? '' ) )
 				);
 			} elseif ( ! $type->is_available() ) {
 				printf(
-					'<td>%s<br><span style="color:#d63638">%s</span></td>',
+					'<td class="column-type">%s<br><span>%s</span></td>',
 					esc_html( $type->label() ),
 					esc_html__( 'Not available — this rule is skipped', 'basic-firewall' )
 				);
 			} else {
-				printf( '<td>%s</td>', esc_html( $type->label() ) );
+				printf( '<td class="column-type">%s</td>', esc_html( $type->label() ) );
 			}
 
-			printf( '<td>%s</td>', esc_html( (string) ( $rule['response'] ?? '' ) ) );
-			printf( '<td>%d</td>', (int) ( $rule['weight'] ?? 0 ) );
+			printf( '<td class="column-response">%s</td>', esc_html( (string) ( $rule['response'] ?? '' ) ) );
+			printf( '<td class="column-weight">%d</td>', (int) ( $rule['weight'] ?? 0 ) );
 
-			$summary = null === $type ? array() : $type->summarize( (array) ( $rule['settings'] ?? array() ) );
+			printf( '<td class="column-summary">%s</td>', esc_html( $this->summarize( $type, (array) ( $rule['settings'] ?? array() ) ) ) );
 
-			printf(
-				'<td>%s</td>',
-				esc_html( implode( ' ', array_map( 'strval', array_slice( $summary, 0, 3 ) ) ) )
-			);
-
-			echo '<td>';
+			echo '<td class="column-actions">';
 
 			printf(
 				'<a href="%s">%s</a> | ',
@@ -386,5 +574,35 @@ final class Rules_Screen extends Screen {
 		);
 
 		echo '</form>';
+	}
+
+	/**
+	 * One rule's summary, or a note that it could not be read.
+	 *
+	 * Wrapped because this is a listing, and a listing is the one screen that
+	 * has to survive bad data: a rule whose settings are in a shape its type
+	 * did not expect used to throw here, and the throw took the whole Rules
+	 * screen with it -- so the page you would go to in order to find and fix
+	 * the rule was the page that would not load.
+	 *
+	 * Settings reach this method from an imported document as readily as from
+	 * the rule form, and only the form validates them, so "a shape the type did
+	 * not expect" is a supported route rather than a hypothetical one.
+	 *
+	 * @param Rule_Type|null       $type     The rule type, or null when unknown.
+	 * @param array<string, mixed> $settings The rule's settings.
+	 */
+	private function summarize( ?Rule_Type $type, array $settings ): string {
+		if ( null === $type ) {
+			return '';
+		}
+
+		try {
+			$summary = $type->summarize( $settings );
+		} catch ( \Throwable $e ) {
+			return __( 'These settings could not be read. Open the rule to repair it.', 'basic-firewall' );
+		}
+
+		return implode( ' ', array_map( 'strval', array_slice( $summary, 0, 3 ) ) );
 	}
 }
