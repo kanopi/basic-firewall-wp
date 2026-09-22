@@ -976,6 +976,7 @@ wp basic-firewall status            # what the firewall is doing right now
 wp basic-firewall rules             # rules in evaluation order
 wp basic-firewall rebuild           # recompile the configuration
 wp basic-firewall sources           # available presets
+wp basic-firewall refresh-sources   # re-fetch the lists rules reference
 
 wp basic-firewall check IP          # is this address blocked?
 wp basic-firewall block IP          # block it
@@ -993,6 +994,21 @@ status reports whether the *query* ran. Read the `blocked` field.
 
 Anything destructive refuses to run without `--yes` and exits non-zero when it
 refuses. It will never exit 0 having done nothing.
+
+`sources` lists **presets**; `refresh-sources` re-fetches the **lists a rule
+references**. Two different things, and the names do not currently say so.
+
+All of it is covered by `tests/cli/commands.sh`, which runs `wp` for real rather
+than calling PHP, and so is the only place the subcommand registration and the
+exit statuses are checked:
+
+```bash
+BFW_WP="ddev wp" bash tests/cli/commands.sh
+```
+
+Agreeing to a destructive command is opt-in through `BFW_CLI_DESTRUCTIVE=1`, so
+running it against a site you care about does not empty its block list. CI opts
+in, because its site goes away with the runner.
 
 ## Multisite
 
