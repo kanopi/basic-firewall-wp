@@ -1028,6 +1028,30 @@ shows the resulting table names.
 There is no network-wide settings screen. Configuring 200 sites means
 `wp site list --field=url` and a loop.
 
+## Continuous integration
+
+CircleCI, in `.circleci/config.yml`. Nine jobs, and none of them advisory:
+
+| Job | Runs |
+|---|---|
+| `static` | `check-platform-reqs --no-dev`, PHPCS, PHPStan — on 8.1, the declared floor |
+| `unit-php-*` | The unit suite on 8.1, 8.2, 8.3 and 8.4 |
+| `integration-*` | Integration, end-to-end over real HTTP, and the WP-CLI suite, against WP 6.4/PHP 8.1, WP latest/PHP 8.3 and WP nightly/PHP 8.4 |
+| `package` | Builds the zip and installs it on a clean WordPress with the Composer binary removed from `PATH` |
+
+`static` runs on the floor deliberately: the lock is resolved for PHP 8.1 by
+`config.platform`, and `check-platform-reqs` there is what stops a dependency
+bump quietly raising the version the plugin claims to support. `package` runs on
+8.3 because PHP-Scoper needs it — the builder's PHP never reaches the zip, since
+the tree it rewrites comes from the plugin's own lock.
+
+Every job can be reproduced locally in the image CI uses:
+
+```bash
+docker run --rm -v "$PWD":/src:ro cimg/php:8.1 bash -c \
+  'cp -a /src/. /w/ && cd /w && composer install && composer lint && composer analyse'
+```
+
 ## Building a release
 
 ```bash
