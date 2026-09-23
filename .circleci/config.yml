@@ -234,28 +234,46 @@ workflows:
       - unit:
           matrix:
             parameters:
-              # 8.1 is the floor and 8.4 is what the library is developed
-              # against. Testing only the floor would let the plugin rot on
-              # modern PHP; testing only the top would let it break on the
-              # version it claims.
-              php: ["8.1", "8.2", "8.3", "8.4"]
+              # 8.1 is the floor and 8.5 is the newest release. Testing only the
+              # floor would let the plugin rot on modern PHP; testing only the
+              # top would let it break on the version it claims. kanopi/firewall
+              # supports 8.1 to 8.5, so the plugin's matrix covers the library's
+              # rather than a subset of it.
+              php: ["8.1", "8.2", "8.3", "8.4", "8.5"]
           name: unit-php-<< matrix.php >>
+      # The oldest WordPress the plugin header claims, on the oldest PHP.
       - integration:
           matrix:
             parameters:
               php: ["8.1"]
               wordpress: ["6.4"]
           name: integration-wp6.4-php8.1
+
+      # Current WordPress on current PHP.
       - integration:
           matrix:
             parameters:
               php: ["8.3"]
               wordpress: ["latest"]
           name: integration-wplatest-php8.3
+
+      # Next WordPress, so a break is found before a release rather than after.
       - integration:
           matrix:
             parameters:
               php: ["8.4"]
               wordpress: ["nightly"]
           name: integration-wpnightly-php8.4
+
+      # Newest PHP, on the same WordPress as the job above it. The pair is the
+      # point: these two differ only in PHP, so a failure here that passes there
+      # says "PHP 8.5" and not "WordPress trunk moved". Integration is where
+      # every defect this plugin has shipped so far has lived, which is why the
+      # newest PHP gets a run of it rather than unit coverage alone.
+      - integration:
+          matrix:
+            parameters:
+              php: ["8.5"]
+              wordpress: ["nightly"]
+          name: integration-wpnightly-php8.5
       - package
