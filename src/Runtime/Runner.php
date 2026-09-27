@@ -97,7 +97,12 @@ final class Runner {
 		Trusted_Proxies::apply();
 
 		try {
-			$firewall = Firewall::create( array( $compiled ), $this->overrides() );
+			/*
+			 * The dispatcher is what makes a decision reachable from WordPress
+			 * at all -- see Decision_Dispatcher for why it announces later than
+			 * it is told.
+			 */
+			$firewall = Firewall::create( array( $compiled ), $this->overrides(), new Decision_Dispatcher() );
 		} catch ( \Throwable $e ) {
 			/*
 			 * With require_config on, the library refuses to start rather than

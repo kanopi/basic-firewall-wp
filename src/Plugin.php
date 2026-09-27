@@ -16,6 +16,7 @@ use Kanopi\BasicFirewall\Cli\Commands;
 use Kanopi\BasicFirewall\Compiler\Compiled_Config_Cache;
 use Kanopi\BasicFirewall\Health\Site_Health;
 use Kanopi\BasicFirewall\RuleType\Registry;
+use Kanopi\BasicFirewall\Runtime\Decision_Dispatcher;
 use Kanopi\BasicFirewall\Runtime\Runner;
 use Kanopi\BasicFirewall\Sources\Refresher;
 use Kanopi\BasicFirewall\Support\Paths;
@@ -122,6 +123,13 @@ final class Plugin {
 		 */
 		add_action( 'basic_firewall_early_evaluate', array( $this, 'evaluate' ), 0 );
 		add_action( 'plugins_loaded', array( $this, 'evaluate' ), 2 );
+
+		/*
+		 * Straight after, so decisions from either path -- held since
+		 * muplugins_loaded, or since before WordPress existed -- are announced
+		 * once plugins have had the chance to listen.
+		 */
+		add_action( 'plugins_loaded', array( Decision_Dispatcher::class, 'announce' ), 3 );
 
 		/*
 		 * The compiled file is a cache of the settings option, so it is rebuilt

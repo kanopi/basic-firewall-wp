@@ -9,6 +9,17 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- Every firewall decision is announced as a WordPress action:
+  `basic_firewall_decision` with the event and its kind, and
+  `basic_firewall_decision_{$type}` — `allowed`, `blocked`, `challenged`,
+  `challenge_solved`, `challenge_failed`, `recorded`, `redirected`, `marked`,
+  `tarpitted`. The library already speaks PSR-14; the plugin hands it a small
+  dispatcher that holds each decision until `plugins_loaded`, so a regular plugin
+  hears it rather than only an mu-plugin, and announces a refusal at shutdown.
+  Decisions made on the wp-config.php path wait for WordPress the way a mark
+  does; a refusal there exits before WordPress loads and is never announced. A
+  listener that throws is logged and changes nothing about the request.
+
 - **Lockdown**, refusing every client but an allowlist before any rule is
   consulted, and recording none of them — so lifting it does not leave a block
   list full of customers. On the General screen, which refuses to arm it against

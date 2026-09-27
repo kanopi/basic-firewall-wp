@@ -23,6 +23,7 @@ its habit of writing down what does not work.
 - [Presets](#presets)
 - [Storage](#storage)
 - [Logging](#logging)
+- [Reacting to a decision](#reacting-to-a-decision)
 - [Export and import](#export-and-import)
 - [During an incident](#during-an-incident)
 - [wp-config.php options](#wp-configphp-options)
@@ -829,6 +830,85 @@ logger:
         args: [/var/log/firewall/firewall.log, Monolog\Level::Debug]
       - Monolog\Level::Error
 ```
+
+## Reacting to a decision
+
+Every verdict is announced as a WordPress action, so a plugin can react to one
+without polling the block list or parsing the log:
+
+```php
+add_action( 'basic_firewall_decision_blocked', function ( $event ) {
+    if ( ! $event->isEnforced() ) {
+        return; // Log mode: the rule matched, but nothing was refused.
+    }
+
+    $rule   = $event->getPlugin()?->getName() ?? 'block list';
+    $status = $event->getStatusCode();
+    $ip     = $event->getRequest()->getClientIp();
+} );
+
+// Or every decision, with its kind:
+add_action( 'basic_firewall_decision', function ( $event, string $type ) {
+    // $type is one of the names below.
+}, 10, 2 );
+```
+
+| `$type` | Announced when |
+| --- | --- |
+| `allowed` | Nothing matched, or an allow rule matched |
+| `blocked` | A blocking rule matched, or the client was already on the block list |
+| `challenged` | A visitor was asked to solve a challenge |
+| `challenge_solved` | They solved it |
+| `challenge_failed` | They did not |
+| `recorded` | A rule recorded the client without refusing them |
+| `redirected` | A rule sent the visitor elsewhere |
+| `marked` | A rule marked the request for downstream code |
+| `tarpitted` | A rule held the request before letting it continue |
+
+The Drupal module hands the library Drupal's own event dispatcher, which is
+already PSR-14. WordPress's equivalent is an action, so this plugin passes a
+small PSR-14 dispatcher that turns each decision into the two actions above. A
+few things follow from that, and are worth knowing before you build on it:
+
+- **Switch on `$type`, and duck-type the event.** Do not type-hint
+  `Kanopi\Firewall\Event\RequestBlocked`: in a release zip the library is
+  namespace-scoped, so that class name does not exist there and the callback
+  fatals. `getRequest()` and `isEnforced()` are on every event; `getPlugin()` and
+  `getStatusCode()` on a block.
+- **`getStatusCode()` is the rule's own code.** A rule left on the site-wide code
+  reports `0`: the library announces before it resolves that to the General
+  screen's status code. Set a code on the rule if a listener needs the number.
+- **A listener cannot change the verdict.** The events carry no setters and an
+  action's return value is discarded. Blocking decisions belong to rules.
+- **A listener that throws is not an outage.** The exception is written to the
+  PHP error log and the request carries on exactly as it would have — though
+  WordPress stops the rest of that action's callbacks for that decision. It also
+  means a listener is not the place for anything the request depends on: if it
+  fails, traffic will not tell you.
+- **`isEnforced()` is how log mode is visible.** In log mode a decision is still
+  announced, carrying the rule and the status it *would* have returned, with
+  `isEnforced()` false. That is what lets you measure a new rule against live
+  traffic before switching it on.
+
+**When they arrive.** The firewall evaluates at `muplugins_loaded`, before any
+regular plugin or theme has loaded, so an action fired there would reach only
+mu-plugins. Decisions are held and announced at `plugins_loaded` instead, once
+plugins have had the chance to listen. A refusal ends the request before that,
+so it is announced at shutdown — by which point WordPress has only loaded
+mu-plugins, so **to hear refusals, listen from an mu-plugin**. On the
+[wp-config.php path](#the-one-line-that-matters) the decisions that let a
+request through wait for WordPress in the same way, but a refusal exits before
+WordPress loads at all and is **never announced**.
+
+`basic_firewall_request_marked`, [above](#responses), predates this and fires as
+the mark is made — on the ordinary path, at `muplugins_loaded`. From a regular
+plugin, listen for `basic_firewall_decision_marked` or ask `Runner::is_marked()`
+instead.
+
+For metrics, prefer the library's own StatsD listener, declared under
+`metrics.statsd` in the Advanced YAML: it runs inside the library, on both
+paths, refusals included, and a Prometheus counter would not survive the
+PHP-FPM process that incremented it anyway.
 
 ## Export and import
 

@@ -152,7 +152,8 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 			$firewall = call_user_func(
 				array( $class, 'create' ),
 				array( $compiled ),
-				basic_firewall_build_overrides( $options )
+				basic_firewall_build_overrides( $options ),
+				basic_firewall_decision_dispatcher( $options )
 			);
 
 			/*
@@ -415,6 +416,44 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 		}
 
 		return $paths;
+	}
+
+	/**
+	 * The dispatcher the library announces its decisions on.
+	 *
+	 * There are no WordPress actions yet, so this path cannot announce
+	 * anything. It hands the library the same dispatcher the normal path uses,
+	 * which holds each decision until WordPress has loaded and plugins have had
+	 * the chance to listen, and announces it then -- the way a mark waits.
+	 *
+	 * Loaded by hand for the reason Database_Credentials is: the release
+	 * build's autoloader carries the vendored tree and not this plugin's own
+	 * `src/`. A dispatcher that cannot be loaded means no announcements, never
+	 * a request that fails.
+	 *
+	 * @param array<string, mixed> $options Bootstrap options.
+	 *
+	 * @return object|null
+	 */
+	function basic_firewall_decision_dispatcher( array $options ) {
+		$class = 'Kanopi\\BasicFirewall\\Runtime\\Decision_Dispatcher';
+
+		if ( ! class_exists( $class, false ) ) {
+			$file = rtrim( (string) $options['plugin_path'], '/' ) . '/src/Runtime/Decision_Dispatcher.php';
+
+			if ( ! is_readable( $file ) ) {
+				return null;
+			}
+
+			try {
+				require_once $file;
+			} catch ( \Throwable $e ) {
+				// The PSR interface it implements is missing from this vendor tree.
+				return null;
+			}
+		}
+
+		return class_exists( $class, false ) ? new $class() : null;
 	}
 
 	/**
