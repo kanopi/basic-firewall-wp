@@ -15,6 +15,7 @@ use Kanopi\BasicFirewall\Install\Challenge_Secret;
 use Kanopi\BasicFirewall\Plugin;
 use Kanopi\BasicFirewall\RuleType\Response_Settings;
 use Kanopi\BasicFirewall\RuleType\Rule_Type_Base;
+use Kanopi\BasicFirewall\RuleType\Types\Edge_Signal;
 use Kanopi\BasicFirewall\Runtime\Lockdown;
 use Kanopi\BasicFirewall\Support\Schema;
 use Kanopi\Firewall\Utility\Schedule;
@@ -663,6 +664,22 @@ final class Config_Compiler {
 				$this->problems[] = sprintf(
 					/* translators: %s: rule identifier. */
 					__( 'Rule "%s" verifies crawlers by reverse DNS, which the installed firewall library cannot do — it would believe every client claiming to be one. It was skipped.', 'basic-firewall' ),
+					(string) ( $rule['id'] ?? '?' )
+				);
+
+				continue;
+			}
+
+			/*
+			 * An edge signal rule for a custom CDN naming no header it can read
+			 * is skipped. The library refuses to start on one, and a firewall
+			 * that cannot start fails open on every rule -- so compiling it
+			 * would trade this rule's absence for all of theirs.
+			 */
+			if ( 'edge_signal' === (string) ( $rule['type'] ?? '' ) && 'custom' === ( $rule['settings']['provider'] ?? '' ) && array() === Edge_Signal::header_map( (array) $rule['settings'] ) ) {
+				$this->problems[] = sprintf(
+					/* translators: %s: rule identifier. */
+					__( 'Rule "%s" reads edge signals from a custom CDN but names no header the firewall can read, which would stop the firewall starting. It was skipped.', 'basic-firewall' ),
 					(string) ( $rule['id'] ?? '?' )
 				);
 

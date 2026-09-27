@@ -49,6 +49,18 @@ abstract class Condition_Rule_Type_Base extends Rule_Type_Base {
 	);
 
 	/**
+	 * Screen operators the library knows by another name.
+	 *
+	 * @var array<string, string>
+	 */
+	private const LIBRARY_OPERATORS = array(
+		'gt'  => 'greater_than',
+		'gte' => 'greater_than_or_equal',
+		'lt'  => 'less_than',
+		'lte' => 'less_than_or_equal',
+	);
+
+	/**
 	 * Operators that need no value.
 	 *
 	 * @var list<string>
@@ -505,6 +517,26 @@ abstract class Condition_Rule_Type_Base extends Rule_Type_Base {
 	protected function compile_condition( array $condition ): array {
 		$operator = (string) ( $condition['operator'] ?? 'equals' );
 		$value    = (string) ( $condition['value'] ?? '' );
+		$negate   = ! empty( $condition['negate'] );
+
+		/*
+		 * The screen's short names, translated into the library's.
+		 *
+		 * The library's comparison is a `match` with `default => false`, and it
+		 * knows `greater_than`, `less_than_or_equal` and the rest by their long
+		 * names only. These four were handed over as stored, so every numeric
+		 * comparison matched nothing -- and `not_contains`, which the library
+		 * has no operator for at all, matched nothing either, which on a
+		 * condition written to exclude something is the opposite of what it
+		 * says. Translated here rather than migrated in storage, so a rule
+		 * saved before this compiles correctly without being touched.
+		 */
+		if ( 'not_contains' === $operator ) {
+			$operator = 'contains';
+			$negate   = ! $negate;
+		}
+
+		$operator = self::LIBRARY_OPERATORS[ $operator ] ?? $operator;
 
 		$compiled = array(
 			'variable'       => (string) ( $condition['variable'] ?? '' ),
@@ -517,7 +549,7 @@ abstract class Condition_Rule_Type_Base extends Rule_Type_Base {
 			 * drops the condition back to the shorthand parser.
 			 */
 			'value'          => $value,
-			'negate'         => ! empty( $condition['negate'] ),
+			'negate'         => $negate,
 
 			/*
 			 * Always true for a regular expression, and the checkbox is honoured

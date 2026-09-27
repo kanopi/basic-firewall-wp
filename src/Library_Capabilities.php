@@ -216,6 +216,13 @@ final class Library_Capabilities {
 	 * read the way both evaluation paths read it: only an explicit `false`.
 	 */
 	public function identity_verification_runs(): bool {
+		if ( ! $this->has_edge_signals() ) {
+			$missing[] = array(
+				'feature' => __( 'Edge signals', 'basic-firewall' ),
+				'reason'  => __( 'The installed library cannot match on what a CDN worked out at the edge — a TLS fingerprint, or the bot score the edge computed. Needs kanopi/firewall 2.27.0 or later.', 'basic-firewall' ),
+			);
+		}
+
 		if ( ! $this->has_identity_verification() ) {
 			return false;
 		}
@@ -238,6 +245,16 @@ final class Library_Capabilities {
 	 */
 	public function has_composable_rate_limit_key(): bool {
 		return method_exists( self::library_class( 'Plugins', 'RateLimit' ), 'keyComponents' );
+	}
+
+	/**
+	 * Whether a rule can match on what the CDN worked out at the edge.
+	 *
+	 * Added in library 2.27.0. Checked for the status report; the rule type
+	 * itself is offered or withheld on its own plugin class, like every other.
+	 */
+	public function has_edge_signals(): bool {
+		return class_exists( self::library_class( 'Plugins', 'EdgeSignal' ) );
 	}
 
 	/**

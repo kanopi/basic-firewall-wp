@@ -12,6 +12,7 @@ namespace Kanopi\BasicFirewall\RuleType;
 use Kanopi\BasicFirewall\RuleType\Types\Abuse_Ipdb;
 use Kanopi\BasicFirewall\RuleType\Types\Asn;
 use Kanopi\BasicFirewall\RuleType\Types\Crs;
+use Kanopi\BasicFirewall\RuleType\Types\Edge_Signal;
 use Kanopi\BasicFirewall\RuleType\Types\Geo_Location;
 use Kanopi\BasicFirewall\RuleType\Types\Ip_Address;
 use Kanopi\BasicFirewall\RuleType\Types\Rate_Limit;
@@ -108,6 +109,7 @@ final class Registry {
 			new User_Agent(),
 			new Url(),
 			new Rate_Limit(),
+			new Edge_Signal(),
 			new Asn(),
 			new Geo_Location(),
 			new Vulnerability_Score(),

@@ -356,6 +356,7 @@ generated.
 | Request / URL | Method, host, path, scheme, port, query, POST body, headers, cookies |
 | User agent | Automated flag, bot flag, device, browser, OS, brand, model — parsed, not string-matched |
 | Rate limit | Requests per address — or per account, header or field — per time window, per pattern |
+| Edge signal | The TLS fingerprint (JA3, JA4) or bot score your CDN computed. Needs a CDN sending the headers, and trusted proxies |
 | ASN | Autonomous system number or organisation. Needs a MaxMind ASN database |
 | Geolocation | Country, continent, city, postal code, timezone. MaxMind database or CDN headers |
 | Vulnerability score | Method, country, network, attack patterns, user agent — summed |
@@ -818,6 +819,42 @@ state as critical, because such a rule silently matches nobody. On a library too
 old to verify at all, the setting is not offered and the compiler skips a rule
 carrying it: that library would ignore the key and let every self-declared
 crawler through.
+
+### Reading what the CDN worked out
+
+The **Edge signal** rule matches on what a CDN computed at the edge and this
+site cannot: a **TLS fingerprint** — `ja3`, `ja4` — which identifies the client
+stack rather than what it claims to be, so a script wearing a browser's user
+agent still negotiates TLS like a script; and a **bot score**, the edge's own
+verdict from signals that never reach the origin. Needs `kanopi/firewall`
+2.27.0.
+
+Choose the CDN — Cloudflare, Fastly, or *something else* with the header names
+typed as `signal: Header-Name`. Akamai and CloudFront are not named on purpose:
+Akamai's headers are configured per property and CloudFront computes no bot
+signal, so a named profile for either would be invented header names that look
+authoritative and match nothing.
+
+Three things to know before writing one:
+
+- **An edge header is a claim, not a fact.** Anything that can reach the site
+  directly can send `Cf-Bot-Score: 99`, so the library believes these headers
+  only on a request that arrived through a trusted proxy. Without
+  [trusted proxies](#proxies-and-the-client-ip) the rule matches nothing and
+  logs a warning on every request, and the rule screen says so.
+- **None of the headers arrive by default.** Cloudflare's need Managed
+  Transforms switched on per zone; Fastly's are set in VCL. A missing header
+  matches nothing rather than matching wrongly.
+- **Cloudflare's bot score runs backwards.** 1 is certainly a bot and 99
+  certainly a human — the opposite of every other score in the firewall. The
+  rule that blocks bots is `bot_score` *is less than or equal to* `5`. Written
+  the habitual way round, `bot_score` *is greater than* `30` on a block rule
+  blocks the humans, and it looks like it is working: what it lets through is
+  the automation. Try it with **Observe only** first.
+
+A custom CDN naming no header the library can read, or a signal it does not
+know, is refused on the screen and skipped by the compiler: the library refuses
+to start on either, and a firewall that cannot start fails open on every rule.
 
 ### How a rate limit counts
 

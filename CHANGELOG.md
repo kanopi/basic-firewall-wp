@@ -9,6 +9,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **The edge signal rule type**, for what the CDN worked out that the site
+  cannot: a JA3 or JA4 TLS fingerprint, which identifies the client stack rather
+  than what it claims to be, and the bot score the edge computed. Cloudflare,
+  Fastly, or a custom CDN with its header names typed in. The screen says the
+  headers are believed only behind a trusted proxy — and warns when the site has
+  not said it is behind one — and that Cloudflare's score runs backwards, where
+  1 is certainly a bot. A custom CDN naming no header, or a signal the library
+  does not know, is refused, and skipped at compile time if it arrives another
+  way, because the library refuses to start on it.
+
 - **Rate limits that count an account now come with the pairing they need.**
   A limit line's fourth field — `/wp-login.php 5 300 post.log` — counts the
   account rather than the address, which catches a botnet against one account,
@@ -129,6 +139,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **Conditions using "is greater than", "is less than" (or equal) and "does not
+  contain" match again.** The screen stored `gt`, `gte`, `lt`, `lte` and
+  `not_contains` and compiled them as stored, and the library knows none of
+  them: its comparison falls through to "no match". So every numeric comparison
+  matched nothing, and a "does not contain" condition written to exclude
+  something never matched either. They now compile to the library's
+  `greater_than`, `less_than_or_equal` and so on, and "does not contain" to a
+  negated `contains`, so rules saved before this work without being edited.
 - Saving a user agent rule no longer turns its detection cache off. The rule
   screen rendered the conditions and nothing else, so every save posted no
   `cache_detection` and the rule compiled `cache: false` — costing each PHP
