@@ -12,6 +12,7 @@ namespace Kanopi\BasicFirewall;
 use Kanopi\BasicFirewall\Install\Capabilities;
 use Kanopi\BasicFirewall\Install\Upgrader;
 use Kanopi\BasicFirewall\Admin\Admin;
+use Kanopi\BasicFirewall\Cache\Cache_Warmer;
 use Kanopi\BasicFirewall\Cli\Commands;
 use Kanopi\BasicFirewall\Compiler\Compiled_Config_Cache;
 use Kanopi\BasicFirewall\Health\Site_Health;
@@ -137,6 +138,13 @@ final class Plugin {
 		 * that happens to notice it is stale.
 		 */
 		Refresher::register();
+
+		/*
+		 * A warm of the agent corpus follows each rebuild on cron, so a
+		 * deploy, an activation or an upgrade does not leave the first visitor
+		 * to reach a user agent rule paying to build it.
+		 */
+		Cache_Warmer::register();
 
 		add_action( 'basic_firewall_settings_saved', array( $this, 'rebuild' ) );
 		add_action( 'basic_firewall_activated', array( $this, 'rebuild' ) );

@@ -1237,6 +1237,33 @@ faster — use database or Redis storage for that, and the database log handler
 instead of the file one. Those are the write-heavy settings, and they are where
 a site on slow shared storage should look first.
 
+### Building it ahead of time
+
+The agent corpus is the one expensive thing here: identifying an agent means
+compiling a 1.7 MB pattern set, and the first request to reach a user agent rule
+after a deploy, a clear or a PHP restart pays for it — the better part of a
+second. `wp basic-firewall warm-cache` pays it now instead, which is worth a
+place in a deployment step. The Storage screen has **Build cached data now**
+beside the clear button, and every rebuild — a settings save, an activation, an
+upgrade — schedules one on WP-Cron thirty seconds later, so an administrator
+saving a form does not pay for it either.
+
+On APCu the button is the only thing that works. APCu memory belongs to the
+process pool that filled it, so a warm from the command line fills the command
+line's own and leaves the web server's cold; the command says so rather than
+reporting a success that means nothing. A scheduled warm reaches it only when
+WP-Cron runs in a web request — not with `DISABLE_WP_CRON` and a system cron
+calling WP-CLI.
+
+It builds only what the rules read. The library stops parsing at the deepest
+phase the conditions ask for, so a site whose rules only ask `automated` gets the
+bot corpus and not the client, OS and device corpora it never looks at. A rule
+with *Cache agent detection* off is left alone.
+
+Only the agent corpus can be built ahead of time. Everything else the firewall
+caches — reverse-DNS and AbuseIPDB verdicts — is keyed on the visitor's address,
+and there is nothing to work out for an address that has not arrived.
+
 ### Clearing it
 
 **Clear cached data** on the Storage screen discards what the firewall has
@@ -1605,6 +1632,7 @@ wp basic-firewall unblock IP        # unblock it
 wp basic-firewall blocked           # list every blocked client
 wp basic-firewall clear-blocked     # empty the block list
 wp basic-firewall clear-cache       # discard parsed agents and verified crawlers
+wp basic-firewall warm-cache        # build the agent corpus before a visitor has to
 wp basic-firewall find-reference REF # which rule produced this block reference
 
 wp basic-firewall export            # portable document, credentials stripped

@@ -11,6 +11,7 @@ namespace Kanopi\BasicFirewall\Cli;
 
 use Kanopi\BasicFirewall\Cache\Cache_Backend;
 use Kanopi\BasicFirewall\Cache\Cache_Clearer;
+use Kanopi\BasicFirewall\Cache\Cache_Warmer;
 use Kanopi\BasicFirewall\Health\Site_Health;
 use Kanopi\BasicFirewall\Library_Capabilities;
 use Kanopi\BasicFirewall\Library_Loader;
@@ -759,6 +760,48 @@ final class Commands {
 		}
 
 		WP_CLI::success( array() === $cleared ? 'There was no cached data to clear.' : sprintf( 'Cleared: %s.', implode( ', ', $cleared ) ) );
+	}
+
+	/**
+	 * Build the agent detection data now, so a visitor does not pay for it.
+	 *
+	 * Identifying an agent means compiling a 1.7 MB pattern set, which the
+	 * first request to reach a user agent rule otherwise pays for -- worth a
+	 * place in a deployment step. Builds only what the rules read: the library
+	 * stops at the deepest phase the conditions ask for.
+	 *
+	 * Only the agent corpus can be built ahead of time. Everything else the
+	 * firewall caches is keyed on a visitor's address.
+	 *
+	 * ## EXAMPLES
+	 *
+	 *     wp basic-firewall warm-cache
+	 *
+	 * @subcommand warm-cache
+	 *
+	 * @param array<int, string>    $args       Positional arguments.
+	 * @param array<string, string> $assoc_args Flags.
+	 */
+	public function warm_cache( array $args, array $assoc_args ): void {
+		$report = ( new Cache_Warmer() )->warm();
+
+		if ( 0 === $report['rules'] ) {
+			WP_CLI::success( 'No user agent rule caches, so there is no agent corpus to build.' );
+
+			return;
+		}
+
+		/*
+		 * Said plainly rather than left to be discovered. APCu memory belongs
+		 * to the process pool that filled it, so this has warmed the command
+		 * line's own APCu and the web server's is still cold -- a success line
+		 * on its own would be actively misleading.
+		 */
+		if ( 'apcu' === Cache_Backend::configured() ) {
+			WP_CLI::warning( 'The cache backend is APCu, which this cannot reach from the command line: what was built here is this command\'s own, and the web server\'s is still cold. Use Build cached data now on the Storage screen, which runs in a web request.' );
+		}
+
+		WP_CLI::success( sprintf( 'Built the agent corpus for %d rule(s) in %d ms.', $report['rules'], $report['ms'] ) );
 	}
 
 	/**

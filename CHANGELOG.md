@@ -9,6 +9,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **The agent corpus is built before a visitor has to.** `wp basic-firewall
+  warm-cache` and a **Build cached data now** button on the Storage screen
+  compile the 1.7 MB detection pattern set ahead of time, into whichever cache
+  backend is chosen, and only as deeply as the rules read. Every rebuild — a
+  settings save, an activation, an upgrade — schedules one on WP-Cron, so a
+  deploy does not leave the first visitor to pay for it. On APCu the command
+  says it cannot reach the web server's memory rather than claiming success.
+
 - **A cache backend other than files.** Parsed user agents and reverse-DNS
   verdicts can be kept in the WordPress object cache or APCu, or in files in a
   directory of your choosing, from the Storage screen — the answer for hosting

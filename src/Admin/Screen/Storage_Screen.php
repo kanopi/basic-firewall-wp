@@ -13,6 +13,7 @@ use Kanopi\BasicFirewall\Admin\Notices;
 use Kanopi\BasicFirewall\Admin\Screen;
 use Kanopi\BasicFirewall\Cache\Cache_Backend;
 use Kanopi\BasicFirewall\Cache\Cache_Clearer;
+use Kanopi\BasicFirewall\Cache\Cache_Warmer;
 use Kanopi\BasicFirewall\Database_Credentials;
 use Kanopi\BasicFirewall\Library_Capabilities;
 use Kanopi\BasicFirewall\Plugin;
@@ -57,6 +58,10 @@ final class Storage_Screen extends Screen {
 
 		if ( 'clear_cache' === $this->posted( 'storage_action' ) ) {
 			$this->clear_cache();
+		}
+
+		if ( 'warm_cache' === $this->posted( 'storage_action' ) ) {
+			$this->warm_cache();
 		}
 
 		$settings = $this->plugin()->settings();
@@ -331,6 +336,34 @@ final class Storage_Screen extends Screen {
 	}
 
 	/**
+	 * Build the agent corpus now, then return to the screen.
+	 *
+	 * In a web request, which is the one place a warm reaches APCu: its memory
+	 * belongs to the process pool that filled it.
+	 */
+	private function warm_cache(): void {
+		$report = ( new Cache_Warmer() )->warm();
+
+		Notices::add(
+			0 === $report['rules']
+				? __( 'There are no user agent rules that cache, so there is no agent detection data to build.', 'basic-firewall' )
+				: sprintf(
+					/* translators: 1: number of rules, 2: milliseconds. */
+					_n(
+						'Built the agent detection data for %1$d rule, in %2$d ms. The next visitor will not pay for it.',
+						'Built the agent detection data for %1$d rules, in %2$d ms. The next visitor will not pay for it.',
+						$report['rules'],
+						'basic-firewall'
+					),
+					$report['rules'],
+					$report['ms']
+				)
+		);
+
+		$this->redirect( $this->slug() );
+	}
+
+	/**
 	 * Where the firewall caches what it works out.
 	 *
 	 * @param Settings $settings Current settings.
@@ -439,12 +472,19 @@ final class Storage_Screen extends Screen {
 		printf(
 			'<p class="description" style="max-width:48rem">%s</p>',
 			wp_kses_post(
-				__( 'Discards what the firewall has cached, on every backend rather than only the current one, and lets it be built again as requests need it. The parsed configuration and imported list bodies are kept: losing either would weaken the firewall until they came back. APCu belongs to the web server\'s processes, so this button — which runs in a web request — is the only place its clear can reach; <code>wp basic-firewall clear-cache</code> clears everything else.', 'basic-firewall' )
+				__( '<strong>Build</strong> compiles the agent detection data now — about 600 ms, and a rebuild schedules it on cron anyway — so the first visitor to reach a user agent rule does not wait for it. Only that can be built ahead: everything else the firewall caches is keyed on a visitor\'s address, and there is nothing to work out for one that has not arrived. <strong>Clear</strong> discards what the firewall has cached, on every backend rather than only the current one. The parsed configuration and imported list bodies are kept: losing either would weaken the firewall until they came back.', 'basic-firewall' )
+				. '<br><br>' . __( 'APCu belongs to the web server\'s processes, so these buttons — which run in a web request — are the only place a warm or a clear of it can reach. <code>wp basic-firewall warm-cache</code> and <code>clear-cache</code> do the rest.', 'basic-firewall' )
 			)
 		);
 
+		/*
+		 * Two buttons, not one "clear and rebuild". Clearing and filling have
+		 * different reasons to reach for them, and joining them would make
+		 * the cheap one cost the expensive one every time.
+		 */
 		printf(
-			'<p><button type="submit" name="storage_action" value="clear_cache" class="button">%s</button></p>',
+			'<p><button type="submit" name="storage_action" value="warm_cache" class="button">%s</button> <button type="submit" name="storage_action" value="clear_cache" class="button">%s</button></p>',
+			esc_html__( 'Build cached data now', 'basic-firewall' ),
 			esc_html__( 'Clear cached data', 'basic-firewall' )
 		);
 

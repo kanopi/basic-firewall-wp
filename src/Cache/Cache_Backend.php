@@ -147,7 +147,7 @@ final class Cache_Backend {
 		$overrides = array();
 
 		if ( array() !== $compiled->cache_pool_paths() ) {
-			$agents = new Object_Cache_Adapter( self::AGENTS );
+			$agents = self::agent_pool();
 
 			foreach ( $compiled->cache_pool_paths() as $path ) {
 				$overrides[ $path ] = $agents;
@@ -163,6 +163,21 @@ final class Cache_Backend {
 		}
 
 		return $overrides;
+	}
+
+	/**
+	 * The object cache pool for the agent corpus, or null to leave the rule alone.
+	 *
+	 * Null is the ordinary answer and does not mean "no cache": every other
+	 * backend is already named in the compiled file, which the library builds
+	 * for itself. Only the object cache has to be handed over live.
+	 */
+	public static function agent_pool(): ?Object_Cache_Adapter {
+		if ( 'object_cache' !== self::configured() || ! self::has_persistent_object_cache() ) {
+			return null;
+		}
+
+		return new Object_Cache_Adapter( self::AGENTS );
 	}
 
 	/**
