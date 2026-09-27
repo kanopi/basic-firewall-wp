@@ -166,6 +166,28 @@ final class Schema {
 					 */
 					'default' => '',
 				),
+				'lockdown'                => array(
+					'type'    => 'bool',
+					'label'   => 'Refuse everyone but the lockdown allowlist',
+					'default' => false,
+				),
+				'lockdown_allow'          => array(
+					'type'    => 'list',
+					'label'   => 'Addresses served during lockdown',
+
+					/*
+					 * Kept when lockdown is off, so the list is ready the moment
+					 * it is needed rather than typed out mid-incident. Empty is
+					 * the library's "serve nobody", which is why the General
+					 * screen will not arm lockdown against it and the compiler
+					 * will not emit it.
+					 */
+					'default' => array(),
+					'of'      => array(
+						'type'    => 'string',
+						'default' => '',
+					),
+				),
 				'banning_status_code'     => array(
 					'type'    => 'int',
 					'label'   => 'HTTP status code returned to blocked clients',

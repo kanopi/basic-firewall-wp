@@ -126,6 +126,17 @@ final class Dashboard_Screen extends Screen {
 	 * but nobody noticing it is still flipped.
 	 */
 	private function render_overrides(): void {
+		/*
+		 * Lockdown ahead of the panic file, because it overrides more: while it
+		 * is on, the rules are not consulted at all.
+		 */
+		if ( $this->plugin()->runner()->is_locked_down() ) {
+			printf(
+				'<div class="bfw-danger"><p>%s</p></div>',
+				wp_kses_post( __( 'The site is in <strong>lockdown</strong>: every client except the allowlist is being refused, and none of them is being recorded. Your rules are not being consulted while this is on.', 'basic-firewall' ) )
+			);
+		}
+
 		$panic = $this->plugin()->runner()->panic_switch();
 
 		if ( null === $panic ) {
@@ -151,7 +162,7 @@ final class Dashboard_Screen extends Screen {
 			'<div class="bfw-warning"><p>%s</p></div>',
 			sprintf(
 				/* translators: 1: file path, 2: what is wrong with it. */
-				esc_html__( 'The panic file %1$s %2$s, so it is being ignored. A panic file has to name one of block, log, exception or disabled.', 'basic-firewall' ),
+				esc_html__( 'The panic file %1$s %2$s, so it is being ignored. A panic file has to name one of block, log, exception, disabled or lockdown.', 'basic-firewall' ),
 				'<code>' . esc_html( (string) $panic['path'] ) . '</code>',
 				esc_html( (string) $panic['problem'] )
 			)

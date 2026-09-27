@@ -515,7 +515,7 @@ final class Rule_Edit_Screen extends Screen {
 					(string) $rule['record']
 				),
 				'block' === $response
-					? __( 'Recording adds the client to the durable block list, so later requests are refused without re-evaluating. <strong>Set this to No for a temporary lockdown</strong> — a rule that refuses everybody and records them leaves a block list full of customers once it is lifted, each on an escalating ban nobody asked for.', 'basic-firewall' )
+					? __( 'Recording adds the client to the durable block list, so later requests are refused without re-evaluating. <strong>Set this to No for a temporary lockdown</strong> — a rule that refuses everybody and records them leaves a block list full of customers once it is lifted, each on an escalating ban nobody asked for. Lockdown on the General screen is that, already built: everyone but an allowlist refused, nobody recorded.', 'basic-firewall' )
 					: __( 'This response does not record by default, which is usually right — a honeypot that banned everyone who tripped it would stop being a honeypot. Set it to Yes if tripping this rule should also earn a block.', 'basic-firewall' )
 			);
 		}

@@ -9,6 +9,7 @@ declare( strict_types = 1 );
 
 namespace Kanopi\BasicFirewall\Health;
 
+use Kanopi\BasicFirewall\Admin\Admin;
 use Kanopi\BasicFirewall\Install\Activator;
 use Kanopi\BasicFirewall\Install\Upgrader;
 use Kanopi\BasicFirewall\Library_Capabilities;
@@ -65,11 +66,12 @@ final class Site_Health {
 	 */
 	private static function test_map(): array {
 		/*
-		 * The panic switch first. While one is active, every other entry
-		 * describes a firewall that is not the one running, and the dashboard's
-		 * Checks table is read top to bottom.
+		 * Lockdown and the panic switch first. While either is in force, every
+		 * other entry describes a firewall that is not the one running, and the
+		 * dashboard's Checks table is read top to bottom.
 		 */
 		return array(
+			'lockdown'    => __( 'Basic Firewall lockdown', 'basic-firewall' ),
 			'panic'       => __( 'Basic Firewall panic switch', 'basic-firewall' ),
 			'library'     => __( 'Basic Firewall library', 'basic-firewall' ),
 			'backends'    => __( 'Basic Firewall backends', 'basic-firewall' ),
@@ -110,6 +112,7 @@ final class Site_Health {
 	 */
 	public static function check( string $key ): array {
 		return match ( $key ) {
+			'lockdown'    => self::check_lockdown(),
 			'panic'       => self::check_panic(),
 			'library'     => self::check_library(),
 			'backends'    => self::check_backends(),
@@ -125,6 +128,47 @@ final class Site_Health {
 			'upgrade'     => self::check_upgrade(),
 			default       => self::ok( __( 'Unknown test', 'basic-firewall' ), '' ),
 		};
+	}
+
+	/**
+	 * Is the site refusing everyone but a list?
+	 *
+	 * Critical, and first. While lockdown is on, no other entry here describes
+	 * what the site does to traffic: every rule is moot, because a client not
+	 * on the allowlist never reaches one. It is also the loudest thing the
+	 * firewall can do and the easiest to forget, exactly like the panic switch
+	 * it is often reached through.
+	 *
+	 * @return array{status: string, label: string, description: string, actions: string}
+	 */
+	private static function check_lockdown(): array {
+		if ( ! Plugin::instance()->runner()->is_locked_down() ) {
+			return self::ok(
+				__( 'The site is not in lockdown', 'basic-firewall' ),
+				esc_html__( 'Every visitor is evaluated against the rules as usual.', 'basic-firewall' )
+			);
+		}
+
+		$allow = (array) Plugin::instance()->settings()->get( 'global.lockdown_allow', array() );
+
+		return self::critical(
+			sprintf(
+				/* translators: %d: number of allowlisted addresses. */
+				_n(
+					'The site is in lockdown, serving only %d allowlisted entry',
+					'The site is in lockdown, serving only %d allowlisted entries',
+					count( $allow ),
+					'basic-firewall'
+				),
+				count( $allow )
+			),
+			esc_html__( 'Every client except the lockdown allowlist is being refused, and none of them is being recorded. Your rules are not being consulted while this is on. Switch it off on the General screen — or, if a panic file saying "lockdown" armed it, remove the file.', 'basic-firewall' ),
+			sprintf(
+				'<p><a href="%s">%s</a></p>',
+				esc_url( Admin::url( 'basic-firewall-general' ) ),
+				esc_html__( 'Open the General screen', 'basic-firewall' )
+			)
+		);
 	}
 
 	/**
@@ -169,7 +213,7 @@ final class Site_Health {
 				__( 'A panic file is present but is being ignored', 'basic-firewall' ),
 				sprintf(
 					/* translators: 1: file path, 2: what is wrong with it. */
-					esc_html__( 'The panic file %1$s %2$s, so the firewall is running in its configured mode. A panic file has to name one of block, log, exception or disabled.', 'basic-firewall' ),
+					esc_html__( 'The panic file %1$s %2$s, so the firewall is running in its configured mode. A panic file has to name one of block, log, exception, disabled or lockdown.', 'basic-firewall' ),
 					'<code>' . esc_html( (string) $panic['path'] ) . '</code>',
 					esc_html( (string) $panic['problem'] )
 				)

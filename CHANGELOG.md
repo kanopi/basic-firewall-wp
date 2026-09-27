@@ -9,6 +9,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Lockdown**, refusing every client but an allowlist before any rule is
+  consulted, and recording none of them — so lifting it does not leave a block
+  list full of customers. On the General screen, which refuses to arm it against
+  an empty list, refuses `start-end` ranges the library would never match on
+  this list, and warns when the list does not cover the address the firewall
+  sees for you. The compiler applies the same refusal to an imported document.
+  Site Health, the Status screen and `wp basic-firewall status` report it
+  however it was armed, including from a panic file saying `lockdown`. In
+  `exception` mode the refusal keeps its `Retry-After` header.
+
 - A **panic file**, for turning the firewall down mid-incident without a deploy.
   Name a path at the bottom of the General screen, and writing a mode into that
   file changes the operating mode on the next request, on both evaluation paths.

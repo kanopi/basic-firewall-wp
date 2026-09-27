@@ -261,6 +261,12 @@ final class Commands {
 				'value'   => $mode_value,
 			),
 			array(
+				'setting' => 'Lockdown',
+				'value'   => $plugin->runner()->is_locked_down()
+					? 'ACTIVE — refusing everyone but the allowlist, recording nobody'
+					: 'off',
+			),
+			array(
 				'setting' => 'Panic file',
 				'value'   => $this->panic_summary( $panic ),
 			),

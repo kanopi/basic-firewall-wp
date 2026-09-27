@@ -372,8 +372,43 @@ final class Runner {
 			// Both, so a report can say what changed and what comes back when
 			// the file goes, rather than leaving an operator to work it out.
 			'configured' => $firewall->getConfiguredMode()->value,
-			'effective'  => $firewall->getMode()->value,
+			'effective'  => $this->effective_mode( $firewall, $switch['mode'] ?? null ),
 		);
+	}
+
+	/**
+	 * The mode a panic file put the firewall in, as somebody would name it.
+	 *
+	 * `lockdown` in the file is shorthand the library unpacks into lockdown
+	 * delivered the way `block` delivers, so the firewall itself reports
+	 * `block`. Repeating that back -- "a panic file is forcing block mode, the
+	 * configured mode is block" -- would describe a site that is refusing
+	 * every visitor as though nothing had changed.
+	 *
+	 * @param Firewall $firewall  The firewall that read the file.
+	 * @param mixed    $requested What the file asked for.
+	 */
+	private function effective_mode( Firewall $firewall, $requested ): string {
+		if ( $requested instanceof \BackedEnum && 'lockdown' === $requested->value ) {
+			return 'lockdown';
+		}
+
+		return $firewall->getMode()->value;
+	}
+
+	/**
+	 * Whether the firewall is refusing everyone but the lockdown allowlist.
+	 *
+	 * Asked of the library rather than read from settings, because there are
+	 * three ways in and only one is the setting: `global.lockdown`, `mode:
+	 * lockdown` in the Advanced YAML, and a panic file naming `lockdown`. A
+	 * status page reading settings alone would miss the two most likely to be
+	 * in force during an incident.
+	 */
+	public function is_locked_down(): bool {
+		$firewall = $this->build_for_reporting();
+
+		return null !== $firewall && $firewall->isLockedDown();
 	}
 
 	/**

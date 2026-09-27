@@ -13,6 +13,7 @@ use Kanopi\BasicFirewall\Database_Credentials;
 use Kanopi\BasicFirewall\Library_Capabilities;
 use Kanopi\BasicFirewall\Install\Challenge_Secret;
 use Kanopi\BasicFirewall\Plugin;
+use Kanopi\BasicFirewall\Runtime\Lockdown;
 use Kanopi\BasicFirewall\Support\Schema;
 use Symfony\Component\Yaml\Yaml;
 
@@ -172,6 +173,8 @@ final class Config_Compiler {
 			$compiled['behind_proxy'] = 'yes' === $behind;
 		}
 
+		$this->compile_lockdown( $section, $compiled );
+
 		/*
 		 * Only when set. An empty key would have the library stat a path on
 		 * every request for a switch nobody armed, and the point of the feature
@@ -210,6 +213,46 @@ final class Config_Compiler {
 		}
 
 		return $compiled;
+	}
+
+	/**
+	 * Compile lockdown, which is written only when it is armed.
+	 *
+	 * The library reads an absent or empty `lockdown_allow` as "serve nobody".
+	 * That is the honest reading of a mode called lockdown, and it is also the
+	 * quickest way to lock an administrator out of the site they are defending
+	 * -- the General screen refuses to save it for that reason. This is the
+	 * same refusal for every other way a document arrives: an import, WP-CLI,
+	 * or a hand-edited option. Refused means not applied and reported, which is
+	 * this plugin's posture everywhere else too: the site stays reachable, and
+	 * somebody is told why the lockdown is not in force.
+	 *
+	 * @param array<string, mixed> $section  Stored global settings.
+	 * @param array<string, mixed> $compiled The global section being built.
+	 */
+	private function compile_lockdown( array $section, array &$compiled ): void {
+		if ( true !== ( $section['lockdown'] ?? false ) ) {
+			return;
+		}
+
+		$allow = Lockdown::sort( (array) ( $section['lockdown_allow'] ?? array() ) );
+
+		foreach ( $allow['invalid'] as $entry ) {
+			$this->problems[] = sprintf(
+				/* translators: %s: the rejected allowlist entry. */
+				__( 'The lockdown allowlist entry "%s" is not an address or a CIDR block, so it was left out. The library does not match start-end ranges on this list.', 'basic-firewall' ),
+				$entry
+			);
+		}
+
+		if ( array() === $allow['valid'] ) {
+			$this->problems[] = __( 'Lockdown is switched on with no usable address on its allowlist, which would refuse everybody — including whoever is trying to switch it off. It was not applied.', 'basic-firewall' );
+
+			return;
+		}
+
+		$compiled['lockdown']       = true;
+		$compiled['lockdown_allow'] = $allow['valid'];
 	}
 
 	/**

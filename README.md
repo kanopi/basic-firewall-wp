@@ -385,7 +385,8 @@ setups possible:
   not do. That is `record`, or `mark` if you only want the signal.
 - **A lockdown.** A rule that refuses everybody and records them leaves a block
   list full of customers once it is lifted, each on an escalating ban nobody
-  asked for. Set **Record the client** to *No* on the block rule.
+  asked for. Set **Record the client** to *No* on the block rule — or use
+  [Lockdown](#lockdown-refuse-everyone-but-a-list), which is that, already built.
 
 **Reading a mark from your own code.** A marked request is allowed through and
 flagged, and the plugin hands that to WordPress on both evaluation paths:
@@ -880,6 +881,41 @@ goes on reporting "Blocking".
 
 ## During an incident
 
+### Lockdown: refuse everyone but a list
+
+Under attack and want only the office in? Tick **Lockdown** near the bottom of
+the General screen and name the addresses to keep serving. Every other rule stops
+mattering: a client not on that list is refused before any rule is consulted,
+with a 503 and `Retry-After` — temporary, which is what a CDN needs to hear
+rather than caching the refusal as a verdict.
+
+The part that makes this worth having rather than building it from an allow rule
+and a block-everything rule: **nobody is recorded**. That pairing refuses the
+same traffic and writes every refused client to the block list — an internet's
+worth of addresses, during exactly the incident when your storage is under the
+most pressure, each left on an escalating ban once the lockdown is lifted.
+
+Four things to know before you reach for it:
+
+- **An empty allowlist serves nobody.** The library treats absent and empty
+  alike, which is the honest reading of the word. The General screen refuses to
+  save that combination, and the compiler refuses it from an import or WP-CLI
+  too — reported, and not applied.
+- **Addresses and CIDR blocks only.** An IP rule also accepts `start-end`
+  ranges; the library does not match them on this list, so the screen refuses
+  them rather than keeping an entry that would silently match nobody.
+- **Check your own address is on the list.** The screen shows the address the
+  firewall sees for you — after trusted proxies, so behind a CDN it is yours and
+  not the CDN's — and warns if the list does not cover it. A warning rather than
+  an error, because allowlisting the office range from a laptop elsewhere is a
+  real thing to want. `define( 'BASIC_FIREWALL_ENABLED', false )` is the way back
+  in if you get it wrong.
+- **The panic file can arm it too**, with `echo lockdown > /path/to/panic`,
+  which is the no-deploy route into it and out again. See below.
+
+While it is on, Site Health reports it as critical, the Status screen leads with
+it and `wp basic-firewall status` carries a `Lockdown` row.
+
 ### Turning the firewall down without a deploy
 
 `BASIC_FIREWALL_MODE` works, but it lives in `wp-config.php`, and on most
@@ -901,7 +937,9 @@ web access; wherever it goes, keep it out of anything a deploy recreates. A file
 that turns the firewall down is worth exactly as much as write access to its
 path, which is also why there is no default.
 
-The file has to **name** a mode — `block`, `log`, `exception` or `disabled`. An
+The file has to **name** a mode — `block`, `log`, `exception`, `disabled`, or
+`lockdown`, which refuses everyone but the [lockdown
+allowlist](#lockdown-refuse-everyone-but-a-list), so fill that in first. An
 empty file, a typo, or one that cannot be read changes **nothing** and is
 reported as a problem. That is deliberate: if any file at all meant "off", one
 left behind from an incident last month would disable the firewall and nothing

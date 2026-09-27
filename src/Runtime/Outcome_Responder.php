@@ -13,6 +13,7 @@ use Kanopi\BasicFirewall\Plugin;
 use Kanopi\Firewall\Exception\ChallengeRequiredException;
 use Kanopi\Firewall\Exception\ChallengeSolvedException;
 use Kanopi\Firewall\Exception\FirewallBlockedException;
+use Kanopi\Firewall\Exception\FirewallLockdownException;
 
 /**
  * Sends the response for a rejected or challenged request.
@@ -73,6 +74,16 @@ final class Outcome_Responder {
 		}
 
 		$this->send_headers( $status );
+
+		/*
+		 * A lockdown refusal is temporary and says so. The library sends this
+		 * header itself when it delivers the refusal; in `exception` mode it
+		 * hands the refusal here instead, and dropping the header would turn a
+		 * deliberate, short-lived 503 into one a CDN has no reason to retry.
+		 */
+		if ( $outcome instanceof FirewallLockdownException && $outcome->getRetryAfter() > 0 && ! headers_sent() ) {
+			header( 'Retry-After: ' . $outcome->getRetryAfter() );
+		}
 
 		/*
 		 * The message is administrator-authored and may contain a reference

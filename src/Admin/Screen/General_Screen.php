@@ -12,6 +12,7 @@ namespace Kanopi\BasicFirewall\Admin\Screen;
 use Kanopi\BasicFirewall\Admin\Notices;
 use Kanopi\BasicFirewall\Admin\Screen;
 use Kanopi\BasicFirewall\Health\Site_Health;
+use Kanopi\BasicFirewall\Runtime\Lockdown;
 use Kanopi\BasicFirewall\Runtime\Trusted_Proxies;
 use Kanopi\BasicFirewall\Sources\Refresher;
 
@@ -63,6 +64,25 @@ final class General_Screen extends Screen {
 		$all['global']['require_trusted_proxies'] = '' !== $this->posted( 'require_trusted_proxies' );
 		$all['global']['require_config']          = '' !== $this->posted( 'require_config' );
 		$all['global']['panic_file']              = $this->posted( 'panic_file' );
+		$all['global']['lockdown']                = '' !== $this->posted( 'lockdown' );
+
+		$allow  = Lockdown::sort( $this->posted_textarea( 'lockdown_allow' ) );
+		$review = Lockdown::review( $all['global']['lockdown'], $allow, Lockdown::client_address() );
+
+		/*
+		 * Refused outright rather than saved with a fallback, which is what
+		 * every other field on this screen gets. A fallback here would be
+		 * either an empty list -- the library's "serve nobody" -- or a list
+		 * missing the entry somebody meant to be on it.
+		 */
+		if ( null !== $review['error'] ) {
+			Notices::add( esc_html( $review['error'] ), 'error' );
+			Notices::add( esc_html__( 'Nothing on this screen was saved.', 'basic-firewall' ), 'error' );
+
+			$this->redirect( $this->slug() );
+		}
+
+		$all['global']['lockdown_allow'] = $allow['valid'];
 
 		$all['sources']['cron_interval'] = (int) $this->posted( 'sources_cron_interval', (string) DAY_IN_SECONDS );
 
@@ -91,6 +111,10 @@ final class General_Screen extends Screen {
 			}
 		} else {
 			Notices::add( __( 'General settings saved, and the firewall recompiled.', 'basic-firewall' ) );
+		}
+
+		if ( null !== $review['warning'] ) {
+			Notices::add( esc_html( $review['warning'] ), 'warning' );
 		}
 
 		if ( 'block' === $all['global']['mode'] && array() !== $all['global']['bypass_roles'] ) {
@@ -163,6 +187,7 @@ final class General_Screen extends Screen {
 		$this->render_reliability_section();
 		$this->render_sources_section();
 		$this->render_bypass_section();
+		$this->render_lockdown_section();
 		$this->render_panic_section();
 
 		$this->close_form();
@@ -353,6 +378,39 @@ final class General_Screen extends Screen {
 	}
 
 	/**
+	 * Lockdown.
+	 *
+	 * Near the end with the panic file, because both are levers for an
+	 * incident rather than part of setting the firewall up.
+	 */
+	private function render_lockdown_section(): void {
+		$settings = $this->plugin()->settings();
+		$client   = Lockdown::client_address();
+
+		printf( '<h2>%s</h2>', esc_html__( 'Lockdown', 'basic-firewall' ) );
+
+		echo '<table class="form-table" role="presentation"><tbody>';
+
+		$this->row(
+			__( 'Lockdown', 'basic-firewall' ),
+			self::checkbox( 'lockdown', (bool) $settings->get( 'global.lockdown', false ), __( 'Refuse everyone except the addresses below', 'basic-firewall' ) ),
+			__( 'The "we are under attack, let only the office in" switch. Every other rule stops mattering: a client not on the list below is refused before any rule is consulted, and — unlike a block rule — <strong>nobody is recorded</strong>. That is the point. A block-everything rule would fill the block list with the entire internet during exactly the incident when your storage is under the most pressure, and leave every one of them banned once it was lifted.<br><br>Refused visitors get a 503 with <code>Retry-After</code>, which a CDN treats as temporary rather than caching as a verdict.', 'basic-firewall' )
+		);
+
+		$this->row(
+			__( 'Addresses served during lockdown', 'basic-firewall' ),
+			self::textarea( 'lockdown_allow', implode( "\n", Lockdown::lines( (array) $settings->get( 'global.lockdown_allow', array() ) ) ), 4 ),
+			sprintf(
+				/* translators: %s: the address the firewall sees for the current visitor. */
+				__( 'One per line: single addresses and CIDR blocks, IPv4 or IPv6. Not <code>start-end</code> ranges, which an IP rule accepts and this list does not. It is consulted <em>instead of</em> your allow rules, not as well as them, and it is kept while lockdown is off so it is ready when you need it. The firewall sees your address as <code>%s</code>.', 'basic-firewall' ),
+				esc_html( '' !== $client ? $client : __( 'unknown', 'basic-firewall' ) )
+			)
+		);
+
+		echo '</tbody></table>';
+	}
+
+	/**
 	 * The panic file.
 	 *
 	 * Last on the screen, deliberately. It is the lever for an incident, not
@@ -395,7 +453,7 @@ final class General_Screen extends Screen {
 
 		printf(
 			'<p style="max-width:48rem">%s</p><pre class="bfw-code">%s</pre><p style="max-width:48rem">%s</p>',
-			wp_kses_post( __( 'The file has to <em>name</em> a mode, one of <code>block</code>, <code>log</code>, <code>exception</code> or <code>disabled</code>:', 'basic-firewall' ) ),
+			wp_kses_post( __( 'The file has to <em>name</em> a mode, one of <code>block</code>, <code>log</code>, <code>exception</code>, <code>disabled</code> or <code>lockdown</code> — the last refusing everyone but the lockdown allowlist above, so fill that in first:', 'basic-firewall' ) ),
 			esc_html( "echo log > PATH   # stop enforcing, keep recording\nrm PATH            # back to the configured mode" ),
 			wp_kses_post( __( 'An empty file, a typo or one that cannot be read changes <strong>nothing</strong>, and Site Health reports it. That is deliberate: if any file at all meant "off", one left behind from last month would disable the firewall and nobody would know. While a file is active, Site Health raises it as critical, the Status screen leads with it, and <code>wp basic-firewall status</code> reports it.', 'basic-firewall' ) )
 		);
