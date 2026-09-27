@@ -378,6 +378,12 @@ foreach ( array( 'Utility\\ReverseDnsVerifier' ) as $relative ) {
 	bfw_fail( sprintf( '%s is not detectable, so the feature it gates will be withheld', $relative ) );
 }
 
+if ( method_exists( $prefix . '\\Kanopi\\Firewall\\Plugins\\RateLimit', 'keyComponents' ) ) {
+	bfw_pass( 'RateLimit::keyComponents() is detectable on the scoped class' );
+} else {
+	bfw_fail( 'RateLimit::keyComponents() is not detectable, so rate limit keys will be reported as unsupported' );
+}
+
 // ---------------------------------------------------------------------------
 // 2a. Constants named as strings must not have been renamed.
 // ---------------------------------------------------------------------------

@@ -228,6 +228,19 @@ final class Library_Capabilities {
 	}
 
 	/**
+	 * Whether a rate limit can count something other than the address.
+	 *
+	 * Added in library 2.27.0, with the rule that a limit counting anything
+	 * but the address records no offense. Detected on the method that resolves
+	 * the key, so the check names the thing it is asking about. Without it a
+	 * limit line's key is ignored and the line counts the address -- the
+	 * stricter answer, so the rule still compiles, and says so.
+	 */
+	public function has_composable_rate_limit_key(): bool {
+		return method_exists( self::library_class( 'Plugins', 'RateLimit' ), 'keyComponents' );
+	}
+
+	/**
 	 * A library class, in whichever spelling this build has.
 	 *
 	 * Assembled for the reasons plugin_base_class() gives: a `::class` constant

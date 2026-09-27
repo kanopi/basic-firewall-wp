@@ -15,6 +15,7 @@ use Kanopi\BasicFirewall\Install\Upgrader;
 use Kanopi\BasicFirewall\Library_Capabilities;
 use Kanopi\BasicFirewall\Library_Loader;
 use Kanopi\BasicFirewall\Plugin;
+use Kanopi\BasicFirewall\RuleType\Types\Rate_Limit;
 use Kanopi\BasicFirewall\Runtime\Runner;
 use Kanopi\BasicFirewall\Runtime\Trusted_Proxies;
 
@@ -77,6 +78,7 @@ final class Site_Health {
 			'backends'     => __( 'Basic Firewall backends', 'basic-firewall' ),
 			'compiled'     => __( 'Basic Firewall compiled configuration', 'basic-firewall' ),
 			'verification' => __( 'Basic Firewall crawler verification', 'basic-firewall' ),
+			'rate_keys'    => __( 'Basic Firewall rate limit keys', 'basic-firewall' ),
 			'private_dir'  => __( 'Basic Firewall private directory', 'basic-firewall' ),
 			'bootstrap'    => __( 'Basic Firewall wp-config.php snippet', 'basic-firewall' ),
 			'evaluation'   => __( 'Basic Firewall evaluation point', 'basic-firewall' ),
@@ -119,6 +121,7 @@ final class Site_Health {
 			'backends'    => self::check_backends(),
 			'compiled'    => self::check_compiled(),
 			'verification' => self::check_verification(),
+			'rate_keys'    => self::check_rate_keys(),
 			'private_dir' => self::check_private_dir(),
 			'bootstrap'   => self::check_bootstrap(),
 			'evaluation'  => self::check_evaluation(),
@@ -555,6 +558,52 @@ final class Site_Health {
 				/* translators: %s: rule names. */
 				esc_html__( 'These rules verify crawlers by reverse DNS: %s. Each lookup is made on the request path the first time an address is seen, and a verdict is cached — so a local caching resolver on this host is what keeps a cache miss at a couple of milliseconds rather than a hundred.', 'basic-firewall' ),
 				$names
+			)
+		);
+	}
+
+	/**
+	 * Is every identity-keyed rate limit paired with an address-keyed one?
+	 *
+	 * A recommendation rather than critical: the rule works, and the
+	 * configuration is occasionally deliberate -- an address limit can live in
+	 * front of WordPress, where this cannot see it. But the two key shapes
+	 * catch opposite attacks, and an identity-keyed limit records no offense,
+	 * so on its own it leaves brute force unprotected and the block list empty
+	 * while reading, on every screen, as a tightening.
+	 *
+	 * @return array{status: string, label: string, description: string, actions: string}
+	 */
+	private static function check_rate_keys(): array {
+		$rules    = (array) Plugin::instance()->settings()->get( 'rules', array() );
+		$unpaired = Rate_Limit::unpaired_identity_limits( $rules );
+
+		if ( array() === $unpaired ) {
+			return self::ok(
+				__( 'Every rate limit counting an account also has one counting the address', 'basic-firewall' ),
+				esc_html__( 'A limit that counts an account, a header or a field catches many clients against one account and misses one client working through many. None of the rate limits here is relying on one without the other.', 'basic-firewall' )
+			);
+		}
+
+		$lines = array();
+
+		foreach ( $unpaired as $id => $patterns ) {
+			$lines[] = sprintf(
+				'<li><strong>%s</strong> — <code>%s</code></li>',
+				esc_html( (string) $id ),
+				esc_html( implode( ', ', $patterns ) )
+			);
+		}
+
+		return self::recommended(
+			__( 'A rate limit counts an account, but nothing counts the address beside it', 'basic-firewall' ),
+			'<p>' . esc_html__( 'These limits count something other than the client address:', 'basic-firewall' ) . '</p><ul>' . implode( '', $lines ) . '</ul><p>'
+				. esc_html__( 'That catches many clients attacking one account, and misses one client working through a list of accounts — each name gets a fresh allowance, which is the attack an address-keyed limit catches. It also records no offense, so nothing reaches the block list. Add a separate rate limit rule on the same pattern that counts the address. It has to be a separate rule: within one, only the first line whose pattern matches is used.', 'basic-firewall' )
+				. '</p>',
+			sprintf(
+				'<p><a href="%s">%s</a></p>',
+				esc_url( Admin::url( 'basic-firewall-rules' ) ),
+				esc_html__( 'Open the rules', 'basic-firewall' )
 			)
 		);
 	}

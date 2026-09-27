@@ -18,6 +18,7 @@ use Kanopi\BasicFirewall\RuleType\Response_Settings;
 use Kanopi\BasicFirewall\RuleType\Rule_Type;
 use Kanopi\BasicFirewall\RuleType\Rule_Type_Base;
 use Kanopi\BasicFirewall\RuleType\Types\Ip_Address;
+use Kanopi\BasicFirewall\RuleType\Types\Rate_Limit;
 use Kanopi\Firewall\Utility\Schedule;
 use Symfony\Component\Yaml\Yaml;
 
@@ -315,6 +316,10 @@ final class Rule_Edit_Screen extends Screen {
 			);
 		}
 
+		if ( 'rate_limit' === $type->id() ) {
+			$this->warn_about_rate_limit_keys( $rule );
+		}
+
 		foreach ( $type->check_requirements( $settings ) as $problem ) {
 			Notices::add( esc_html( $problem ), 'warning' );
 		}
@@ -322,6 +327,54 @@ final class Rule_Edit_Screen extends Screen {
 		Notices::add( __( 'Rule saved, and the firewall recompiled.', 'basic-firewall' ) );
 
 		$this->redirect( 'basic-firewall-rules' );
+	}
+
+	/**
+	 * Say what an identity-keyed rate limit does not do, at the moment it is saved.
+	 *
+	 * As well as in Site Health, because this is the moment the choice is made
+	 * and an identity-keyed limit reads as a tightening while being half of
+	 * one. It catches a botnet against one account and misses one client
+	 * walking a list of accounts, and it records no offense -- so on its own it
+	 * leaves brute force unprotected and the block list empty.
+	 *
+	 * A warning, not a refusal: an address limit can legitimately live in
+	 * front of WordPress entirely, where nothing here can see it.
+	 *
+	 * @param array<string, mixed> $rule The rule just saved.
+	 */
+	private function warn_about_rate_limit_keys( array $rule ): void {
+		$unpaired = Rate_Limit::unpaired_identity_limits( (array) $this->plugin()->settings()->get( 'rules', array() ) );
+		$patterns = $unpaired[ (string) $rule['id'] ] ?? array();
+
+		if ( array() !== $patterns ) {
+			Notices::add(
+				sprintf(
+					/* translators: %s: comma-separated patterns. */
+					__( 'The limit on %s counts something other than the client address, and no other rate limit rule counts the address on that pattern. It will refuse requests but never ban anyone, and it misses one client working through a list of accounts — each name gets a fresh allowance. Add a separate rate limit rule on the same pattern that counts the address, usually with a looser allowance.', 'basic-firewall' ),
+					'<code>' . esc_html( implode( ', ', $patterns ) ) . '</code>'
+				),
+				'warning'
+			);
+		}
+
+		/*
+		 * Recording an identity-keyed limit hands the ban to whichever address
+		 * happened to trip it -- which, once an attacker has spent an account's
+		 * budget, is the account owner's own next login. The library withholds
+		 * that by default for exactly this reason; `record: true` overrides it.
+		 */
+		$identity = array_filter(
+			Rate_Limit::limits( (array) $rule['settings'] ),
+			static fn ( array $limit ): bool => Rate_Limit::counts_an_identity( $limit['key'] )
+		);
+
+		if ( 'yes' === ( $rule['record'] ?? 'default' ) && array() !== $identity ) {
+			Notices::add(
+				__( 'This rule records the client, and some of its limits count an account rather than the address. An attacker can spend a victim\'s allowance from their own machines, and the victim\'s next attempt would then put the <strong>victim\'s</strong> address on the block list — for everything, lengthening each time if escalation is on. Leave Record the client on Default unless the account and the address really are the same thing.', 'basic-firewall' ),
+				'warning'
+			);
+		}
 	}
 
 	/**

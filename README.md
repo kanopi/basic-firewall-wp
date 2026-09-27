@@ -871,11 +871,43 @@ withheld.
 
 So an identity-keyed limit alone leaves brute force unprotected and nothing on
 the block list. Keep the address-keyed limit and add the identity-keyed one
-beside it, rather than replacing it. And it counts every attempt against the
-named account from anywhere, which means anyone can spend that account's budget
-for it: five failed logins as `alice` lock `alice` out for the window. That is
-the classic account-lockout trade — choose it when credential stuffing is the
-bigger worry.
+beside it, rather than replacing it. The rule screen says so when you save one
+without a companion, and Site Health says so for as long as it stays that way.
+A key that *includes* `client_ip` — `client_ip, post.log` — is still
+address-keyed as far as banning goes, and is not warned about.
+
+**The companion has to be a separate rule.** Within one rate limit rule the
+library uses the first line whose pattern matches and never looks further, so
+two lines for `/wp-login.php` in the same rule leave the second doing nothing:
+
+```
+# Rule "Login accounts"
+/wp-login.php 5 300 post.log
+
+# Rule "Login addresses" — a second rate limit rule
+/wp-login.php 50 300
+```
+
+The screen refuses the same pattern twice in one rule for that reason. (The
+library's own documentation shows the pair as two entries in one list, and its
+linter accepts that; both are wrong about what the evaluator does.) The pairing
+check compares patterns as written, so `/wp-*` in another rule is not recognised
+as covering `/wp-login.php` even where it would.
+
+It also counts every attempt against the named account from anywhere, which
+means anyone can spend that account's budget for it: five failed logins as
+`alice` lock `alice` out for the window. That is the classic account-lockout
+trade — choose it when credential stuffing is the bigger worry. Setting
+**Record the client** to *Yes* on such a rule overrides the library's refusal to
+ban, and hands the ban to whichever address trips the limit next — usually the
+account's owner. The screen warns when you do.
+
+Two keys are refused outright, because they would put every request in one
+bucket and let one visitor spend the allowance for the whole site: a component
+the library cannot resolve (`pots.log`, a bare `post`), and a form field, cookie
+or query parameter named with capitals. The library lower-cases every component
+before looking it up, which is harmless for a header and means `post.userName`
+looks for `username` and finds nothing.
 
 ### Regular expressions
 

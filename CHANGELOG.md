@@ -9,6 +9,21 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Rate limits that count an account now come with the pairing they need.**
+  A limit line's fourth field — `/wp-login.php 5 300 post.log` — counts the
+  account rather than the address, which catches a botnet against one account,
+  misses one client walking a list of usernames, and never bans. Saving one with
+  no address-keyed limit on the same pattern in another rate limit rule now
+  warns, and so does Site Health for as long as it stays that way; recording
+  such a rule warns that the ban lands on whichever address trips it next. The
+  rule list says what each limit counts.
+- The rate limit screen refuses three lines that looked fine and were not: a key
+  component the library cannot resolve and a form, cookie or query field named
+  with capitals — both of which put every request in one shared bucket — and the
+  same pattern twice in one rule, whose second line the library never reaches.
+  A key on a library older than 2.27.0 is reported as counting the address
+  instead.
+
 - **Reverse-DNS crawler verification** on the user agent rule, so an allow rule
   for `bot equals true` is no longer a skeleton key for anyone who types
   `Googlebot/2.1`. List the domains you accept and the rule matches only a client
