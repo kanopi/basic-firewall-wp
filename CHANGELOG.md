@@ -9,6 +9,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Observe only**, per rule, so one rule can be tried on live traffic while
+  every other rule keeps enforcing. An observing rule is evaluated and every
+  match logged at `warning`, then treated as no match. The rule list reads
+  *Block — observing only*, the Test screen reports *Matched, but only
+  observed* rather than allowed, and the Log screen gains an enforcement filter
+  that counts observed matches apart from everything else — matched on the
+  library's message, because a mark carries the same `enforced: false`. Offered
+  only where the library honours it; elsewhere an observing rule is skipped at
+  compile time rather than left to enforce.
+
 - Every firewall decision is announced as a WordPress action:
   `basic_firewall_decision` with the event and its kind, and
   `basic_firewall_decision_{$type}` — `allowed`, `blocked`, `challenged`,

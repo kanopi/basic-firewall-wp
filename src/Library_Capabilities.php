@@ -147,6 +147,21 @@ final class Library_Capabilities {
 	}
 
 	/**
+	 * Whether a single rule can be set to observe instead of enforce.
+	 *
+	 * Added in library 2.20.0, older than the version this plugin requires --
+	 * checked anyway, because a site whose own Composer autoloader wins the race
+	 * can hand this plugin an older library than it shipped with. Without the
+	 * method the `mode` key is inert, and a rule saved as observing would
+	 * enforce on live traffic while the screen said it was only watching: the
+	 * one direction this must never fail in. So the box is not offered, and the
+	 * compiler skips an observing rule rather than letting it enforce.
+	 */
+	public function has_observe_mode(): bool {
+		return method_exists( self::plugin_base_class(), 'isObserveMode' );
+	}
+
+	/**
 	 * Whether the Core Rule Set is present and actually detecting.
 	 */
 	public function has_working_crs(): bool {

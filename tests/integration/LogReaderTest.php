@@ -190,6 +190,20 @@ final class LogReaderTest extends TestCase {
 				'rule'    => 'fixture-scanners',
 				'path'    => '/.env',
 			),
+			array(
+				'level'   => 'WARNING',
+				'message' => 'Rule matched in observe mode - not enforced',
+				'rule'    => 'fixture-observed',
+				'path'    => '/wp-login.php',
+			),
+			// Also `enforced: false` in the library's context, and not an
+			// observed match -- which is why the filter reads the message.
+			array(
+				'level'   => 'INFO',
+				'message' => 'Request marked',
+				'rule'    => 'fixture-marked',
+				'path'    => '/xmlrpc.php',
+			),
 		);
 	}
 
@@ -290,7 +304,7 @@ final class LogReaderTest extends TestCase {
 	public function test_filtering_by_when(): void {
 		$since = time() - HOUR_IN_SECONDS;
 
-		$this->assertCount( 3, $this->fixture_entries( array( 'since' => $since ) ) );
+		$this->assertCount( count( self::fixtures() ), $this->fixture_entries( array( 'since' => $since ) ) );
 
 		foreach ( $this->fixture_entries( array( 'since' => $since ) ) as $entry ) {
 			$this->assertGreaterThanOrEqual( $since, $entry['timestamp'] );
@@ -300,6 +314,30 @@ final class LogReaderTest extends TestCase {
 			array(),
 			$this->fixture_entries( array( 'since' => time() + HOUR_IN_SECONDS ) ),
 			'A window starting in the future matched something, so the comparison is the wrong way round.'
+		);
+	}
+
+	/**
+	 * Observed matches can be counted apart from everything else.
+	 *
+	 * The count a rule set to observe only exists to produce: what it would
+	 * have done, before anybody lets it do it.
+	 */
+	public function test_filtering_by_enforcement(): void {
+		$observed = $this->fixture_entries( array( 'enforcement' => Log_Reader::OBSERVED ) );
+
+		$this->assertCount( 1, $observed );
+		$this->assertSame( 'fixture-observed', $observed[0]['rule'], 'A mark is not an observed match, though both are unenforced.' );
+
+		$enforced = $this->fixture_entries( array( 'enforcement' => Log_Reader::ENFORCED ) );
+
+		$this->assertCount( count( self::fixtures() ) - 1, $enforced );
+		$this->assertNotContains( 'fixture-observed', array_column( $enforced, 'rule' ) );
+
+		$this->assertCount(
+			count( self::fixtures() ),
+			$this->fixture_entries( array( 'enforcement' => 'anything-else' ) ),
+			'An unrecognised value filtered something out.'
 		);
 	}
 

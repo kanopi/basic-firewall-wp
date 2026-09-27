@@ -629,6 +629,25 @@ final class Config_Compiler {
 			}
 
 			/*
+			 * An observing rule the library cannot observe with is skipped.
+			 *
+			 * Without observe mode the `mode` key is ignored and the rule
+			 * enforces. Skipping it errs towards doing nothing, which is what
+			 * the administrator asked this rule to do to traffic anyway;
+			 * compiling it would refuse visitors while the screen said the rule
+			 * was only watching.
+			 */
+			if ( true === ( $rule['observe'] ?? false ) && ! $capabilities->has_observe_mode() ) {
+				$this->problems[] = sprintf(
+					/* translators: %s: rule identifier. */
+					__( 'Rule "%s" is set to observe only, which the installed firewall library cannot do — it would enforce instead. It was skipped.', 'basic-firewall' ),
+					(string) ( $rule['id'] ?? '?' )
+				);
+
+				continue;
+			}
+
+			/*
 			 * A redirect naming nowhere, or somewhere it should not, is skipped.
 			 *
 			 * The rule screen refuses to save one. This is the same refusal for

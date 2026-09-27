@@ -353,7 +353,7 @@ if ( ! class_exists( $base ) ) {
 } else {
 	bfw_pass( 'the scoped plugin base class resolves' );
 
-	foreach ( array( 'getRedirectLocation', 'getMarkName', 'recordsOffenses' ) as $method ) {
+	foreach ( array( 'getRedirectLocation', 'getMarkName', 'recordsOffenses', 'isObserveMode' ) as $method ) {
 		if ( method_exists( $base, $method ) ) {
 			bfw_pass( sprintf( '%s() is detectable on the scoped class', $method ) );
 

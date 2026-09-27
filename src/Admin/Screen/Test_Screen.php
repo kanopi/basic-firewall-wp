@@ -218,6 +218,7 @@ final class Test_Screen extends Screen {
 			'redirect'  => __( 'Redirected', 'basic-firewall' ),
 			'record'    => __( 'Served, and recorded for next time', 'basic-firewall' ),
 			'mark'      => __( 'Served, and marked', 'basic-firewall' ),
+			'observe'   => __( 'Matched, but only observed', 'basic-firewall' ),
 			default     => __( 'Could not be tested', 'basic-firewall' ),
 		};
 

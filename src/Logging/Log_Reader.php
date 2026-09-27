@@ -30,6 +30,27 @@ use Kanopi\BasicFirewall\Plugin;
 final class Log_Reader {
 
 	/**
+	 * Filter value for matches a rule only observed.
+	 */
+	public const OBSERVED = 'observed';
+
+	/**
+	 * Filter value for everything else.
+	 */
+	public const ENFORCED = 'enforced';
+
+	/**
+	 * The message the library logs for a match it did not enforce.
+	 *
+	 * Emitted from one place upstream, and the wording is load-bearing here.
+	 * If a library upgrade changes it, the filter returns nothing rather than
+	 * the wrong rows -- the safer of the two failures -- and the request
+	 * tester stops naming observed matches, which LogReaderTest and
+	 * ObserveModeTest would both notice.
+	 */
+	public const OBSERVED_MESSAGE = 'matched in observe mode';
+
+	/**
 	 * The configured log table, or null when no database handler is enabled.
 	 */
 	public function table(): ?string {
@@ -197,11 +218,14 @@ final class Log_Reader {
 	 * is parameterised. The table name is the only thing here that cannot be,
 	 * and it is quoted rather than trusted -- see quoted_table().
 	 *
-	 * @param array<string, mixed> $filters Rule, level and since.
+	 * @param array<string, mixed> $filters Rule, level, since, and enforcement
+	 *                                      as OBSERVED or ENFORCED.
 	 *
 	 * @return array{0: string, 1: list<mixed>}
 	 */
 	private function where( array $filters ): array {
+		global $wpdb;
+
 		$clauses    = array();
 		$parameters = array();
 
@@ -224,6 +248,26 @@ final class Log_Reader {
 		if ( $since > 0 ) {
 			$clauses[]    = 'logged_at >= %d';
 			$parameters[] = $since;
+		}
+
+		/*
+		 * Matched on the message rather than on `enforced`, the key the library
+		 * sets. Two reasons, and neither is preference.
+		 *
+		 * The table has no `enforced` column -- it is inside the JSON `context`
+		 * text, so asking for it means a substring match on serialised JSON,
+		 * which is neither indexed nor reliable.
+		 *
+		 * And `enforced: false` is not only set by an observed match: a mark
+		 * and a log-mode redirect carry it too. Those are different facts, and
+		 * a filter offering "observed" that also returned them would be wrong
+		 * rather than merely broad.
+		 */
+		$enforcement = (string) ( $filters['enforcement'] ?? '' );
+
+		if ( self::OBSERVED === $enforcement || self::ENFORCED === $enforcement ) {
+			$clauses[]    = self::OBSERVED === $enforcement ? 'message LIKE %s' : 'message NOT LIKE %s';
+			$parameters[] = '%' . $wpdb->esc_like( self::OBSERVED_MESSAGE ) . '%';
 		}
 
 		return array(

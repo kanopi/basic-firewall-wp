@@ -409,7 +409,22 @@ final class Rules_Screen extends Screen {
 				printf( '<td class="column-type">%s</td>', esc_html( $type->label() ) );
 			}
 
-			printf( '<td class="column-response">%s</td>', esc_html( $this->response_label( (string) ( $rule['response'] ?? '' ) ) ) );
+			/*
+			 * An observing rule is said first, and plainly. A row reading
+			 * "Block" on a rule that refuses nobody is the listing actively
+			 * misleading whoever came here to check what the firewall does.
+			 */
+			$response = $this->response_label( (string) ( $rule['response'] ?? '' ) );
+
+			if ( ! empty( $rule['observe'] ) ) {
+				$response = sprintf(
+					/* translators: %s: the response, such as "Block". */
+					__( '%s — observing only', 'basic-firewall' ),
+					$response
+				);
+			}
+
+			printf( '<td class="column-response">%s</td>', esc_html( $response ) );
 			printf( '<td class="column-weight">%d</td>', (int) ( $rule['weight'] ?? 0 ) );
 
 			printf( '<td class="column-summary">%s</td>', esc_html( $this->summarize( $type, (array) ( $rule['settings'] ?? array() ) ) ) );

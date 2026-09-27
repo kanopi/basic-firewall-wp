@@ -183,6 +183,19 @@ abstract class Rule_Type_Base implements Rule_Type {
 			$metadata['challenge_provider'] = $provider;
 		}
 
+		/*
+		 * Only when observing. The library accepts `block` and `enforce` as
+		 * well, and both mean exactly what omitting the key means, so writing
+		 * one would be a value in an exported document that changes nothing.
+		 *
+		 * Written whatever the response is, unlike the keys below: observing is
+		 * orthogonal to what the rule would have done, and that is the point --
+		 * it is how you find out what a block rule *would* have blocked.
+		 */
+		if ( true === ( $rule['observe'] ?? false ) ) {
+			$metadata['mode'] = 'log';
+		}
+
 		$metadata = $this->apply_response_metadata( $metadata, $rule );
 		$metadata = self::apply_schedule( $metadata, $rule );
 

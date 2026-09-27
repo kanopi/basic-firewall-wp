@@ -81,6 +81,7 @@ final class Rule_Edit_Screen extends Screen {
 			'type'               => $type->id(),
 			'label'              => '',
 			'enabled'            => true,
+			'observe'            => false,
 			'response'           => 'block',
 			'weight'             => $type->weight(),
 			'status_code'        => 0,
@@ -208,11 +209,23 @@ final class Rule_Edit_Screen extends Screen {
 			? 0
 			: (int) $this->posted( 'status_code', '0' );
 
+		/*
+		 * Not conditioned on the response: observing is orthogonal to what the
+		 * rule would otherwise do. Where the box is not offered, the stored
+		 * value is kept rather than read as unticked -- an edit on a library
+		 * without observe mode must not quietly turn a watching rule into an
+		 * enforcing one.
+		 */
+		$observe = ( new \Kanopi\BasicFirewall\Library_Capabilities() )->has_observe_mode()
+			? '' !== $this->posted( 'observe' )
+			: ! empty( $existing['observe'] );
+
 		$rule = array(
 			'id'                 => $id,
 			'type'               => $type->id(),
 			'label'              => $this->posted( 'label' ),
 			'enabled'            => '' !== $this->posted( 'enabled' ),
+			'observe'            => $observe,
 			'response'           => $response,
 			'weight'             => (int) $this->posted( 'weight', '0' ),
 			'status_code'        => $status_code,
@@ -422,6 +435,19 @@ final class Rule_Edit_Screen extends Screen {
 			__( 'Enabled', 'basic-firewall' ),
 			self::checkbox( 'enabled', (bool) $rule['enabled'], __( 'Evaluate this rule', 'basic-firewall' ) )
 		);
+
+		/*
+		 * Offered only where the library honours it. A box that said "observe"
+		 * over a library ignoring the key would enforce on live traffic while
+		 * claiming to watch, which is the one way this must never be wrong.
+		 */
+		if ( ( new \Kanopi\BasicFirewall\Library_Capabilities() )->has_observe_mode() ) {
+			$this->row(
+				__( 'Observe only', 'basic-firewall' ),
+				self::checkbox( 'observe', ! empty( $rule['observe'] ), __( 'Match and log, but do not act', 'basic-firewall' ) ),
+				__( 'The rule is evaluated and every match is logged at warning level, then treated as no match — evaluation carries on and every other rule enforces as normal. This is how you find out what a rule <em>would</em> have done before letting it do it: add it, leave it a week, count its matches on the <strong>Log</strong> screen with <em>Observed only</em>, then clear this box.', 'basic-firewall' )
+			);
+		}
 
 		$responses = array();
 

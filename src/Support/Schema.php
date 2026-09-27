@@ -900,6 +900,18 @@ final class Schema {
 					 */
 					'choices' => array( 'allow', 'challenge', 'block', 'redirect', 'mark', 'record' ),
 				),
+				'observe'            => array(
+					'type'    => 'bool',
+					'label'   => 'Match and log without acting',
+
+					/*
+					 * Compiles to `metadata.mode: log`. A boolean because the
+					 * screen asks a two-way question; the library also accepts
+					 * `block` and `enforce`, both of which mean what leaving
+					 * this off means.
+					 */
+					'default' => false,
+				),
 				'weight'             => array(
 					'type'    => 'int',
 					'label'   => 'Weight',

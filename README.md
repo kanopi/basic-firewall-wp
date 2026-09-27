@@ -440,6 +440,50 @@ design, and reporting them as *Allowed* — which is what the screen says when n
 rule matched at all — would tell somebody testing their honeypot that it does
 not work at the moment it has just caught them.
 
+### Observing a rule before letting it act
+
+Any rule can be set to **Observe only**, on the rule screen. It is evaluated
+normally and every match is logged at `warning`, then treated as no match — so
+evaluation carries on and every other rule enforces exactly as before.
+
+This is the answer to the question every new rule raises: *what will this
+actually catch?* Without it the options are enforcing a rule nobody has measured
+and finding out from visitors, or setting the whole firewall to log mode and
+stopping every other rule enforcing with it. Neither is a reasonable thing to
+ask somebody, which is why unsure rules get left disabled, where they say
+nothing at all.
+
+The workflow it exists for:
+
+1. Add the rule and tick **Observe only**.
+2. Leave it a week.
+3. Open the **Log** screen and set the enforcement filter to *Observed only*,
+   with the rule chosen. That is exactly what this rule would have done.
+4. Look at what it caught. If it is what you expected, clear the box.
+
+Worth knowing:
+
+- **It is independent of the response.** A block rule set to observe refuses
+  nobody; a challenge rule set to observe challenges nobody. The response
+  records what the rule *would* do, which is the thing you are measuring.
+- **The rule list says so.** An observing rule's Response column reads
+  *Block — observing only* rather than *Block*, because a page you opened to
+  check what your firewall does should not tell you the opposite.
+- **The Test screen says so too.** A request an observing rule matches is
+  reported as *Matched, but only observed* rather than as allowed — otherwise
+  testing the rule you just set to observe would report that it does not work.
+- **It fails towards doing nothing.** The box is only offered when the installed
+  library honours it. On a library that would ignore the key — possible when a
+  site's own Composer autoloader wins the race — the compiler skips an observing
+  rule and says so on the Status screen, rather than letting it enforce while
+  the screen says it is watching.
+- **A typo enforces.** The library accepts `log`, `block` and `enforce` in the
+  underlying `metadata.mode` and warns about anything else, then enforces. That
+  is deliberate upstream: `mode: observe` and `mode: lgo` are both easy to write
+  and neither observes anything. The screen only ever stores a value the library
+  accepts, so this concerns a hand-edited compiled file or Advanced YAML, not
+  the interface.
+
 ### Adding your own rule type
 
 Drupal discovers rule types by scanning for a PHP attribute. WordPress has no

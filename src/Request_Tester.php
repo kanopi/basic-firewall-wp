@@ -10,6 +10,7 @@ declare( strict_types = 1 );
 namespace Kanopi\BasicFirewall;
 
 use Kanopi\BasicFirewall\Compiler\Library_Map;
+use Kanopi\BasicFirewall\Logging\Log_Reader;
 use Kanopi\Firewall\Exception\ChallengeRequiredException;
 use Kanopi\Firewall\Exception\FirewallBlockedException;
 use Kanopi\Firewall\Exception\FirewallRedirectException;
@@ -137,17 +138,19 @@ final class Request_Tester {
 	}
 
 	/**
-	 * A served request that a record or mark rule acted on, or null.
+	 * A served request that a record, observing or mark rule acted on, or null.
 	 *
-	 * Both responses serve the request by design, so the firewall answers
-	 * "allowed" and the log line is the only evidence either rule fired.
-	 * Without reading it, testing a honeypot reports "no rule matched" at the
-	 * moment it has just caught the tester -- which reads as the rule being
+	 * All three serve the request by design, so the firewall answers "allowed"
+	 * and the log line is the only evidence any of them fired. Without reading
+	 * it, testing a honeypot reports "no rule matched" at the moment it has
+	 * just caught the tester, and testing the rule you just set to observe
+	 * reports that it does not work -- both of which read as the rule being
 	 * broken.
 	 *
-	 * Record outranks mark. A request can be marked and then recorded; the mark
-	 * says a rule noticed, the record that the client will be refused next
-	 * time, and the stronger claim is the one worth leading with.
+	 * Strongest claim first. A record says the client will be refused next
+	 * time, which is something happening. An observed match is next: the
+	 * administrator is asking specifically what that rule would have done. A
+	 * mark says only that a rule noticed.
 	 *
 	 * @param TestHandler $capture The capture handler.
 	 *
@@ -155,6 +158,7 @@ final class Request_Tester {
 	 */
 	private function served_but_noticed( TestHandler $capture ): ?array {
 		$recorded = null;
+		$observed = null;
 		$marked   = null;
 		$mark     = null;
 
@@ -171,6 +175,15 @@ final class Request_Tester {
 				$recorded = $plugin;
 			}
 
+			/*
+			 * An observed match is treated as no match, so the request goes on
+			 * to be decided by something else entirely; this line is the only
+			 * trace of it.
+			 */
+			if ( false !== stripos( $message, Log_Reader::OBSERVED_MESSAGE ) ) {
+				$observed = $plugin;
+			}
+
 			if ( false !== stripos( $message, 'request marked' ) ) {
 				$marked = $plugin;
 				$mark   = is_string( $context['mark'] ?? null ) ? $context['mark'] : null;
@@ -183,6 +196,17 @@ final class Request_Tester {
 				'status'  => null,
 				'rule'    => $recorded,
 				'message' => __( 'A record rule matched. This request would be served normally — that is the point — and the client would be refused from its next one.', 'basic-firewall' ),
+				'log'     => $this->format_log( $capture ),
+				'error'   => null,
+			);
+		}
+
+		if ( null !== $observed ) {
+			return array(
+				'verdict' => 'observe',
+				'status'  => null,
+				'rule'    => $observed,
+				'message' => __( 'A rule matched while set to observe only. This request would be served — the rule acts on nothing — and the match would be logged for you to count.', 'basic-firewall' ),
 				'log'     => $this->format_log( $capture ),
 				'error'   => null,
 			);

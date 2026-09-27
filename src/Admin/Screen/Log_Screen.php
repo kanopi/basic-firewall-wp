@@ -232,18 +232,20 @@ final class Log_Screen extends Screen {
 	 * @return array<string, mixed>
 	 */
 	private function filters( Log_Reader $reader ): array {
-		$rule  = $this->query( 'rule' );
-		$level = $this->query( 'level' );
-		$since = $this->query( 'since' );
+		$rule        = $this->query( 'rule' );
+		$level       = $this->query( 'level' );
+		$since       = $this->query( 'since' );
+		$enforcement = $this->query( 'enforcement' );
 
 		return array(
 			// Checked against what is actually in the log, so a crafted value
 			// asks for nothing rather than for everything.
-			'rule'  => in_array( $rule, $reader->rules(), true ) ? $rule : '',
-			'level' => in_array( $level, $reader->levels(), true ) ? $level : '',
-			'since' => isset( $this->windows()[ $since ] ) && '' !== $since
+			'rule'        => in_array( $rule, $reader->rules(), true ) ? $rule : '',
+			'level'       => in_array( $level, $reader->levels(), true ) ? $level : '',
+			'since'       => isset( $this->windows()[ $since ] ) && '' !== $since
 				? time() - (int) $this->windows()[ $since ]['seconds']
 				: 0,
+			'enforcement' => in_array( $enforcement, array( Log_Reader::OBSERVED, Log_Reader::ENFORCED ), true ) ? $enforcement : '',
 		);
 	}
 
@@ -321,11 +323,24 @@ final class Log_Screen extends Screen {
 
 		echo ' ' . wp_kses( self::select( 'since', $options, $this->query( 'since' ) ), self::allowed_control_html() );
 
+		/*
+		 * How a rule set to observe only is measured: it logs every match and
+		 * lets the request carry on, so this is the count of what it would
+		 * have done before anybody lets it do it.
+		 */
+		$options = array(
+			''                   => __( 'Observed or enforced', 'basic-firewall' ),
+			Log_Reader::OBSERVED => __( 'Observed only — the rule acted on nothing', 'basic-firewall' ),
+			Log_Reader::ENFORCED => __( 'Enforced only', 'basic-firewall' ),
+		);
+
+		echo ' ' . wp_kses( self::select( 'enforcement', $options, (string) $filters['enforcement'] ), self::allowed_control_html() );
+
 		echo ' ';
 
 		submit_button( __( 'Filter', 'basic-firewall' ), 'secondary', '', false );
 
-		if ( '' !== (string) $filters['rule'] || '' !== (string) $filters['level'] || 0 !== (int) $filters['since'] ) {
+		if ( '' !== (string) $filters['rule'] || '' !== (string) $filters['level'] || 0 !== (int) $filters['since'] || '' !== (string) $filters['enforcement'] ) {
 			printf(
 				' <a href="%s">%s</a>',
 				esc_url( Admin::url( $this->slug() ) ),
