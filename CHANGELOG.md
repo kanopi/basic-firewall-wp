@@ -100,6 +100,21 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **A redirect rule redirects in `exception` mode.** The outcome responder had
+  no branch for the library's redirect outcome, so it fell through to being
+  treated as a firewall failure: the visitor was served the page the rule was
+  written to send them away from, and an evaluation error was logged on every
+  request it matched. It now answers with the rule's destination and status —
+  302 unless the rule says otherwise — and `Cache-Control: no-store`, as the
+  library does in blocking mode. The wp-config.php path still fails open on
+  every `exception` mode outcome, as before, and says so.
+- The README said a rate limit "cannot depend on who is asking". Since
+  `kanopi/firewall` 2.27.0 a limit line can count an account, a header or a
+  field instead of the address, and the rule screen has offered it; what a
+  limit still cannot do is give different visitors different allowances. The
+  README now documents the fourth field, and why an identity-keyed limit
+  catches the opposite attack to an address-keyed one and never bans.
+
 - Several hour ranges in an activity window, separated by commas, are compiled
   as a list. They were handed to the library as typed, which reads one string as
   one range, refuses the line as malformed, and does not start the rule. A

@@ -36,11 +36,12 @@ use Kanopi\Firewall\Plugins\RateLimit;
  * And if the site is behind a CDN with trusted proxies unconfigured, *every*
  * visitor shares one address and one bucket.
  *
- * **A limit cannot depend on who is asking.** The account is not part of the
- * key, so a different allowance for logged-in, anonymous or premium users cannot
- * be expressed here. A premium *endpoint* can carry its own limit; a premium
- * *user* cannot. Per-user quotas belong in the application, where the account is
- * known.
+ * That is the default, not the only choice. Since library 2.27.0 a limit line
+ * can name what to count -- `post.log`, the username on the login form -- so the
+ * budget belongs to an account rather than an address. It still cannot give
+ * different accounts different allowances: a premium *endpoint* can carry its
+ * own limit, a premium *user* cannot, and per-user quotas belong in the
+ * application, where the account is known.
  */
 final class Rate_Limit extends Rule_Type_Base {
 

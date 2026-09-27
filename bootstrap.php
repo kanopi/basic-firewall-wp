@@ -185,11 +185,13 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 			return $allowed;
 		} catch ( \Throwable $e ) {
 			/*
-			 * Includes the blocking exception in `exception` mode. On this path
-			 * there is no responder to hand it to -- the plugin's own is not
-			 * loadable without its autoloader having been registered, and the
-			 * library exits by itself in every other mode -- so anything
-			 * reaching here allows the request. Fail open.
+			 * Includes every outcome `exception` mode throws -- a block, a
+			 * challenge, a redirect. On this path there is no responder to hand
+			 * them to -- the plugin's own is not loadable without its
+			 * autoloader having been registered, and the library exits by
+			 * itself in every other mode -- so anything reaching here allows
+			 * the request. Fail open. The normal path answers all of them;
+			 * `exception` mode is for testing, and this is one more reason.
 			 */
 			return true;
 		}

@@ -107,9 +107,12 @@ which of the two you have and says so.
 [below](#the-private-directory-and-why-wordpress-makes-this-hard) — WordPress has
 no private file system, and on nginx the usual guard files do nothing at all.
 
-**A rate limit cannot depend on who is asking.** The counter is keyed on address
-and pattern, never on the account. A premium *endpoint* can carry its own limit;
-a premium *user* cannot. Per-user quotas belong in the application.
+**A rate limit cannot give different visitors different allowances.** A limit
+can count something other than the address — the username posted to
+`wp-login.php`, say — but every bucket it counts gets the same allowance. A
+premium *endpoint* can carry its own limit; a premium *user* cannot. Per-user
+quotas belong in the application, where the account is known. See
+[How a rate limit counts](#how-a-rate-limit-counts).
 
 **WP-Cron is request-driven.** Source refreshes and log pruning run on WP-Cron,
 which fires when somebody visits the site. On a quiet site they run late or not
@@ -352,7 +355,7 @@ generated.
 | IP address | Client IP — single addresses, CIDR blocks, `start-end` ranges, IPv4 and IPv6 |
 | Request / URL | Method, host, path, scheme, port, query, POST body, headers, cookies |
 | User agent | Automated flag, bot flag, device, browser, OS, brand, model — parsed, not string-matched |
-| Rate limit | Requests per address, per time window, per pattern |
+| Rate limit | Requests per address — or per account, header or field — per time window, per pattern |
 | ASN | Autonomous system number or organisation. Needs a MaxMind ASN database |
 | Geolocation | Country, continent, city, postal code, timezone. MaxMind database or CDN headers |
 | Vulnerability score | Method, country, network, attack patterns, user agent — summed |
@@ -415,6 +418,12 @@ pipeline — that was never written to know this plugin exists.
 a 301 is cached by browsers and intermediaries more or less forever: somebody
 caught by a rule you later tune would keep being sent to the notice page long
 after it stopped matching them.
+
+**A redirect is a redirect in every mode that acts.** In `exception` mode the
+library hands the redirect to the plugin rather than sending it, and the plugin
+answers it the way the library would have — the destination, the status, and
+`Cache-Control: no-store`. On the wp-config.php path `exception` mode fails open
+on every outcome, redirects included; it is a mode for testing.
 
 **A redirect has to name somewhere.** That is not tidiness. The library does not
 reject a redirect rule with no destination when it loads; it throws when the
@@ -767,6 +776,46 @@ corporate VPN, a school, a mobile carrier's gateway. And a path that both opens
 and closes with a slash (`/api/`) satisfies the library's "is this a regex?" test
 and matches any path *containing* `api`. Use `/api/*` or `/api`. The rule screen
 rejects the ambiguous form.
+
+#### Counting something other than the address
+
+A fourth field on a limit line names what to count, comma separated, using the
+vocabulary the Request / URL rule uses — `path`, `method`, `host`, `header.x`,
+`post.y`, `cookie.z`, `query.q` — plus `client_ip` and `rule_pattern`, which are
+what a line without one counts:
+
+```
+/wp-login.php 5 300 post.log        # the account being tried, from anywhere
+/wp-json/* 100 60 client_ip,path    # each endpoint, rather than the API as a whole
+```
+
+`log` is the username field on WordPress's own login form. Needs
+`kanopi/firewall` 2.27.0.
+
+**Read this before reaching for it:** the two key shapes catch opposite attacks,
+and swapping one for the other removes protection while looking like it adds
+some.
+
+| Keyed by | Catches | Misses |
+|---|---|---|
+| address | one client hammering many accounts | a botnet against one account |
+| identity, such as a posted username | many clients against one account | one client walking a list of usernames, which gets a fresh budget per name |
+
+An identity-keyed limit also **never bans**. The library records no offense for a
+key without `client_ip` in it, and the reason is stronger than "the address is not
+what misbehaved": the block list is keyed on the address, so banning there would
+let an attacker spend a victim's account budget from their own machines and get
+the *victim's* address banned — for everything, lengthening each time if
+escalation is on. The request is still refused; only the durable ban is
+withheld.
+
+So an identity-keyed limit alone leaves brute force unprotected and nothing on
+the block list. Keep the address-keyed limit and add the identity-keyed one
+beside it, rather than replacing it. And it counts every attempt against the
+named account from anywhere, which means anyone can spend that account's budget
+for it: five failed logins as `alice` lock `alice` out for the window. That is
+the classic account-lockout trade — choose it when credential stuffing is the
+bigger worry.
 
 ### Regular expressions
 
