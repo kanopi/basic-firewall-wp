@@ -30,7 +30,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   WordPress developer for a string their platform cannot resolve. Existing
   settings are rewritten by a schema upgrade, and the old spelling still
   resolves for anything the upgrade did not reach.
-- The bundled library is now `kanopi/firewall` 2.26.0.
+- The bundled library is now `kanopi/firewall` 2.33.0, and the plugin requires ^2.33.
 - The library version is read from Composer's runtime data first and the
   build-time marker second. The marker is written at build time and went stale
   the moment a working copy ran `composer update` — reporting 2.25.0 while every
