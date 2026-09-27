@@ -175,6 +175,84 @@ final class Library_Capabilities {
 	}
 
 	/**
+	 * Whether a user agent rule can verify a crawler by reverse DNS.
+	 *
+	 * Added in library 2.20.0. Detected rather than assumed for the reason
+	 * observe mode is: a site's own Composer autoloader can hand this plugin an
+	 * older library, and on one without the verifier a stored `verify` key is
+	 * ignored. On an allow rule that is the worst direction there is -- the rule
+	 * lets through everyone who *says* they are Googlebot while the screen says
+	 * it checks. So the setting is not offered, and the compiler skips a rule
+	 * that asks for it.
+	 */
+	public function has_identity_verification(): bool {
+		return class_exists( self::library_class( 'Utility', 'ReverseDnsVerifier' ) );
+	}
+
+	/**
+	 * Whether a rule can say for itself that its verification goes online.
+	 *
+	 * Added in library 2.33.0, and the difference between verification working
+	 * and not. Before it, the verifier read `KANOPI_FIREWALL_SOURCES_OFFLINE` --
+	 * the switch this plugin turns on so that a rule-list refresh never lands on
+	 * a visitor's request -- and the same switch reached the two DNS lookups.
+	 * Every verifying rule therefore matched nobody on a default install, with
+	 * nothing but a debug line to say so (kanopi/firewall#391).
+	 *
+	 * With `metadata.verify_offline` a rule overrides the constant, and the
+	 * compiler writes `false` on every rule that verifies: somebody who ticked
+	 * the box asked for the lookups, and keeping rule lists off the request path
+	 * is a separate decision that should not quietly revoke it.
+	 */
+	public function has_verification_switch(): bool {
+		return method_exists( self::plugin_base_class(), 'verificationOffline' );
+	}
+
+	/**
+	 * Whether a verifying rule would actually verify anybody on this site.
+	 *
+	 * Always, on a library with the per-rule switch. On an older one, only
+	 * where the site has opted out of offline rule sources -- and the opt-out is
+	 * read the way both evaluation paths read it: only an explicit `false`.
+	 */
+	public function identity_verification_runs(): bool {
+		if ( ! $this->has_identity_verification() ) {
+			return false;
+		}
+
+		if ( $this->has_verification_switch() ) {
+			return true;
+		}
+
+		return defined( 'BASIC_FIREWALL_SOURCES_OFFLINE' ) && false === constant( 'BASIC_FIREWALL_SOURCES_OFFLINE' );
+	}
+
+	/**
+	 * A library class, in whichever spelling this build has.
+	 *
+	 * Assembled for the reasons plugin_base_class() gives: a `::class` constant
+	 * would be folded to a constant answer by static analysis, and would name
+	 * only the spelling that exists in one kind of build.
+	 *
+	 * @param string ...$segments The class name below `Kanopi\Firewall`.
+	 *
+	 * @return class-string
+	 */
+	private static function library_class( string ...$segments ): string {
+		$bare   = implode( '\\', array_merge( array( 'Kanopi', 'Firewall' ), $segments ) );
+		$scoped = implode( '\\', array( 'Kanopi', 'BasicFirewall', 'Vendor' ) ) . '\\' . $bare;
+
+		/**
+		 * Whichever spelling this build actually has.
+		 *
+		 * @var class-string $resolved
+		 */
+		$resolved = class_exists( $scoped ) ? $scoped : $bare;
+
+		return $resolved;
+	}
+
+	/**
 	 * Whether the Core Rule Set is present and actually detecting.
 	 */
 	public function has_working_crs(): bool {
@@ -310,6 +388,13 @@ final class Library_Capabilities {
 			$missing[] = array(
 				'feature' => __( 'Refusing without recording', 'basic-firewall' ),
 				'reason'  => __( 'The installed library always records a block in the durable block list. Refusing without recording — what a temporary lockdown needs, so lifting it does not leave every visitor banned — needs kanopi/firewall 2.26.0 or later.', 'basic-firewall' ),
+			);
+		}
+
+		if ( ! $this->has_identity_verification() ) {
+			$missing[] = array(
+				'feature' => __( 'Crawler verification', 'basic-firewall' ),
+				'reason'  => __( 'The installed library cannot verify a crawler by reverse DNS, so a user agent rule can only take the client at its word. Needs kanopi/firewall 2.20.0 or later.', 'basic-firewall' ),
 			);
 		}
 

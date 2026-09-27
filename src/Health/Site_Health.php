@@ -71,20 +71,21 @@ final class Site_Health {
 		 * dashboard's Checks table is read top to bottom.
 		 */
 		return array(
-			'lockdown'    => __( 'Basic Firewall lockdown', 'basic-firewall' ),
-			'panic'       => __( 'Basic Firewall panic switch', 'basic-firewall' ),
-			'library'     => __( 'Basic Firewall library', 'basic-firewall' ),
-			'backends'    => __( 'Basic Firewall backends', 'basic-firewall' ),
-			'compiled'    => __( 'Basic Firewall compiled configuration', 'basic-firewall' ),
-			'private_dir' => __( 'Basic Firewall private directory', 'basic-firewall' ),
-			'bootstrap'   => __( 'Basic Firewall wp-config.php snippet', 'basic-firewall' ),
-			'evaluation'  => __( 'Basic Firewall evaluation point', 'basic-firewall' ),
-			'proxy'       => __( 'Basic Firewall client IP', 'basic-firewall' ),
-			'mode'        => __( 'Basic Firewall operating mode', 'basic-firewall' ),
-			'storage'     => __( 'Basic Firewall block list storage', 'basic-firewall' ),
-			'logging'     => __( 'Basic Firewall logging', 'basic-firewall' ),
-			'records'     => __( 'Basic Firewall block records', 'basic-firewall' ),
-			'upgrade'     => __( 'Basic Firewall upgrades', 'basic-firewall' ),
+			'lockdown'     => __( 'Basic Firewall lockdown', 'basic-firewall' ),
+			'panic'        => __( 'Basic Firewall panic switch', 'basic-firewall' ),
+			'library'      => __( 'Basic Firewall library', 'basic-firewall' ),
+			'backends'     => __( 'Basic Firewall backends', 'basic-firewall' ),
+			'compiled'     => __( 'Basic Firewall compiled configuration', 'basic-firewall' ),
+			'verification' => __( 'Basic Firewall crawler verification', 'basic-firewall' ),
+			'private_dir'  => __( 'Basic Firewall private directory', 'basic-firewall' ),
+			'bootstrap'    => __( 'Basic Firewall wp-config.php snippet', 'basic-firewall' ),
+			'evaluation'   => __( 'Basic Firewall evaluation point', 'basic-firewall' ),
+			'proxy'        => __( 'Basic Firewall client IP', 'basic-firewall' ),
+			'mode'         => __( 'Basic Firewall operating mode', 'basic-firewall' ),
+			'storage'      => __( 'Basic Firewall block list storage', 'basic-firewall' ),
+			'logging'      => __( 'Basic Firewall logging', 'basic-firewall' ),
+			'records'      => __( 'Basic Firewall block records', 'basic-firewall' ),
+			'upgrade'      => __( 'Basic Firewall upgrades', 'basic-firewall' ),
 		);
 	}
 
@@ -117,6 +118,7 @@ final class Site_Health {
 			'library'     => self::check_library(),
 			'backends'    => self::check_backends(),
 			'compiled'    => self::check_compiled(),
+			'verification' => self::check_verification(),
 			'private_dir' => self::check_private_dir(),
 			'bootstrap'   => self::check_bootstrap(),
 			'evaluation'  => self::check_evaluation(),
@@ -483,6 +485,76 @@ final class Site_Health {
 				esc_html__( '%1$d rule(s) and %2$d preset(s) are compiled and being enforced.', 'basic-firewall' ),
 				count( (array) $plugin->settings()->get( 'rules', array() ) ),
 				count( (array) $plugin->settings()->get( 'presets', array() ) )
+			)
+		);
+	}
+
+	/**
+	 * Does every rule that says it verifies crawlers actually verify them?
+	 *
+	 * Critical rather than a recommendation, and the reason is the direction
+	 * of the failure. Verification fails closed, so such a rule matches
+	 * *nobody*: the operator believes genuine crawlers are let through, and
+	 * they are instead judged by whatever rules follow -- blocked, if a rule
+	 * below catches them. Nothing else in the interface would say so.
+	 *
+	 * Reachable only on a library older than 2.33.0, which switches
+	 * verification off with the offline rule-sources flag, or older than
+	 * 2.20.0, which has none. The rule screen refuses to save either, so a rule
+	 * here arrived by import, WP-CLI, or a library downgrade.
+	 *
+	 * @return array{status: string, label: string, description: string, actions: string}
+	 */
+	private static function check_verification(): array {
+		$verifying = array();
+
+		foreach ( (array) Plugin::instance()->settings()->get( 'rules', array() ) as $rule ) {
+			if ( ! is_array( $rule ) || empty( $rule['enabled'] ) || 'user_agent' !== ( $rule['type'] ?? '' ) || empty( $rule['settings']['verify'] ) ) {
+				continue;
+			}
+
+			$verifying[] = (string) ( '' !== (string) ( $rule['label'] ?? '' ) ? $rule['label'] : ( $rule['id'] ?? '?' ) );
+		}
+
+		if ( array() === $verifying ) {
+			return self::ok(
+				__( 'No rule verifies crawlers', 'basic-firewall' ),
+				esc_html__( 'No user agent rule asks for reverse-DNS verification. An allow rule on the agent alone believes whatever the client typed — anyone can claim to be Googlebot — so verify any rule that lets crawlers through.', 'basic-firewall' )
+			);
+		}
+
+		$capabilities = new Library_Capabilities();
+		$names        = '<strong>' . esc_html( implode( ', ', $verifying ) ) . '</strong>';
+
+		if ( ! $capabilities->has_identity_verification() ) {
+			return self::critical(
+				__( 'Rules that verify crawlers are not running', 'basic-firewall' ),
+				sprintf(
+					/* translators: %s: rule names. */
+					esc_html__( 'These rules verify crawlers by reverse DNS: %s. The installed firewall library cannot, so they are skipped when the configuration is compiled rather than left to believe every client claiming to be a crawler.', 'basic-firewall' ),
+					$names
+				)
+			);
+		}
+
+		if ( ! $capabilities->identity_verification_runs() ) {
+			return self::critical(
+				__( 'Rules that verify crawlers are matching nobody', 'basic-firewall' ),
+				sprintf(
+					/* translators: 1: rule names, 2: the wp-config.php line. */
+					esc_html__( 'These rules verify crawlers by reverse DNS: %1$s. The installed firewall library switches verification off while rule lists are kept off the request path, so each of them currently matches nobody — a genuine crawler is treated as ordinary traffic. Update to kanopi/firewall 2.33.0, which gives verification its own switch, or add %2$s to wp-config.php.', 'basic-firewall' ),
+					$names,
+					"<code>define( 'BASIC_FIREWALL_SOURCES_OFFLINE', false );</code>"
+				)
+			);
+		}
+
+		return self::ok(
+			__( 'Rules that verify crawlers can verify them', 'basic-firewall' ),
+			sprintf(
+				/* translators: %s: rule names. */
+				esc_html__( 'These rules verify crawlers by reverse DNS: %s. Each lookup is made on the request path the first time an address is seen, and a verdict is cached — so a local caching resolver on this host is what keeps a cache miss at a couple of milliseconds rather than a hundred.', 'basic-firewall' ),
+				$names
 			)
 		);
 	}

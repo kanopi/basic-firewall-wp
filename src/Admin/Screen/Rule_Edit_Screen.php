@@ -651,6 +651,22 @@ final class Rule_Edit_Screen extends Screen {
 	private function render_settings( Rule_Type $type, array $settings ): void {
 		if ( $type instanceof Condition_Rule_Type_Base ) {
 			$this->render_conditions( $type, $settings );
+
+			/*
+			 * A condition type's own settings beyond its conditions, where it
+			 * describes them. Only the described ones: a nested map such as a
+			 * geolocation reader has no generic control, and a textarea of
+			 * "Array" would be worse than nothing.
+			 *
+			 * Without this the user agent rule's cache and bot-source settings
+			 * were never on the page -- so every save through it posted neither,
+			 * and turned the detection cache off.
+			 */
+			$extras = array_keys( array_diff_key( $type->settings_help(), array_flip( array( 'match_type', 'conditions', 'sources' ) ) ) );
+
+			if ( array() !== $extras ) {
+				$this->render_generic_settings( $type, $settings, $extras );
+			}
 		} else {
 			$this->render_generic_settings( $type, $settings );
 		}
@@ -1211,8 +1227,9 @@ final class Rule_Edit_Screen extends Screen {
 	 *
 	 * @param Rule_Type            $type     The rule type.
 	 * @param array<string, mixed> $settings Current settings.
+	 * @param list<string>|null    $only     Render only these keys, or all when null.
 	 */
-	private function render_generic_settings( Rule_Type $type, array $settings ): void {
+	private function render_generic_settings( Rule_Type $type, array $settings, ?array $only = null ): void {
 		$help = $type->settings_help();
 
 		echo '<table class="form-table" role="presentation"><tbody>';
@@ -1223,17 +1240,25 @@ final class Rule_Edit_Screen extends Screen {
 				continue;
 			}
 
+			if ( null !== $only && ! in_array( (string) $key, $only, true ) ) {
+				continue;
+			}
+
 			$value  = $settings[ $key ] ?? $default;
 			$name   = sprintf( 'settings[%s]', $key );
 			$secret = in_array( (string) $key, $type->secret_settings(), true );
 			$field  = (array) ( $help[ $key ] ?? array() );
 			$label  = (string) ( $field['label'] ?? $this->humanize( (string) $key ) );
 
+			// Shown only while another control holds a value, as `field:value`.
+			$show_when = (string) ( $field['show_when'] ?? '' );
+
 			if ( is_bool( $default ) ) {
 				$this->row(
 					$label,
-					self::checkbox( $name, (bool) $value, __( 'Enabled', 'basic-firewall' ) ),
-					wp_kses_post( (string) ( $field['description'] ?? '' ) )
+					self::checkbox( $name, (bool) $value, (string) ( $field['checkbox'] ?? __( 'Enabled', 'basic-firewall' ) ) ),
+					wp_kses_post( (string) ( $field['description'] ?? '' ) ),
+					$show_when
 				);
 
 				continue;
@@ -1243,7 +1268,8 @@ final class Rule_Edit_Screen extends Screen {
 				$this->row(
 					$label,
 					self::textarea( $name, is_array( $value ) ? implode( "\n", array_map( 'strval', $value ) ) : (string) $value ),
-					wp_kses_post( (string) ( $field['description'] ?? __( 'One per line.', 'basic-firewall' ) ) )
+					wp_kses_post( (string) ( $field['description'] ?? __( 'One per line.', 'basic-firewall' ) ) ),
+					$show_when
 				);
 
 				continue;
@@ -1255,7 +1281,8 @@ final class Rule_Edit_Screen extends Screen {
 				$this->row(
 					$label,
 					self::select( $name, $field['choices'], (string) $value ),
-					wp_kses_post( (string) ( $field['description'] ?? '' ) )
+					wp_kses_post( (string) ( $field['description'] ?? '' ) ),
+					$show_when
 				);
 
 				continue;
@@ -1276,7 +1303,8 @@ final class Rule_Edit_Screen extends Screen {
 			$this->row(
 				$label,
 				self::text( $name, (string) $value, is_int( $default ) ? 'number' : 'text' ),
-				$description
+				$description,
+				$show_when
 			);
 		}
 

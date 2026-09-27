@@ -9,6 +9,20 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Reverse-DNS crawler verification** on the user agent rule, so an allow rule
+  for `bot equals true` is no longer a skeleton key for anyone who types
+  `Googlebot/2.1`. List the domains you accept and the rule matches only a client
+  whose address reverse-resolves into one and forward-resolves back. Fails
+  closed. The screen refuses verification with no domain, and anything that is
+  not a domain; states the cost and the local caching resolver it needs; and the
+  rule list says which domains a rule verifies into. Every verifying rule
+  compiles `verify_offline: false`, so the offline rule-sources flag the plugin
+  turns on does not switch verification off — the defect kanopi/firewall 2.33.0
+  fixed. On an older library the screen refuses verification that could not
+  run, Site Health reports a rule already in that state as critical, and a
+  library that cannot verify at all has the rule skipped at compile time rather
+  than left to believe every self-declared crawler.
+
 - **The rule list says whether a scheduled rule is awake**, and until when, in
   the rule's own timezone — *Block — asleep now (until Mon 18:00 PDT)*. A
   sleeping rule matches nothing, which from the outside looks exactly like a
@@ -100,6 +114,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- Saving a user agent rule no longer turns its detection cache off. The rule
+  screen rendered the conditions and nothing else, so every save posted no
+  `cache_detection` and the rule compiled `cache: false` — costing each PHP
+  worker the 618 ms pattern compile on its first request. A condition type's own
+  settings are now rendered wherever it describes them, which puts the cache and
+  the `bot` source on the user agent screen.
 - **A redirect rule redirects in `exception` mode.** The outcome responder had
   no branch for the library's redirect outcome, so it fell through to being
   treated as a firewall failure: the visitor was served the page the rule was

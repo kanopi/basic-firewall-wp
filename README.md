@@ -759,6 +759,66 @@ generic HTTP client libraries. **A rule written as `bot equals true` has been
 letting sqlmap and nikto straight through.** The rule screen says so where the
 variable is chosen.
 
+### Verifying a crawler is the crawler it claims to be
+
+A user agent is whatever the client typed. An allow rule for `bot equals true`
+is therefore a skeleton key: anyone can send `Googlebot/2.1` and be let past
+every rule below it. Since that is a rule people are actively encouraged to
+write, the hole is worth closing.
+
+Tick **Verify the crawler** on a user agent rule and list the domains you
+accept — `googlebot.com`, `search.msn.com`, `applebot.apple.com`,
+`duckduckgo.com`. The firewall then does the round trip Google, Bing, Apple and
+DuckDuckGo all document: reverse-resolve the address, check the hostname sits in
+a domain you named, then forward-resolve that hostname and confirm it comes back
+to the address it started from. Reverse DNS alone proves nothing — anyone
+controlling an address can put any name on it — so the forward confirmation is
+the part that makes it proof.
+
+Matching is on a label boundary, so `googlebot.com` does not accept
+`evilgooglebot.com`. The screen refuses anything that is not a domain — a URL, a
+wildcard, a bare `com` — and refuses verification with no domain listed, since
+the library treats that as matching nobody.
+
+It **fails closed**: no PTR record, a hostname outside your list, a forward
+lookup that does not return, or DNS being unreachable all mean the rule does not
+match. On an allow rule that is the safe direction — an unverified client is
+simply treated as ordinary traffic.
+
+**A local caching resolver is a prerequisite.** Verification was measured
+upstream at about 112 ms cold — 38 ms reverse plus 74 ms forward — against
+3.5–5 ms for the firewall's entire evaluation. `systemd-resolved`, `dnsmasq` or
+`unbound` takes that to roughly 2 ms. A cached verdict costs 0.02 ms, and
+verification only runs *after* the rule's conditions have matched, so most
+requests never pay it. But the cold figure is what a cache miss costs, and PHP
+cannot put a timeout on a DNS lookup — neither `gethostbyaddr()` nor
+`dns_get_record()` accepts one — so without a local resolver a slow nameserver
+is bounded only by the system resolver's own retries. The library trips a
+breaker after one slow lookup, and fails closed until it resets.
+
+#### It is not switched off by keeping rule lists offline
+
+The plugin keeps every rule-list refresh off the request path, by defining
+`KANOPI_FIREWALL_SOURCES_OFFLINE` on both evaluation paths. Until
+`kanopi/firewall` 2.33.0 the verifier read that same switch, so on a default
+install every verifying rule matched nobody, with nothing but a debug line to say
+so. The Drupal module answered that by refusing to save verification until the
+site opted out of offline sources — which also lets rule lists refresh while a
+visitor waits.
+
+2.33.0 gave verification its own switch, and the compiler writes
+`verify_offline: false` on every rule that verifies: ticking the box is asking
+for the lookups. `BASIC_FIREWALL_SOURCES_OFFLINE` goes on meaning only what its
+name says.
+
+On an older library — possible when a site's own Composer autoloader wins the
+race — the old behaviour is refused rather than faked. The screen will not save
+verification that cannot run, and Site Health reports an existing rule in that
+state as critical, because such a rule silently matches nobody. On a library too
+old to verify at all, the setting is not offered and the compiler skips a rule
+carrying it: that library would ignore the key and let every self-declared
+crawler through.
+
 ### How a rate limit counts
 
 The counter is keyed on the visitor's **address and the pattern that matched** —

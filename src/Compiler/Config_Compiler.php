@@ -649,6 +649,26 @@ final class Config_Compiler {
 				continue;
 			}
 
+			/*
+			 * A rule asking to verify crawlers, on a library that cannot, is
+			 * skipped.
+			 *
+			 * The library would ignore the key and match on the agent string
+			 * alone -- and verification is asked for on allow rules, where that
+			 * lets through everybody who claims to be Googlebot. Skipping errs
+			 * towards the rule matching nobody, which is what a verifying rule
+			 * does to anybody it cannot verify anyway.
+			 */
+			if ( ! empty( $rule['settings']['verify'] ) && 'user_agent' === (string) ( $rule['type'] ?? '' ) && ! $capabilities->has_identity_verification() ) {
+				$this->problems[] = sprintf(
+					/* translators: %s: rule identifier. */
+					__( 'Rule "%s" verifies crawlers by reverse DNS, which the installed firewall library cannot do — it would believe every client claiming to be one. It was skipped.', 'basic-firewall' ),
+					(string) ( $rule['id'] ?? '?' )
+				);
+
+				continue;
+			}
+
 			$problem = $this->schedule_problem( $rule, $capabilities );
 
 			if ( null !== $problem ) {

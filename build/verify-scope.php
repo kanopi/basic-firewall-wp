@@ -353,7 +353,7 @@ if ( ! class_exists( $base ) ) {
 } else {
 	bfw_pass( 'the scoped plugin base class resolves' );
 
-	foreach ( array( 'getRedirectLocation', 'getMarkName', 'recordsOffenses', 'isObserveMode', 'isActiveNow' ) as $method ) {
+	foreach ( array( 'getRedirectLocation', 'getMarkName', 'recordsOffenses', 'isObserveMode', 'isActiveNow', 'verificationOffline' ) as $method ) {
 		if ( method_exists( $base, $method ) ) {
 			bfw_pass( sprintf( '%s() is detectable on the scoped class', $method ) );
 
@@ -362,6 +362,20 @@ if ( ! class_exists( $base ) ) {
 
 		bfw_fail( sprintf( '%s() is not detectable, so the feature it gates will be withheld', $method ) );
 	}
+}
+
+/*
+ * The features detected by a class rather than a method, asked the way
+ * Library_Capabilities::library_class() asks: scoped spelling first.
+ */
+foreach ( array( 'Utility\\ReverseDnsVerifier' ) as $relative ) {
+	if ( class_exists( $prefix . '\\Kanopi\\Firewall\\' . $relative ) ) {
+		bfw_pass( sprintf( '%s is detectable under the prefix', $relative ) );
+
+		continue;
+	}
+
+	bfw_fail( sprintf( '%s is not detectable, so the feature it gates will be withheld', $relative ) );
 }
 
 // ---------------------------------------------------------------------------
@@ -382,6 +396,7 @@ $constant_users = array(
 	'src/Database_Credentials.php'    => 'DB_NAME',
 	'src/Runtime/Runner.php'          => 'BASIC_FIREWALL_EVALUATED',
 	'src/Health/Site_Health.php'      => 'WP_CACHE',
+	'src/Library_Capabilities.php'    => 'BASIC_FIREWALL_SOURCES_OFFLINE',
 );
 
 foreach ( $constant_users as $file => $constant ) {
