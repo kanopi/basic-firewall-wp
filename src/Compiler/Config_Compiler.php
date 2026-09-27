@@ -9,6 +9,7 @@ declare( strict_types = 1 );
 
 namespace Kanopi\BasicFirewall\Compiler;
 
+use Kanopi\BasicFirewall\Cache\Cache_Backend;
 use Kanopi\BasicFirewall\Database_Credentials;
 use Kanopi\BasicFirewall\Library_Capabilities;
 use Kanopi\BasicFirewall\Install\Challenge_Secret;
@@ -53,6 +54,20 @@ final class Config_Compiler {
 	private array $connection_paths = array();
 
 	/**
+	 * Paths where the object cache pool for agent detection belongs.
+	 *
+	 * @var list<string>
+	 */
+	private array $cache_pool_paths = array();
+
+	/**
+	 * Paths where the object cache pool for reverse-DNS verdicts belongs.
+	 *
+	 * @var list<string>
+	 */
+	private array $verify_cache_paths = array();
+
+	/**
 	 * Problems encountered while compiling.
 	 *
 	 * @var list<string>
@@ -65,8 +80,10 @@ final class Config_Compiler {
 	 * @return array<string, mixed>
 	 */
 	public function compile(): array {
-		$this->connection_paths = array();
-		$this->problems         = array();
+		$this->connection_paths   = array();
+		$this->cache_pool_paths   = array();
+		$this->verify_cache_paths = array();
+		$this->problems           = array();
 
 		$plugin   = Plugin::instance();
 		$settings = $plugin->settings();
@@ -91,6 +108,8 @@ final class Config_Compiler {
 		if ( array() !== $presets ) {
 			$compiled['configs'] = $presets;
 		}
+
+		$rules = $this->apply_cache_backend( $rules );
 
 		/*
 		 * A rate limit's counter connection is emitted by its rule type, which
@@ -134,6 +153,74 @@ final class Config_Compiler {
 		}
 
 		return $this->apply_advanced_yaml( $compiled, (string) $settings->get( 'advanced_yaml', '' ) );
+	}
+
+	/**
+	 * Aim every rule that caches at the site-wide cache backend.
+	 *
+	 * Here rather than in each rule type, because this loop is the one place
+	 * that knows every plugin's final index -- which is what an override path
+	 * needs -- and because where the firewall caches is one site-wide choice:
+	 * rules disagreeing about it would be several caches to keep warm and
+	 * several places to look when one is on slow storage.
+	 *
+	 * Where the object cache belongs is recorded for every rule that caches,
+	 * whatever backend is chosen, so switching to it takes effect without
+	 * waiting for a recompile.
+	 *
+	 * @param array<int|string, array<string, mixed>> $rules Compiled rules.
+	 *
+	 * @return array<int|string, array<string, mixed>>
+	 */
+	private function apply_cache_backend( array $rules ): array {
+		$agents   = Cache_Backend::compiled_pool( Cache_Backend::AGENTS );
+		$verdicts = Cache_Backend::compiled_pool( Cache_Backend::VERDICTS );
+
+		$directory = Cache_Backend::directory();
+
+		/*
+		 * Created rather than assumed: the library carries on uncached when a
+		 * cache directory is unwritable, and uncached agent detection is about
+		 * 600 ms a request -- a regression that announces itself only in the log.
+		 */
+		if ( null !== $agents && 'filesystem' === Cache_Backend::configured() && null !== $directory
+			&& ! is_dir( $directory ) && ! wp_mkdir_p( $directory ) ) {
+			$this->problems[] = sprintf(
+				/* translators: %s: directory path. */
+				__( 'The cache directory %s could not be created, so the firewall caches in the private directory instead.', 'basic-firewall' ),
+				$directory
+			);
+
+			$agents   = null;
+			$verdicts = null;
+		}
+
+		foreach ( $rules as $delta => $rule ) {
+			$class    = (string) ( $rule['plugin'] ?? '' );
+			$metadata = (array) ( $rule['metadata'] ?? array() );
+
+			// The whole value: a user agent rule's `cache` is its cache
+			// configuration and nothing else. `false` is the rule opting out.
+			if ( str_ends_with( $class, '\UserAgent' ) && false !== ( $metadata['cache'] ?? null ) ) {
+				$this->cache_pool_paths[] = sprintf( '[plugins][%d][metadata][cache]', $delta );
+
+				if ( null !== $agents ) {
+					$rules[ $delta ]['metadata']['cache'] = $agents;
+				}
+			}
+
+			// Any rule can verify, and since library 2.33.0 `verify_cache`
+			// takes the same shapes as every other cache setting.
+			if ( isset( $metadata['verify'] ) ) {
+				$this->verify_cache_paths[] = sprintf( '[plugins][%d][metadata][verify_cache]', $delta );
+
+				if ( null !== $verdicts ) {
+					$rules[ $delta ]['metadata']['verify_cache'] = $verdicts;
+				}
+			}
+		}
+
+		return $rules;
 	}
 
 	/**
@@ -1153,6 +1240,28 @@ final class Config_Compiler {
 	 */
 	public function connection_paths(): array {
 		return $this->connection_paths;
+	}
+
+	/**
+	 * Paths where an object cache pool for agent detection belongs.
+	 *
+	 * Recorded during the compile rather than worked out later, because only
+	 * the compile knows which rule became which plugin index once disabled and
+	 * skipped rules are dropped -- the same reason the connection paths are.
+	 *
+	 * @return list<string>
+	 */
+	public function cache_pool_paths(): array {
+		return $this->cache_pool_paths;
+	}
+
+	/**
+	 * Paths where an object cache pool for reverse-DNS verdicts belongs.
+	 *
+	 * @return list<string>
+	 */
+	public function verify_cache_paths(): array {
+		return $this->verify_cache_paths;
 	}
 
 	/**

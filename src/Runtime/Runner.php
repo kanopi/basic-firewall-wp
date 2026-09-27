@@ -9,6 +9,7 @@ declare( strict_types = 1 );
 
 namespace Kanopi\BasicFirewall\Runtime;
 
+use Kanopi\BasicFirewall\Cache\Cache_Backend;
 use Kanopi\BasicFirewall\Database_Credentials;
 use Kanopi\BasicFirewall\Library_Loader;
 use Kanopi\BasicFirewall\Plugin;
@@ -272,6 +273,13 @@ final class Runner {
 			}
 		}
 
+		/*
+		 * The object cache, if that is where the site caches. Handed over
+		 * live because YAML cannot carry an object; the other backends are in
+		 * the compiled file already and add nothing here.
+		 */
+		$overrides += Cache_Backend::overrides();
+
 		/**
 		 * Filters the runtime overrides applied over the compiled configuration.
 		 *
@@ -295,7 +303,7 @@ final class Runner {
 	 */
 	private function define_cache_constants(): void {
 		if ( ! defined( 'KANOPI_FIREWALL_CACHE_DIR' ) ) {
-			define( 'KANOPI_FIREWALL_CACHE_DIR', Plugin::instance()->paths()->base() . '/cache' );
+			define( 'KANOPI_FIREWALL_CACHE_DIR', Plugin::instance()->paths()->library_cache_dir() );
 		}
 
 		if ( ! defined( 'KANOPI_FIREWALL_SOURCES_OFFLINE' ) ) {

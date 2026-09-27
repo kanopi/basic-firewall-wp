@@ -11,9 +11,13 @@ namespace Kanopi\BasicFirewall\Admin\Screen;
 
 use Kanopi\BasicFirewall\Admin\Notices;
 use Kanopi\BasicFirewall\Admin\Screen;
+use Kanopi\BasicFirewall\Cache\Cache_Backend;
+use Kanopi\BasicFirewall\Cache\Cache_Clearer;
 use Kanopi\BasicFirewall\Database_Credentials;
 use Kanopi\BasicFirewall\Library_Capabilities;
+use Kanopi\BasicFirewall\Plugin;
 use Kanopi\BasicFirewall\Settings;
+use Kanopi\BasicFirewall\Support\Paths;
 
 /**
  * Where the block list lives.
@@ -51,6 +55,10 @@ final class Storage_Screen extends Screen {
 			return;
 		}
 
+		if ( 'clear_cache' === $this->posted( 'storage_action' ) ) {
+			$this->clear_cache();
+		}
+
 		$settings = $this->plugin()->settings();
 		$all      = $settings->all();
 
@@ -84,6 +92,7 @@ final class Storage_Screen extends Screen {
 		}
 
 		$this->take_redis( $all );
+		$this->take_cache( $all );
 
 		$dsn = $this->posted( 'dsn' );
 
@@ -247,7 +256,199 @@ final class Storage_Screen extends Screen {
 
 		$this->render_record_request( $settings );
 
+		$this->render_cache( $settings );
+
 		$this->close_form();
+
+		$this->render_cache_actions();
+	}
+
+	/**
+	 * Copy the posted cache backend into the document.
+	 *
+	 * A backend that cannot work here is refused when newly chosen and kept
+	 * when already chosen, for the reason Redis is: refusing protects a site
+	 * from a choice that does nothing, and keeping stops an unrelated save from
+	 * changing a setting nobody touched.
+	 *
+	 * @param array<string, mixed> $all The settings document, by reference.
+	 */
+	private function take_cache( array &$all ): void {
+		// phpcs:ignore WordPress.Security.NonceVerification.Missing -- verify() is called by handle().
+		if ( ! isset( $_POST['cache_backend'] ) ) {
+			return;
+		}
+
+		$previous = (string) ( $all['cache']['backend'] ?? 'filesystem' );
+		$backend  = $this->posted( 'cache_backend', 'filesystem' );
+		$refusal  = $backend === $previous ? null : $this->cache_backend_refusal( $backend );
+
+		if ( null !== $refusal ) {
+			Notices::add( esc_html( $refusal ), 'error' );
+
+			$backend = $previous;
+		}
+
+		$all['cache']['backend']   = $backend;
+		$all['cache']['directory'] = $this->posted( 'cache_directory' );
+		$all['cache']['apcu_ttl']  = $this->posted( 'cache_apcu_ttl', '86400' );
+	}
+
+	/**
+	 * Why a cache backend cannot be chosen on this server, or null.
+	 *
+	 * @param string $backend The backend.
+	 */
+	private function cache_backend_refusal( string $backend ): ?string {
+		if ( 'object_cache' === $backend && ! Cache_Backend::has_persistent_object_cache() ) {
+			return __( 'The object cache was not chosen: this site has no persistent object cache, so it forgets everything when the request ends. The firewall would rebuild its agent detection corpus — the better part of a second — on every request. Install an object-cache.php drop-in for Redis or Memcached first.', 'basic-firewall' );
+		}
+
+		if ( 'apcu' === $backend && ! Cache_Backend::has_apcu() ) {
+			return __( 'APCu was not chosen: it is not enabled in this server\'s PHP. Agent detection would run uncached — roughly 600 ms a request — rather than falling back to files.', 'basic-firewall' );
+		}
+
+		return null;
+	}
+
+	/**
+	 * Discard the cached data on every backend, then return to the screen.
+	 *
+	 * Unsaved changes on the form are deliberately not applied first: this
+	 * clears what is cached now, under the settings actually in force, which
+	 * is what somebody reaching for it is asking for.
+	 */
+	private function clear_cache(): void {
+		$cleared = ( new Cache_Clearer() )->clear();
+
+		Notices::add(
+			array() === $cleared
+				? __( 'There was no cached data to clear.', 'basic-firewall' )
+				: __( 'The firewall\'s cached data was cleared. It is built again as requests need it.', 'basic-firewall' )
+		);
+
+		$this->redirect( $this->slug() );
+	}
+
+	/**
+	 * Where the firewall caches what it works out.
+	 *
+	 * @param Settings $settings Current settings.
+	 */
+	private function render_cache( Settings $settings ): void {
+		$backend    = (string) $settings->get( 'cache.backend', 'filesystem' );
+		$persistent = Cache_Backend::has_persistent_object_cache();
+		$apcu       = Cache_Backend::has_apcu();
+		$constant   = Paths::cache_dir_constant();
+
+		$this->open_section(
+			__( 'Where the firewall caches what it works out', 'basic-firewall' ),
+			'',
+			wp_kses_post(
+				__( 'Separate from the block list above, and holding different things: parsed user agents and verified crawler names. All of it can be worked out again — losing it costs a rebuild, never a client going unblocked. Where uploads is a network mount, which it is on most managed hosting, this is usually where the firewall spends its time: not one slow read but many small ones through the request.', 'basic-firewall' )
+			)
+		);
+
+		$options = array(
+			'filesystem' => __( 'Files — the default', 'basic-firewall' ),
+		);
+
+		/*
+		 * Each offered where it can work, and shown where already chosen even
+		 * though it cannot, so the select does not quietly land on files and
+		 * the next save switch it without anybody deciding to.
+		 */
+		if ( $persistent ) {
+			$options['object_cache'] = __( 'The WordPress object cache — whatever the object-cache.php drop-in connects to', 'basic-firewall' );
+		} elseif ( 'object_cache' === $backend ) {
+			$options['object_cache'] = __( 'The WordPress object cache — not persistent on this site; files are used instead', 'basic-firewall' );
+		}
+
+		if ( $apcu ) {
+			$options['apcu'] = __( 'APCu — memory on each web node, not shared between them', 'basic-firewall' );
+		} elseif ( 'apcu' === $backend ) {
+			$options['apcu'] = __( 'APCu — not enabled on this server', 'basic-firewall' );
+		}
+
+		$note = __( 'Files and APCu are written into the compiled configuration, so the wp-config.php evaluation path honours them too. The object cache cannot be: it is handed over as an object while WordPress is loading, and that path runs before WordPress exists — it keeps using files there, and only there.', 'basic-firewall' );
+
+		if ( ! $persistent && 'object_cache' !== $backend ) {
+			$note .= '<br><br>' . __( 'The object cache is not offered: this site has no persistent object cache, and WordPress\'s default one forgets everything when the request ends.', 'basic-firewall' );
+		}
+
+		if ( ! $apcu && 'apcu' !== $backend ) {
+			$note .= '<br><br>' . __( 'APCu is not offered: it is not enabled in this server\'s PHP.', 'basic-firewall' );
+		}
+
+		echo '<table class="form-table" role="presentation"><tbody>';
+
+		$this->row( __( 'Cache backend', 'basic-firewall' ), self::select( 'cache_backend', $options, $backend ), wp_kses_post( $note ) );
+
+		$this->row(
+			__( 'Cache directory', 'basic-firewall' ),
+			self::text( 'cache_directory', (string) $settings->get( 'cache.directory', '' ), 'text', 'placeholder="/tmp/basic-firewall"' ),
+			sprintf(
+				/* translators: %s: the directory used when the field is left empty. */
+				__( 'Left empty, the firewall caches in <code>%s</code>. Somewhere local such as <code>/tmp/basic-firewall</code> keeps these off a network mount, and losing them costs a rebuild and nothing else. A relative path resolves inside the firewall\'s private directory.', 'basic-firewall' ),
+				esc_html( Plugin::instance()->paths()->library_cache_dir() )
+			),
+			'cache_backend:filesystem'
+		);
+
+		$this->row(
+			__( 'How long an entry lives', 'basic-firewall' ),
+			self::text( 'cache_apcu_ttl', (string) $settings->get( 'cache.apcu_ttl', 86400 ), 'number', 'min="60"' ) . ' ' . esc_html__( 'seconds', 'basic-firewall' ),
+			__( 'APCu is memory on this web node and is not shared with any other, so each node warms its own copy, and all of them lose it when PHP restarts. That costs a rebuild and nothing else.', 'basic-firewall' ),
+			'cache_backend:apcu'
+		);
+
+		$this->row(
+			__( 'What stays on files', 'basic-firewall' ),
+			'',
+			null === $constant
+				? sprintf(
+					/* translators: 1: the constant, as PHP. 2: the directory in use. */
+					__( 'Two caches are files whatever is chosen above, because the wp-config.php path reads them before WordPress exists: the parsed configuration and the bodies of imported rule lists, in <code>%2$s</code>. Move them with a constant in wp-config.php, which both evaluation paths read: <code>%1$s</code>. A setting here could not reach the early path, and the two paths disagreeing would leave imported lists matching nothing there.', 'basic-firewall' ),
+					esc_html( "define( 'BASIC_FIREWALL_CACHE_DIR', '/tmp/basic-firewall' );" ),
+					esc_html( Plugin::instance()->paths()->library_cache_dir() )
+				)
+				: sprintf(
+					/* translators: %s: directory path. */
+					__( 'BASIC_FIREWALL_CACHE_DIR is set, so the parsed configuration and the bodies of imported rule lists are kept in <code>%s</code>, on both evaluation paths.', 'basic-firewall' ),
+					esc_html( $constant )
+				)
+		);
+
+		echo '</tbody></table>';
+
+		$this->close_section();
+	}
+
+	/**
+	 * The controls that act on the cache rather than configure it.
+	 *
+	 * A form of its own, below the settings, so pressing one never saves a
+	 * half-edited settings form -- and so saving the settings never clears
+	 * anything.
+	 */
+	private function render_cache_actions(): void {
+		$this->open_form();
+
+		echo '<h2>' . esc_html__( 'Cached data', 'basic-firewall' ) . '</h2>';
+
+		printf(
+			'<p class="description" style="max-width:48rem">%s</p>',
+			wp_kses_post(
+				__( 'Discards what the firewall has cached, on every backend rather than only the current one, and lets it be built again as requests need it. The parsed configuration and imported list bodies are kept: losing either would weaken the firewall until they came back. APCu belongs to the web server\'s processes, so this button — which runs in a web request — is the only place its clear can reach; <code>wp basic-firewall clear-cache</code> clears everything else.', 'basic-firewall' )
+			)
+		);
+
+		printf(
+			'<p><button type="submit" name="storage_action" value="clear_cache" class="button">%s</button></p>',
+			esc_html__( 'Clear cached data', 'basic-firewall' )
+		);
+
+		echo '</form>';
 	}
 
 	/**

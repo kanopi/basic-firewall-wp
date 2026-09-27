@@ -9,6 +9,8 @@ declare( strict_types = 1 );
 
 namespace Kanopi\BasicFirewall\Cli;
 
+use Kanopi\BasicFirewall\Cache\Cache_Backend;
+use Kanopi\BasicFirewall\Cache\Cache_Clearer;
 use Kanopi\BasicFirewall\Health\Site_Health;
 use Kanopi\BasicFirewall\Library_Capabilities;
 use Kanopi\BasicFirewall\Library_Loader;
@@ -726,6 +728,37 @@ final class Commands {
 		}
 
 		WP_CLI::success( sprintf( 'Released %d client(s).', $cleared ) );
+	}
+
+	/**
+	 * Discard what the firewall has cached, on every backend.
+	 *
+	 * Parsed user agents and reverse-DNS verdicts, wherever they are kept.
+	 * The parsed configuration and imported list bodies are kept, because the
+	 * firewall is weaker until they come back. No --yes: losing a cache costs a
+	 * rebuild and nothing else.
+	 *
+	 * APCu belongs to the web server's processes, so this clears the command
+	 * line's own APCu and not the web server's. The Clear cached data button on
+	 * the Storage screen runs in a web request and reaches it.
+	 *
+	 * ## EXAMPLES
+	 *
+	 *     wp basic-firewall clear-cache
+	 *
+	 * @subcommand clear-cache
+	 *
+	 * @param array<int, string>    $args       Positional arguments.
+	 * @param array<string, string> $assoc_args Flags.
+	 */
+	public function clear_cache( array $args, array $assoc_args ): void {
+		$cleared = ( new Cache_Clearer() )->clear();
+
+		if ( 'apcu' === Cache_Backend::configured() ) {
+			WP_CLI::warning( 'The cache backend is APCu, whose memory belongs to the web server. This cleared the command line\'s APCu, not that one: use Clear cached data on the Storage screen.' );
+		}
+
+		WP_CLI::success( array() === $cleared ? 'There was no cached data to clear.' : sprintf( 'Cleared: %s.', implode( ', ', $cleared ) ) );
 	}
 
 	/**

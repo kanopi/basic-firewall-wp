@@ -10,6 +10,7 @@ declare( strict_types = 1 );
 namespace Kanopi\BasicFirewall\Health;
 
 use Kanopi\BasicFirewall\Admin\Admin;
+use Kanopi\BasicFirewall\Cache\Cache_Backend;
 use Kanopi\BasicFirewall\Install\Activator;
 use Kanopi\BasicFirewall\Install\Upgrader;
 use Kanopi\BasicFirewall\Library_Capabilities;
@@ -85,6 +86,7 @@ final class Site_Health {
 			'proxy'        => __( 'Basic Firewall client IP', 'basic-firewall' ),
 			'mode'         => __( 'Basic Firewall operating mode', 'basic-firewall' ),
 			'storage'      => __( 'Basic Firewall block list storage', 'basic-firewall' ),
+			'cache'        => __( 'Basic Firewall cache', 'basic-firewall' ),
 			'logging'      => __( 'Basic Firewall logging', 'basic-firewall' ),
 			'records'      => __( 'Basic Firewall block records', 'basic-firewall' ),
 			'upgrade'      => __( 'Basic Firewall upgrades', 'basic-firewall' ),
@@ -128,6 +130,7 @@ final class Site_Health {
 			'proxy'       => self::check_proxy(),
 			'mode'        => self::check_mode(),
 			'storage'     => self::check_storage(),
+			'cache'       => self::check_cache(),
 			'logging'     => self::check_logging(),
 			'records'     => self::check_records(),
 			'upgrade'     => self::check_upgrade(),
@@ -1255,6 +1258,61 @@ final class Site_Health {
 				esc_html__( 'Using %1$s storage, with %2$s currently blocked.', 'basic-firewall' ),
 				esc_html( $backend ),
 				$listing['supported'] ? (string) count( $listing['clients'] ) : esc_html__( 'an unknown number', 'basic-firewall' )
+			)
+		);
+	}
+
+	/**
+	 * Is the firewall caching where it was told to?
+	 *
+	 * Two backends can be chosen and then stop working without anybody
+	 * touching the setting: an object-cache.php drop-in removed, APCu disabled
+	 * in a PHP rebuild. They fail differently, and the difference decides the
+	 * severity. Without a persistent object cache the runner hands the library
+	 * nothing and it caches in files -- slower, and still cached. Without APCu
+	 * the library cannot build the pool the compiled file names and runs agent
+	 * detection uncached, which is roughly 600 ms on every request that reaches
+	 * a user agent rule.
+	 *
+	 * @return array{status: string, label: string, description: string, actions: string}
+	 */
+	private static function check_cache(): array {
+		$backend = Cache_Backend::configured();
+
+		if ( 'object_cache' === $backend && ! Cache_Backend::has_persistent_object_cache() ) {
+			return self::recommended(
+				__( 'The firewall is set to cache in the object cache, but this site has no persistent one', 'basic-firewall' ),
+				esc_html__( 'WordPress\'s default object cache forgets everything when the request ends, so the firewall caches in files instead — still cached, but on the storage this setting was chosen to avoid. Restore the object-cache.php drop-in, or choose files or APCu on the Storage screen so the setting says what is happening.', 'basic-firewall' )
+			);
+		}
+
+		if ( 'apcu' === $backend && ! Cache_Backend::has_apcu() ) {
+			return self::critical(
+				__( 'The firewall is set to cache in APCu, which is not enabled on this server', 'basic-firewall' ),
+				esc_html__( 'The library cannot build the pool the compiled configuration names, so agent detection runs uncached — roughly 600 ms on every request that reaches a user agent rule — rather than falling back to files. Enable APCu, or choose files on the Storage screen. If only some web nodes lack it, this result is from the one that answered.', 'basic-firewall' )
+			);
+		}
+
+		$directory = Cache_Backend::directory();
+
+		if ( 'filesystem' === $backend && null !== $directory && ! wp_is_writable( $directory ) ) {
+			return self::recommended(
+				__( 'The firewall\'s cache directory is not writable', 'basic-firewall' ),
+				sprintf(
+					/* translators: %s: directory path. */
+					esc_html__( '%s cannot be written to, so agent detection runs uncached — roughly 600 ms on every request that reaches a user agent rule. Rebuild the firewall to have the directory created, or name one the web server can write.', 'basic-firewall' ),
+					esc_html( $directory )
+				),
+				self::rebuild_action()
+			);
+		}
+
+		return self::ok(
+			__( 'The firewall is caching where it was told to', 'basic-firewall' ),
+			sprintf(
+				/* translators: %s: where the cache is, as a phrase. */
+				esc_html__( 'Parsed user agents and verified crawlers are cached in %s.', 'basic-firewall' ),
+				esc_html( Cache_Backend::describe() )
 			)
 		);
 	}

@@ -141,8 +141,14 @@ final class Abuse_Ipdb extends Rule_Type_Base {
 			 * periodically, and each time it is, the rule starts spending quota
 			 * from scratch. Entries are named by hash, so client addresses
 			 * cannot be read from a directory listing.
+			 *
+			 * Always files: the library takes a directory here and no pool, so
+			 * the Storage screen's cache backend cannot reach it. It does follow
+			 * BASIC_FIREWALL_CACHE_DIR, because an explicit value here would
+			 * otherwise keep it on the storage that constant moved everything
+			 * else off.
 			 */
-			'cache_dir'    => Plugin::instance()->paths()->base() . '/abuseipdb',
+			'cache_dir'    => Plugin::instance()->paths()->cache_root() . '/abuseipdb',
 		);
 
 		return $entry;

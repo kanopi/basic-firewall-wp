@@ -9,6 +9,7 @@ declare( strict_types = 1 );
 
 namespace Kanopi\BasicFirewall;
 
+use Kanopi\BasicFirewall\Cache\Cache_Backend;
 use Kanopi\BasicFirewall\Compiler\Library_Map;
 use Kanopi\BasicFirewall\Logging\Log_Reader;
 use Kanopi\Firewall\Exception\ChallengeRequiredException;
@@ -240,7 +241,7 @@ final class Request_Tester {
 	 * @return array<string, mixed>
 	 */
 	private function overrides( TestHandler $capture ): array {
-		return array(
+		$overrides = array(
 			// Throw rather than respond-and-exit, which would end the admin page.
 			'[global][mode]'       => 'exception',
 			// Or the line above is undone by whatever an armed panic file says.
@@ -251,6 +252,14 @@ final class Request_Tester {
 			// The run's records go to the screen.
 			'[logger]'             => array( array( 'class' => $capture ) ),
 		);
+
+		/*
+		 * And the caches, aimed wherever the site chose. Without this a test
+		 * falls back to the library's filesystem pool and writes a second copy
+		 * of the agent corpus to disk, on a site that moved its caches off disk
+		 * precisely to avoid that.
+		 */
+		return $overrides + Cache_Backend::overrides();
 	}
 
 	/**

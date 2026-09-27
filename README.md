@@ -22,6 +22,7 @@ its habit of writing down what does not work.
 - [Rule types](#rule-types)
 - [Presets](#presets)
 - [Storage](#storage)
+- [Caching on hosting where shared storage is slow](#caching-on-hosting-where-shared-storage-is-slow)
 - [Logging](#logging)
 - [Reacting to a decision](#reacting-to-a-decision)
 - [Export and import](#export-and-import)
@@ -59,7 +60,9 @@ Three things in that table are worth acting on.
 and parsing it used to happen on every request. The plugin points the library's
 cache at `cache/compiled` inside the private directory — persistent, beside the
 compiled file, and not the system temporary directory, which gets cleared. Every
-clear costs that 42 ms again, on every php-fpm worker.
+clear costs that 42 ms again, on every php-fpm worker. Where the private
+directory is a network mount, `BASIC_FIREWALL_CACHE_DIR` moves it — see
+[caching](#caching-on-hosting-where-shared-storage-is-slow).
 
 **File storage is the one cost that grows with an attack.** Its lookup is
 proportional to the size of the block list, so it gets slower exactly when the
@@ -1162,6 +1165,91 @@ Redaction happens on the way in, so records written before this existed are
 unaffected by the setting. They expire with their bans; clearing the block list
 removes them sooner, at the cost of unblocking whoever is in it.
 
+## Caching on hosting where shared storage is slow
+
+The block list is one thing the firewall writes; the other is what it *works
+out* — parsed user agents and verified crawler names. All of that is cached, and
+by default all of it is cached in files in the private directory, under uploads.
+
+On hosting where uploads is a network mount — most managed WordPress hosting —
+this is usually where the firewall spends its time: not one slow read but many
+small ones through the request. The Storage screen offers three answers:
+
+| Backend | Use when |
+|---|---|
+| Files | The default. Leave the directory empty for the private directory, or name somewhere local such as `/tmp/basic-firewall` |
+| The WordPress object cache | The site has a persistent object cache — an `object-cache.php` drop-in for Redis or Memcached |
+| APCu | No shared cache. Memory per web node, not shared between them |
+
+Everything here can be worked out again. Losing it costs a rebuild, never a
+client going unblocked, so a volatile backend is a legitimate choice: APCu is cold
+after PHP restarts and a container-local directory is empty after a redeploy, and
+neither costs correctness.
+
+**The object cache means a persistent one.** Without a drop-in, WordPress's
+object cache is an array that forgets everything when the request ends, and
+handing that to the firewall would rebuild the agent detection corpus — the
+better part of a second — on every request. So the option is offered only where
+the object cache is persistent; a site that chose it and then lost its drop-in
+caches in files instead, and Site Health says so. Entries live in a
+`basic_firewall` group of their own, per site on a network, and clearing them
+never flushes the rest of the site's cache.
+
+**APCu means enabled in the web server's PHP.** It is offered only where it is,
+because the library does not fall back to files when the pool it was told to
+build cannot be built — it runs detection uncached, roughly 600 ms a request.
+Site Health reports that as critical.
+
+**Three reach the wp-config.php path; one cannot.** Files and APCu are written
+into the compiled configuration as a pool class and its arguments, which is all
+that path has. The object cache is handed to the library as a live object while
+WordPress loads, and on the wp-config.php path there is no WordPress to take it
+from — so a site using that path keeps files there, and only there.
+
+**One setting covers agent detection and crawler verification together.** A user
+agent rule does not say where it caches; the Storage screen does, for every
+rule at once. The AbuseIPDB rule is the exception: the library takes a directory
+for it and no pool, so it stays on files whatever is chosen.
+
+### The two caches that can only be files
+
+The parsed configuration and the bodies of imported rule lists cannot use the
+backend above: both are read on the wp-config.php path before WordPress exists.
+They are small — one PHP file the opcode cache then serves from memory, plus one
+file per list — but on a network mount they are still reads. Move them with a
+constant, which both evaluation paths read:
+
+```php
+define( 'BASIC_FIREWALL_CACHE_DIR', '/tmp/basic-firewall' );
+```
+
+A constant, not a field on the Storage screen, on purpose. A setting would reach
+the mu-plugin path and WP-CLI but not the early path, so cron would refresh the
+list bodies into one directory while requests looked for them in another — and
+every rule built on a list would match nothing there, without a word. With the
+constant set, the AbuseIPDB cache and the files backend's default follow it too,
+so nothing the firewall caches touches uploads. What remains there is the
+compiled configuration itself, which is read once per request and cannot move,
+and whatever the block list and the log are configured to use.
+
+**The block list is not a cache.** Do not reach for this section to make *it*
+faster — use database or Redis storage for that, and the database log handler
+instead of the file one. Those are the write-heavy settings, and they are where
+a site on slow shared storage should look first.
+
+### Clearing it
+
+**Clear cached data** on the Storage screen discards what the firewall has
+cached, on every backend rather than only the current one — switching backends
+leaves the old one warm. Two things are kept: the parsed configuration and the
+imported list bodies, because the firewall is weaker until they come back.
+`wp basic-firewall clear-cache` does the same, with one exception it cannot fix:
+APCu memory belongs to the process pool that filled it, so a clear from the
+command line empties the command line's own APCu and leaves the web server's
+untouched. The button runs in a web request, which is the only place that clear
+can reach. WordPress has no "clear all caches" moment to hook, and
+`wp cache flush` reaches neither files nor APCu.
+
 ## Logging
 
 The firewall logs through Monolog, not through WordPress, because it runs before
@@ -1464,14 +1552,18 @@ define( 'BASIC_FIREWALL_SECRET_DIRECTORIES', array( '/etc/firewall' ) );
 // else, and pass Symfony's Request::HEADER_* bitmask.
 define( 'BASIC_FIREWALL_TRUSTED_HEADERS', Request::HEADER_X_FORWARDED_FOR );
 
+// Keep the parsed configuration and imported list bodies somewhere other than
+// uploads -- local disk, where uploads is a network mount. Read on both paths.
+define( 'BASIC_FIREWALL_CACHE_DIR', '/tmp/basic-firewall' );
+
 // Let rule sources fetch over the network during a request. Off unless
 // explicitly false: a firewall that makes an outbound HTTP call while a
 // visitor waits is a firewall that fails when the network does.
 define( 'BASIC_FIREWALL_SOURCES_OFFLINE', false );
 ```
 
-Both of the last two are read on **both** evaluation paths, so they belong above
-the bootstrap snippet like the rest.
+The last three are read on **both** evaluation paths, so they belong above the
+bootstrap snippet like the rest.
 
 The interface reports when any of these is in effect, so nobody wonders why the
 setting they saved is being ignored.
@@ -1512,6 +1604,7 @@ wp basic-firewall block IP          # block it
 wp basic-firewall unblock IP        # unblock it
 wp basic-firewall blocked           # list every blocked client
 wp basic-firewall clear-blocked     # empty the block list
+wp basic-firewall clear-cache       # discard parsed agents and verified crawlers
 wp basic-firewall find-reference REF # which rule produced this block reference
 
 wp basic-firewall export            # portable document, credentials stripped

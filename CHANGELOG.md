@@ -9,6 +9,20 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **A cache backend other than files.** Parsed user agents and reverse-DNS
+  verdicts can be kept in the WordPress object cache or APCu, or in files in a
+  directory of your choosing, from the Storage screen — the answer for hosting
+  where uploads is a network mount and the firewall's time goes on many small
+  reads. The object cache is offered only where it is persistent, APCu only where
+  it is enabled, and Site Health says when either goes away. Files and APCu are
+  written into the compiled file and so reach the wp-config.php path; the object
+  cache is handed over live and cannot. The parsed configuration and imported
+  list bodies move with a new `BASIC_FIREWALL_CACHE_DIR` constant rather than a
+  screen setting, so both evaluation paths always agree on where the lists are.
+  **Clear cached data** on the Storage screen and `wp basic-firewall
+  clear-cache` empty every backend and keep the parsed configuration and list
+  bodies.
+
 - **Redis for the block list**, where expiry costs nothing: blocks are stored
   with a TTL and Redis evicts them itself. Offered on the Storage screen only
   where the library has the backend and PHP has `ext-redis`, and the screen
@@ -152,6 +166,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- The user agent rule wrote `metadata.cache_dir`, which the library has never
+  read, so the detection corpus was always cached under the library cache
+  directory whatever the compiled file said. The key is gone, and where the
+  corpus is cached is now the Storage screen's cache backend.
 - The edge signals entry of the library capability report was written into the
   wrong method, so Site Health never listed edge signals as unavailable on a
   library without them.

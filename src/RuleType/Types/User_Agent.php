@@ -124,7 +124,7 @@ final class User_Agent extends Condition_Rule_Type_Base {
 		$help = array(
 			'cache_detection' => array(
 				'label'       => __( 'Cache agent detection', 'basic-firewall' ),
-				'description' => __( 'Keeps the compiled detection patterns in the private directory. Identifying an agent means compiling a 1.7 MB pattern set — about 618 ms the first time each PHP worker does it — so turn this off only to rule the cache out while debugging.', 'basic-firewall' ),
+				'description' => __( 'Keeps the compiled detection patterns wherever the firewall caches — files, the object cache or APCu, chosen on the Storage screen for every rule at once. Identifying an agent means compiling a 1.7 MB pattern set — about 618 ms each time it is not cached — so turn this off only to rule the cache out while debugging.', 'basic-firewall' ),
 			),
 			'bot_source'      => array(
 				'label'       => __( 'What bot consults', 'basic-firewall' ),
@@ -362,10 +362,18 @@ final class User_Agent extends Condition_Rule_Type_Base {
 
 		$metadata = $entry['metadata'] ?? array();
 
+		/*
+		 * Off, or nothing. Where the corpus is cached is one site-wide choice
+		 * made on the Storage screen and applied by the compiler, which is the
+		 * only place that knows this rule's final index.
+		 *
+		 * This used to write `metadata.cache_dir`, a key the library has never
+		 * read -- it reads `metadata.cache.dir` -- so the corpus was always in
+		 * KANOPI_FIREWALL_CACHE_DIR whatever the file said. Emitting nothing
+		 * says what was actually happening.
+		 */
 		if ( empty( $settings['cache_detection'] ) ) {
 			$metadata['cache'] = false;
-		} else {
-			$metadata['cache_dir'] = \Kanopi\BasicFirewall\Plugin::instance()->paths()->base() . '/device-detector';
 		}
 
 		$source = (string) ( $settings['bot_source'] ?? 'curated' );

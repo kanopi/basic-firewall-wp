@@ -70,6 +70,7 @@ final class Schema {
 					'default' => true,
 				),
 				'global'        => self::global_section(),
+				'cache'         => self::cache_section(),
 				'storage'       => self::storage_section(),
 				'challenge'     => self::challenge_section(),
 				'logging'       => self::logging_section(),
@@ -286,6 +287,48 @@ final class Schema {
 							),
 						),
 					),
+				),
+			),
+		);
+	}
+
+	/**
+	 * Where the firewall caches what it works out.
+	 *
+	 * Parsed user agents and reverse-DNS verdicts: everything here can be
+	 * worked out again, so losing it costs a rebuild and never a client going
+	 * unblocked. That is what makes a volatile backend a legitimate choice. The
+	 * block list is not a cache and is configured under `storage`.
+	 *
+	 * @return array<string, mixed>
+	 */
+	private static function cache_section(): array {
+		return array(
+			'type'     => 'map',
+			'label'    => 'Where the firewall caches what it works out',
+			'children' => array(
+				'backend'   => array(
+					'type'    => 'string',
+					'label'   => 'Cache backend',
+
+					/*
+					 * Files, which is what every release so far has done.
+					 * Changing it is worthwhile where the uploads directory is a
+					 * network mount, which is the common case on managed hosting.
+					 */
+					'default' => 'filesystem',
+					'choices' => array( 'filesystem', 'object_cache', 'apcu' ),
+				),
+				'directory' => array(
+					'type'    => 'string',
+					'label'   => 'Directory, for the files backend',
+					'default' => '',
+				),
+				'apcu_ttl'  => array(
+					'type'    => 'int',
+					'label'   => 'Seconds an APCu entry lives',
+					'default' => 86400,
+					'min'     => 60,
 				),
 			),
 		);

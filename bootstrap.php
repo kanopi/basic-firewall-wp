@@ -585,10 +585,24 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 		$options = basic_firewall_options( $options );
 
 		if ( ! defined( 'KANOPI_FIREWALL_CACHE_DIR' ) ) {
-			$private = basic_firewall_private_path( $options );
+			/*
+			 * BASIC_FIREWALL_CACHE_DIR first. It moves the two caches that can
+			 * only ever be files -- the parsed configuration and imported list
+			 * bodies -- off storage that is slow for many small reads, and it is
+			 * a constant precisely so that this path and the mu-plugin path read
+			 * the same answer. Paths::library_cache_dir() is the other half and
+			 * must agree with this.
+			 */
+			$configured = defined( 'BASIC_FIREWALL_CACHE_DIR' ) ? BASIC_FIREWALL_CACHE_DIR : null;
 
-			if ( null !== $private ) {
-				define( 'KANOPI_FIREWALL_CACHE_DIR', $private . '/cache' );
+			if ( is_string( $configured ) && '' !== trim( $configured ) ) {
+				define( 'KANOPI_FIREWALL_CACHE_DIR', rtrim( trim( $configured ), '/' ) );
+			} else {
+				$private = basic_firewall_private_path( $options );
+
+				if ( null !== $private ) {
+					define( 'KANOPI_FIREWALL_CACHE_DIR', $private . '/cache' );
+				}
 			}
 		}
 

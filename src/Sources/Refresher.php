@@ -220,7 +220,7 @@ final class Refresher {
 	 */
 	private static function define_cache_dir(): void {
 		if ( ! defined( 'KANOPI_FIREWALL_CACHE_DIR' ) ) {
-			define( 'KANOPI_FIREWALL_CACHE_DIR', Plugin::instance()->paths()->base() . '/cache' );
+			define( 'KANOPI_FIREWALL_CACHE_DIR', Plugin::instance()->paths()->library_cache_dir() );
 		}
 	}
 
