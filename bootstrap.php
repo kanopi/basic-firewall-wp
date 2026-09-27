@@ -351,6 +351,15 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 
 		if ( defined( 'BASIC_FIREWALL_MODE' ) && is_string( BASIC_FIREWALL_MODE ) ) {
 			$overrides['[global][mode]'] = BASIC_FIREWALL_MODE;
+
+			/*
+			 * And the panic file is disarmed, so the constant keeps winning.
+			 * The library applies a panic file over whatever mode the
+			 * configuration arrived at, overrides included, so without this an
+			 * environment that pins its mode in wp-config.php would have it
+			 * changed by a file. The runner does the same on the other path.
+			 */
+			$overrides['[global][panic_file]'] = '';
 		}
 
 		$credentials = basic_firewall_connection_parameters( $options );

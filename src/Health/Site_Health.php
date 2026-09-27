@@ -64,7 +64,13 @@ final class Site_Health {
 	 * @return array<string, string>
 	 */
 	private static function test_map(): array {
+		/*
+		 * The panic switch first. While one is active, every other entry
+		 * describes a firewall that is not the one running, and the dashboard's
+		 * Checks table is read top to bottom.
+		 */
 		return array(
+			'panic'       => __( 'Basic Firewall panic switch', 'basic-firewall' ),
 			'library'     => __( 'Basic Firewall library', 'basic-firewall' ),
 			'backends'    => __( 'Basic Firewall backends', 'basic-firewall' ),
 			'compiled'    => __( 'Basic Firewall compiled configuration', 'basic-firewall' ),
@@ -104,6 +110,7 @@ final class Site_Health {
 	 */
 	public static function check( string $key ): array {
 		return match ( $key ) {
+			'panic'       => self::check_panic(),
 			'library'     => self::check_library(),
 			'backends'    => self::check_backends(),
 			'compiled'    => self::check_compiled(),
@@ -118,6 +125,63 @@ final class Site_Health {
 			'upgrade'     => self::check_upgrade(),
 			default       => self::ok( __( 'Unknown test', 'basic-firewall' ), '' ),
 		};
+	}
+
+	/**
+	 * Is a panic file changing what the firewall does?
+	 *
+	 * Critical while one is active, and that is deliberate. The realistic
+	 * failure is not somebody flipping it -- it is nobody noticing three weeks
+	 * later that the site has been in log mode since the incident. The file is
+	 * the whole record that it happened, and nobody reads the firewall's log
+	 * for a warning they do not know to look for, so this is where it is said
+	 * -- and, being critical, in an admin notice on every screen as well.
+	 *
+	 * A file that exists and changed nothing is only a recommendation. Nothing
+	 * is being overridden, so calling it critical would overstate it; but
+	 * somebody reached for the switch and it did not take, and they are
+	 * watching the site rather than the log to find that out.
+	 *
+	 * @return array{status: string, label: string, description: string, actions: string}
+	 */
+	private static function check_panic(): array {
+		$panic = Plugin::instance()->runner()->panic_switch();
+
+		if ( null !== $panic && $panic['active'] ) {
+			return self::critical(
+				sprintf(
+					/* translators: %s: operating mode the panic file forces. */
+					__( 'A panic file is forcing the firewall into %s mode', 'basic-firewall' ),
+					$panic['effective']
+				),
+				sprintf(
+					/* translators: 1: forced mode, 2: configured mode, 3: file path. */
+					esc_html__( 'The operating mode is %1$s because a panic file says so. The configured mode is %2$s, and it returns the moment the file is removed: %3$s', 'basic-firewall' ),
+					'<strong>' . esc_html( $panic['effective'] ) . '</strong>',
+					'<strong>' . esc_html( $panic['configured'] ) . '</strong>',
+					'<code>' . esc_html( (string) $panic['path'] ) . '</code>'
+				)
+			);
+		}
+
+		if ( null !== $panic ) {
+			return self::recommended(
+				__( 'A panic file is present but is being ignored', 'basic-firewall' ),
+				sprintf(
+					/* translators: 1: file path, 2: what is wrong with it. */
+					esc_html__( 'The panic file %1$s %2$s, so the firewall is running in its configured mode. A panic file has to name one of block, log, exception or disabled.', 'basic-firewall' ),
+					'<code>' . esc_html( (string) $panic['path'] ) . '</code>',
+					esc_html( (string) $panic['problem'] )
+				)
+			);
+		}
+
+		return self::ok(
+			__( 'No panic file is overriding the firewall', 'basic-firewall' ),
+			'' === trim( (string) Plugin::instance()->settings()->get( 'global.panic_file', '' ) )
+				? esc_html__( 'No panic file is configured. One can be set on the General screen, so the firewall can be turned down mid-incident without a deploy.', 'basic-firewall' )
+				: esc_html__( 'A panic file is configured and nothing is at its path, so the configured mode is in force.', 'basic-firewall' )
+		);
 	}
 
 	/**

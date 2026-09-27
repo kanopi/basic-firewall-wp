@@ -9,6 +9,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- A **panic file**, for turning the firewall down mid-incident without a deploy.
+  Name a path at the bottom of the General screen, and writing a mode into that
+  file changes the operating mode on the next request, on both evaluation paths.
+  A file that names nothing recognisable changes nothing and is reported rather
+  than being read as "off" — otherwise a leftover file would disable the firewall
+  silently. While one is active, Site Health raises it as critical, the Status
+  screen leads with it, and `wp basic-firewall status` reports it.
+  `BASIC_FIREWALL_MODE` still wins over it, and the request tester ignores it,
+  since a panic file saying `block` would otherwise end the admin page mid-test.
+
 - Support for the responses `kanopi/firewall` 2.26.0 introduced: **redirect**,
   **mark** and **record**, alongside a per-rule choice of whether a match is
   written to the durable block list. Refusing and recording come apart, which is

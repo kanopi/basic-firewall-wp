@@ -62,6 +62,7 @@ final class General_Screen extends Screen {
 		$all['global']['behind_proxy']            = $this->posted( 'behind_proxy', 'unknown' );
 		$all['global']['require_trusted_proxies'] = '' !== $this->posted( 'require_trusted_proxies' );
 		$all['global']['require_config']          = '' !== $this->posted( 'require_config' );
+		$all['global']['panic_file']              = $this->posted( 'panic_file' );
 
 		$all['sources']['cron_interval'] = (int) $this->posted( 'sources_cron_interval', (string) DAY_IN_SECONDS );
 
@@ -162,6 +163,7 @@ final class General_Screen extends Screen {
 		$this->render_reliability_section();
 		$this->render_sources_section();
 		$this->render_bypass_section();
+		$this->render_panic_section();
 
 		$this->close_form();
 	}
@@ -348,6 +350,55 @@ final class General_Screen extends Screen {
 		}
 
 		return $when . ' — ' . ( array() === $counts ? esc_html__( 'nothing needed re-fetching.', 'basic-firewall' ) : implode( ', ', $counts ) );
+	}
+
+	/**
+	 * The panic file.
+	 *
+	 * Last on the screen, deliberately. It is the lever for an incident, not
+	 * part of setting the firewall up, and a section headed "Panic" sitting
+	 * among the everyday settings read as though it wanted something doing.
+	 */
+	private function render_panic_section(): void {
+		$current = (string) $this->plugin()->settings()->get( 'global.panic_file', '' );
+
+		printf( '<h2>%s</h2>', esc_html__( 'Panic file', 'basic-firewall' ) );
+
+		if ( defined( 'BASIC_FIREWALL_MODE' ) ) {
+			printf(
+				'<div class="bfw-warning"><p>%s</p></div>',
+				esc_html__( 'BASIC_FIREWALL_MODE is set in wp-config.php, and it wins over the panic file as well: an environment that pins its mode keeps it pinned. The file below is ignored while the constant is defined.', 'basic-firewall' )
+			);
+		}
+
+		echo '<table class="form-table" role="presentation"><tbody>';
+
+		$description = __( 'A path the firewall checks on every request. Writing a mode name into that file changes the operating mode immediately, with no deploy, no cache clear and no restart — which is what you want when a rule is blocking real customers and the fix is otherwise gated behind a release. Leave empty to arm nothing; the check costs nothing while it is unset.', 'basic-firewall' )
+			. '<br><br>'
+			. __( 'A relative path resolves inside the firewall\'s private directory, which is guarded against web access. Keep it out of anything a deploy recreates: a file that turns the firewall down is worth exactly as much as write access to where it lives.', 'basic-firewall' );
+
+		if ( '' !== trim( $current ) ) {
+			$description .= '<br><br>' . sprintf(
+				/* translators: %s: absolute file path. */
+				__( 'Currently checked at %s', 'basic-firewall' ),
+				'<code>' . esc_html( $this->plugin()->paths()->resolve( $current ) ) . '</code>'
+			);
+		}
+
+		$this->row(
+			__( 'Panic file', 'basic-firewall' ),
+			self::text( 'panic_file', $current ),
+			$description
+		);
+
+		echo '</tbody></table>';
+
+		printf(
+			'<p style="max-width:48rem">%s</p><pre class="bfw-code">%s</pre><p style="max-width:48rem">%s</p>',
+			wp_kses_post( __( 'The file has to <em>name</em> a mode, one of <code>block</code>, <code>log</code>, <code>exception</code> or <code>disabled</code>:', 'basic-firewall' ) ),
+			esc_html( "echo log > PATH   # stop enforcing, keep recording\nrm PATH            # back to the configured mode" ),
+			wp_kses_post( __( 'An empty file, a typo or one that cannot be read changes <strong>nothing</strong>, and Site Health reports it. That is deliberate: if any file at all meant "off", one left behind from last month would disable the firewall and nobody would know. While a file is active, Site Health raises it as critical, the Status screen leads with it, and <code>wp basic-firewall status</code> reports it.', 'basic-firewall' ) )
+		);
 	}
 
 	/**

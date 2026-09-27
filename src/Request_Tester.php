@@ -26,11 +26,12 @@ use Symfony\Component\HttpFoundation\Request;
  * that would block whatever address somebody typed in to ask about, which is
  * the opposite of what they wanted and is discovered at the worst moment.
  *
- * So for the duration of a run, four things are overridden:
+ * So for the duration of a run, five things are overridden:
  *
  * | Changed                        | Why                                             |
  * |--------------------------------|-------------------------------------------------|
  * | Mode becomes `exception`       | Blocking mode writes a response and calls exit(), which would take the admin page down with it |
+ * | The panic file is ignored      | It is applied over the mode above, so `block` in it would end the admin page too -- and the question here is what the rules decide, not what an incident has them doing |
  * | Storage becomes in-memory      | Otherwise the tested address is blocked for real and gains an offense |
  * | Rate limit counters in-memory  | Otherwise a test spends a real visitor's request budget |
  * | Log handlers are replaced      | The run's records go to the screen, not into your firewall log |
@@ -116,12 +117,14 @@ final class Request_Tester {
 	private function overrides( TestHandler $capture ): array {
 		return array(
 			// Throw rather than respond-and-exit, which would end the admin page.
-			'[global][mode]'    => 'exception',
+			'[global][mode]'       => 'exception',
+			// Or the line above is undone by whatever an armed panic file says.
+			'[global][panic_file]' => '',
 			// Nothing the test does outlives the request.
-			'[storage][type]'   => Library_Map::STORAGE['memory'],
-			'[storage][config]' => array(),
+			'[storage][type]'      => Library_Map::STORAGE['memory'],
+			'[storage][config]'    => array(),
 			// The run's records go to the screen.
-			'[logger]'          => array( array( 'class' => $capture ) ),
+			'[logger]'             => array( array( 'class' => $capture ) ),
 		);
 	}
 

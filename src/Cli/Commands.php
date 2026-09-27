@@ -235,6 +235,22 @@ final class Commands {
 
 		$forced = defined( 'BASIC_FIREWALL_MODE' ) ? (string) constant( 'BASIC_FIREWALL_MODE' ) : null;
 
+		$mode_value = null !== $forced
+			? sprintf( '%s (forced by BASIC_FIREWALL_MODE, configured as %s)', $forced, $mode )
+			: $mode;
+
+		/*
+		 * A panic file is not in the settings or the compiled configuration --
+		 * it is stat'ed on every request -- so neither can reveal it. Without
+		 * this a deploy script reading `Mode` would report a firewall that is
+		 * enforcing nothing as healthy.
+		 */
+		$panic = $plugin->runner()->panic_switch();
+
+		if ( null !== $panic && $panic['active'] ) {
+			$mode_value = sprintf( '%s — PANIC FILE ACTIVE, configured as %s', $panic['effective'], $panic['configured'] );
+		}
+
 		$rows = array(
 			array(
 				'setting' => 'Enabled',
@@ -242,9 +258,11 @@ final class Commands {
 			),
 			array(
 				'setting' => 'Mode',
-				'value'   => null !== $forced
-					? sprintf( '%s (forced by BASIC_FIREWALL_MODE, configured as %s)', $forced, $mode )
-					: $mode,
+				'value'   => $mode_value,
+			),
+			array(
+				'setting' => 'Panic file',
+				'value'   => $this->panic_summary( $panic ),
 			),
 			array(
 				'setting' => 'Library',
@@ -294,10 +312,33 @@ final class Commands {
 			WP_CLI::warning( sprintf( '%s: %s', $missing['feature'], $missing['reason'] ) );
 		}
 
+		if ( null !== $panic && $panic['active'] ) {
+			WP_CLI::warning( sprintf( 'A panic file is forcing "%s". Remove %s to return to "%s".', $panic['effective'], (string) $panic['path'], $panic['configured'] ) );
+		}
+
 		if ( 'log' === $mode ) {
 			WP_CLI::log( '' );
 			WP_CLI::log( 'Mode is "log": rules are evaluated and matches recorded, but nothing is blocked.' );
 		}
+	}
+
+	/**
+	 * Summarise the panic switch.
+	 *
+	 * @param array{active: bool, path: string|null, problem: string|null, configured: string, effective: string}|null $panic The switch as the runner reports it.
+	 */
+	private function panic_summary( ?array $panic ): string {
+		if ( null === $panic ) {
+			return '' === trim( (string) Plugin::instance()->settings()->get( 'global.panic_file', '' ) )
+				? 'not configured'
+				: 'configured, no file present';
+		}
+
+		if ( $panic['active'] ) {
+			return sprintf( 'ACTIVE at %s, forcing %s', (string) $panic['path'], $panic['effective'] );
+		}
+
+		return sprintf( '%s %s, so it is being ignored', (string) $panic['path'], (string) $panic['problem'] );
 	}
 
 	/**

@@ -24,6 +24,7 @@ its habit of writing down what does not work.
 - [Storage](#storage)
 - [Logging](#logging)
 - [Export and import](#export-and-import)
+- [During an incident](#during-an-incident)
 - [wp-config.php options](#wp-configphp-options)
 - [WP-CLI commands](#wp-cli-commands)
 - [Multisite](#multisite)
@@ -877,6 +878,46 @@ receiving site would erase its challenge secret — and a firewall that cannot
 start fails open, so every rule silently stops being enforced while the interface
 goes on reporting "Blocking".
 
+## During an incident
+
+### Turning the firewall down without a deploy
+
+`BASIC_FIREWALL_MODE` works, but it lives in `wp-config.php`, and on most
+hosting changing that file is a release — which is the wrong speed when a rule is
+refusing real customers.
+
+Set a **panic file** at the bottom of the General screen, then during an
+incident:
+
+```console
+echo log > /path/to/panic    # stop enforcing, keep recording
+rm /path/to/panic            # back to the configured mode
+```
+
+No deploy, no cache flush, no restart, on either evaluation path. It costs one
+`is_file()` per request while a path is set, and nothing at all while it is not.
+A relative path resolves inside the private directory, which is guarded against
+web access; wherever it goes, keep it out of anything a deploy recreates. A file
+that turns the firewall down is worth exactly as much as write access to its
+path, which is also why there is no default.
+
+The file has to **name** a mode — `block`, `log`, `exception` or `disabled`. An
+empty file, a typo, or one that cannot be read changes **nothing** and is
+reported as a problem. That is deliberate: if any file at all meant "off", one
+left behind from an incident last month would disable the firewall and nothing
+would say so.
+
+While it is active, Site Health reports it as critical and names both the
+effective and the configured mode — which also puts it in an admin notice on
+every screen — the Status screen leads with it, and `wp basic-firewall status`
+reports it on the `Mode` and `Panic file` rows. The realistic failure here is not
+somebody flipping it; it is nobody noticing three weeks later that the site has
+been in log mode since the incident.
+
+`BASIC_FIREWALL_MODE` still wins over the panic file, so an environment that pins
+the mode keeps it pinned. The request tester ignores the file too: it answers
+what the rules decide, not what an incident has them doing.
+
 ## wp-config.php options
 
 ### The one line that matters
@@ -914,6 +955,7 @@ All optional, all added by hand. This plugin never writes to `wp-config.php`.
 define( 'BASIC_FIREWALL_ENABLED', false );
 
 // Force a mode regardless of what is configured: block, log, exception, disabled.
+// Wins over a panic file too.
 define( 'BASIC_FIREWALL_MODE', 'log' );
 
 // Supply the challenge signing secret without storing it in the database.

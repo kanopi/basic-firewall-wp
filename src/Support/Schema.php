@@ -152,6 +152,20 @@ final class Schema {
 					'default' => 'log',
 					'choices' => array( 'block', 'log', 'exception', 'disabled' ),
 				),
+				'panic_file'              => array(
+					'type'    => 'string',
+					'label'   => 'Panic file',
+
+					/*
+					 * Empty, and there is no suggested path either. A file that
+					 * turns the firewall down is worth exactly as much as write
+					 * access to where it lives, and a well-known default would be
+					 * the first thing worth trying against every site running
+					 * this plugin. Empty also means the library is never asked to
+					 * stat anything, so a site that arms nothing pays nothing.
+					 */
+					'default' => '',
+				),
 				'banning_status_code'     => array(
 					'type'    => 'int',
 					'label'   => 'HTTP status code returned to blocked clients',

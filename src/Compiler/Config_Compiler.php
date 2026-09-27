@@ -172,6 +172,25 @@ final class Config_Compiler {
 			$compiled['behind_proxy'] = 'yes' === $behind;
 		}
 
+		/*
+		 * Only when set. An empty key would have the library stat a path on
+		 * every request for a switch nobody armed, and the point of the feature
+		 * is that it costs nothing until it is needed.
+		 *
+		 * Resolved to an absolute path here rather than written as typed, which
+		 * is the opposite of what the storage files get. The library resolves
+		 * those two against the directory holding the compiled file; it reads
+		 * this one with a bare is_file(), which resolves a relative path against
+		 * whatever the working directory happens to be -- the web root under
+		 * php-fpm, somewhere else entirely under WP-CLI. The same setting would
+		 * then arm a different file depending on who asked.
+		 */
+		$panic_file = trim( (string) ( $section['panic_file'] ?? '' ) );
+
+		if ( '' !== $panic_file ) {
+			$compiled['panic_file'] = Plugin::instance()->paths()->resolve( $panic_file );
+		}
+
 		$repeat = (int) ( $section['repeat_offender_status'] ?? 0 );
 
 		if ( $repeat > 0 ) {
