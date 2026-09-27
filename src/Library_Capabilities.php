@@ -216,13 +216,6 @@ final class Library_Capabilities {
 	 * read the way both evaluation paths read it: only an explicit `false`.
 	 */
 	public function identity_verification_runs(): bool {
-		if ( ! $this->has_edge_signals() ) {
-			$missing[] = array(
-				'feature' => __( 'Edge signals', 'basic-firewall' ),
-				'reason'  => __( 'The installed library cannot match on what a CDN worked out at the edge — a TLS fingerprint, or the bot score the edge computed. Needs kanopi/firewall 2.27.0 or later.', 'basic-firewall' ),
-			);
-		}
-
 		if ( ! $this->has_identity_verification() ) {
 			return false;
 		}
@@ -255,6 +248,44 @@ final class Library_Capabilities {
 	 */
 	public function has_edge_signals(): bool {
 		return class_exists( self::library_class( 'Plugins', 'EdgeSignal' ) );
+	}
+
+	/**
+	 * Whether the block list can be kept in Redis on this host.
+	 *
+	 * Two conditions, not one. The class arrived in library 2.22.0, but
+	 * `ext-redis` is a Composer `suggest` upstream rather than a `require`, so
+	 * a site can have the class with no extension behind it. Since 2.29.0 the
+	 * backend survives that and degrades rather than taking the firewall down,
+	 * which is right of it at runtime and no reason to offer a choice that
+	 * cannot work: a block list that silently stores nothing records no
+	 * client, recognises no repeat offender and never escalates, while the
+	 * Storage screen reports storage as configured.
+	 */
+	public function has_redis_storage(): bool {
+		return $this->has_redis_storage_class() && self::has_redis_extension();
+	}
+
+	/**
+	 * Whether the installed library ships the Redis block list at all.
+	 *
+	 * Asked apart from the extension so that the screen and Site Health can say
+	 * which of the two is missing. They are different fixes, made by different
+	 * people: one is a library update, the other is the host's PHP build.
+	 */
+	public function has_redis_storage_class(): bool {
+		return class_exists( self::library_class( 'Storage', 'RedisStorage' ) );
+	}
+
+	/**
+	 * Whether this PHP has `ext-redis` loaded.
+	 *
+	 * Only this process's PHP. A compiled file written from WP-CLI on a box
+	 * without the extension is still read by web nodes that have it, which is
+	 * why a missing extension is reported rather than compiled around.
+	 */
+	public static function has_redis_extension(): bool {
+		return extension_loaded( 'redis' );
 	}
 
 	/**
@@ -427,6 +458,29 @@ final class Library_Capabilities {
 				'reason'  => __( 'The installed library cannot verify a crawler by reverse DNS, so a user agent rule can only take the client at its word. Needs kanopi/firewall 2.20.0 or later.', 'basic-firewall' ),
 			);
 		}
+
+		if ( ! $this->has_edge_signals() ) {
+			$missing[] = array(
+				'feature' => __( 'Edge signals', 'basic-firewall' ),
+				'reason'  => __( 'The installed library cannot match on what a CDN worked out at the edge — a TLS fingerprint, or the bot score the edge computed. Needs kanopi/firewall 2.27.0 or later.', 'basic-firewall' ),
+			);
+		}
+
+		if ( ! $this->has_redis_storage_class() ) {
+			$missing[] = array(
+				'feature' => __( 'Redis block list', 'basic-firewall' ),
+				'reason'  => __( 'The installed library cannot keep the block list in Redis. Needs kanopi/firewall 2.22.0 or later.', 'basic-firewall' ),
+			);
+		}
+
+		/*
+		 * A missing `ext-redis` is deliberately not listed. It is not something
+		 * the library lacks, most hosts do not have it, and a site that never
+		 * wanted Redis would be told on every visit to Site Health that its
+		 * library is incomplete. The Storage screen says why Redis is not
+		 * offered, and the storage check turns critical only for a site that
+		 * chose Redis and cannot have it.
+		 */
 
 		$crs = $this->crs_probe();
 

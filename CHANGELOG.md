@@ -9,6 +9,19 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Redis for the block list**, where expiry costs nothing: blocks are stored
+  with a TTL and Redis evicts them itself. Offered on the Storage screen only
+  where the library has the backend and PHP has `ext-redis`, and the screen
+  says which is missing when it is not. A site already on Redis that loses the
+  extension keeps the setting with an error rather than being moved to file
+  storage on its next save, and Site Health reports it as critical — since
+  library 2.29.0 the backend degrades without the extension, which leaves a
+  block list that stores nothing. The key prefix defaults to the library's
+  `firewall:`, with the table prefix mixed in on a network so sites sharing a
+  server do not share a block list. The password is kept as typed, never
+  echoed back into the page, stripped from an export, and accepts an
+  `%env()%` token. The block list screen and WP-CLI read Redis too.
+
 - **The edge signal rule type**, for what the CDN worked out that the site
   cannot: a JA3 or JA4 TLS fingerprint, which identifies the client stack rather
   than what it claims to be, and the bot score the edge computed. Cloudflare,
@@ -139,6 +152,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- The edge signals entry of the library capability report was written into the
+  wrong method, so Site Health never listed edge signals as unavailable on a
+  library without them.
 - **Conditions using "is greater than", "is less than" (or equal) and "does not
   contain" match again.** The screen stored `gt`, `gte`, `lt`, `lte` and
   `not_contains` and compiled them as stored, and the library knows none of

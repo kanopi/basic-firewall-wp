@@ -312,7 +312,11 @@ final class Validator {
 			$value = $value ? 'yes' : 'no';
 		}
 
-		$string = null === $value ? '' : trim( (string) $value );
+		$string = null === $value ? '' : (string) $value;
+
+		if ( false !== ( $node['trim'] ?? true ) ) {
+			$string = trim( $string );
+		}
 
 		if ( isset( $node['choices'] ) && is_array( $node['choices'] ) && ! in_array( $string, $node['choices'], true ) ) {
 			$this->error(

@@ -9,6 +9,7 @@ declare( strict_types = 1 );
 
 namespace Kanopi\BasicFirewall;
 
+use Kanopi\BasicFirewall\Compiler\Config_Compiler;
 use Kanopi\BasicFirewall\Compiler\Library_Map;
 use Kanopi\Firewall\Storage\QueryableStorageInterface;
 use Kanopi\Firewall\Storage\StorageInterface;
@@ -41,7 +42,14 @@ final class Blocked_Clients {
 
 		$settings = Plugin::instance()->settings();
 		$backend  = (string) $settings->get( 'storage.backend', 'file' );
-		$class    = Library_Map::resolve( Library_Map::STORAGE, $backend, 'file' );
+
+		// The compiler falls back to file storage on a library with no Redis
+		// block list, so this reads the list the firewall is actually writing.
+		if ( 'redis' === $backend && ! ( new Library_Capabilities() )->has_redis_storage_class() ) {
+			$backend = 'file';
+		}
+
+		$class = Library_Map::resolve( Library_Map::STORAGE, $backend, 'file' );
 
 		$config = array();
 
@@ -64,6 +72,8 @@ final class Blocked_Clients {
 			} elseif ( '' !== trim( (string) ( $database['dsn'] ?? '' ) ) ) {
 				$config['connection'] = array( 'dsn' => trim( (string) $database['dsn'] ) );
 			}
+		} elseif ( 'redis' === $backend ) {
+			$config = array( 'redis' => Config_Compiler::redis_storage_options( (array) $settings->get( 'storage.redis', array() ) ) );
 		} else {
 			$paths  = Plugin::instance()->paths();
 			$file   = (array) $settings->get( 'storage.file', array() );

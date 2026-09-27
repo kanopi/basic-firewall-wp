@@ -88,6 +88,7 @@ final class SchemaTest extends TestCase {
 		$expected = array(
 			'storage.database.dsn',
 			'storage.database.parameters.password',
+			'storage.redis.password',
 			'challenge.secret',
 			'challenge.provider_options.turnstile.secret_key',
 			'challenge.provider_options.recaptcha.secret_key',

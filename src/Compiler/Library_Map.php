@@ -18,6 +18,7 @@ use Kanopi\Firewall\RateLimitStorage\RedisRateLimitStorage;
 use Kanopi\Firewall\Storage\DatabaseStorage;
 use Kanopi\Firewall\Storage\FileStorage;
 use Kanopi\Firewall\Storage\InMemoryStorage;
+use Kanopi\Firewall\Storage\RedisStorage;
 use Kanopi\Firewall\Storage\RecordedRequest;
 use Monolog\Formatter\JsonFormatter;
 use Monolog\Formatter\LineFormatter;
@@ -58,6 +59,7 @@ final class Library_Map {
 		'memory'   => InMemoryStorage::class,
 		'file'     => FileStorage::class,
 		'database' => DatabaseStorage::class,
+		'redis'    => RedisStorage::class,
 	);
 
 	/**

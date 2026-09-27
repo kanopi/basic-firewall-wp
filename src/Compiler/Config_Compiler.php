@@ -405,6 +405,36 @@ final class Config_Compiler {
 	private function compile_storage_backend( array $storage ): array {
 		$backend = (string) ( $storage['backend'] ?? 'file' );
 
+		if ( 'redis' === $backend ) {
+			$capabilities = new Library_Capabilities();
+
+			/*
+			 * A library without the class would skip a storage type it cannot
+			 * find, so the fallback is chosen here where it can be said.
+			 *
+			 * A missing *extension* is not compiled around. The compiled file
+			 * is written by whichever PHP saved the settings -- often WP-CLI on
+			 * a box that is not a web node -- and read by every web node, so
+			 * the extension being absent here says nothing about whether it is
+			 * absent where requests are served. The library degrades on a node
+			 * without it, and Site Health says so on that node.
+			 */
+			if ( $capabilities->has_redis_storage_class() ) {
+				if ( ! Library_Capabilities::has_redis_extension() ) {
+					$this->problems[] = __( 'Redis block list storage is selected, but this PHP does not have the redis extension loaded. Any web node without it keeps no block list at all: rules still run, but no client is recorded and repeat offenders are never recognised.', 'basic-firewall' );
+				}
+
+				return array(
+					'type'   => Library_Map::STORAGE['redis'],
+					'config' => array( 'redis' => self::redis_storage_options( (array) ( $storage['redis'] ?? array() ) ) ),
+				);
+			}
+
+			$this->problems[] = __( 'Redis block list storage is selected but the installed library cannot provide it. Falling back to file storage so blocks are still recorded.', 'basic-firewall' );
+
+			$backend = 'file';
+		}
+
 		if ( 'database' === $backend ) {
 			$compiled = $this->compile_database_storage( (array) ( $storage['database'] ?? array() ) );
 
@@ -464,6 +494,56 @@ final class Config_Compiler {
 		 * deliberately, which is how a test leaves no trace.
 		 */
 		return array( 'type' => Library_Map::STORAGE['memory'] );
+	}
+
+	/**
+	 * The options the Redis block list connects with.
+	 *
+	 * Public because the block list screen and WP-CLI open the same backend
+	 * the firewall writes to, and two copies of this would drift the first time
+	 * one of them learned about a new key.
+	 *
+	 * The keys are `ext-redis`'s own spelling, because it skips an option it
+	 * does not recognise with a warning rather than refusing it: a misspelled
+	 * key looks configured and does nothing.
+	 *
+	 * @param array<string, mixed> $redis Stored `storage.redis` settings.
+	 *
+	 * @return array<string, mixed>
+	 */
+	public static function redis_storage_options( array $redis ): array {
+		$host = trim( (string) ( $redis['host'] ?? '' ) );
+
+		$options = array(
+			'host' => '' !== $host ? $host : '127.0.0.1',
+
+			// An integer, because a string port is an option `ext-redis` skips.
+			'port' => (int) ( $redis['port'] ?? 6379 ),
+		);
+
+		/*
+		 * Always written, and derived from the site when left empty. Omitting
+		 * it hands the choice to the library's bare `firewall:`, which is one
+		 * block list for every site of a network sharing the server.
+		 */
+		$prefix = trim( (string) ( $redis['prefix'] ?? '' ) );
+
+		$options['prefix'] = '' !== $prefix ? $prefix : ( new Database_Credentials() )->block_list_key_prefix();
+
+		/*
+		 * A password alone is the ordinary `requirepass` case. Only a username
+		 * with a password becomes the pair ACL authentication needs, and a
+		 * username on its own is not a credential the server accepts -- so it
+		 * is not written as one.
+		 */
+		$username = trim( (string) ( $redis['username'] ?? '' ) );
+		$password = (string) ( $redis['password'] ?? '' );
+
+		if ( '' !== $password ) {
+			$options['auth'] = '' === $username ? $password : array( $username, $password );
+		}
+
+		return $options;
 	}
 
 	/**

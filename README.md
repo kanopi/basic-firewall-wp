@@ -1067,8 +1067,9 @@ unless replacing those is the point.
 
 | Backend | Use when |
 |---|---|
-| File | Single web node. No credentials, and the only option that works on the early path |
+| File | Single web node. No credentials needed |
 | Database | Multiple web nodes, or a block list of any size. Flat lookup cost |
+| Redis | Multiple web nodes, and you would rather expiry cost nothing. Needs `ext-redis` |
 
 Clients are keyed by IP address. **Switching backends does not move the block
 list** — each keeps its own, so a client blocked under file storage is not
@@ -1087,6 +1088,52 @@ operations, and a baked snapshot goes stale silently:
 block()  -> false          the client is not recorded
 request  -> allowed        the firewall fails open
 ```
+
+### Redis, and why expiry is the interesting part
+
+File and database storage both sweep expired blocks as they go. Redis does not
+need to: a block is stored with a TTL and Redis evicts it itself, so the sweep
+has nothing to do at all. The cost is not reduced, it is gone — and that matters
+most during an attack, which is exactly when the block list is largest and when
+you least want a lapsed batch landing on one unlucky visitor.
+
+The option appears on the Storage screen only where it can work: the library has
+the backend and this PHP has `ext-redis`. The library lists the extension as a
+Composer *suggest* rather than a *require*, so it installs without it, and since
+kanopi/firewall 2.29.0 the backend degrades rather than crashing when it is
+missing — which keeps the site up and leaves a block list that stores nothing.
+No client is recorded, no repeat offender recognised, nothing escalates. So:
+
+- The Storage screen says which half is missing when Redis is not offered — the
+  library or the extension — because they are different fixes.
+- A site **already on Redis** that loses the extension keeps the setting, with
+  an error on the Storage screen, rather than being quietly moved to file
+  storage the next time anything there is saved.
+- **Site Health reports it as critical**, as it does in-memory storage, because
+  it amounts to the same thing.
+- The compiler does not fall back. The compiled file is often written from
+  WP-CLI on a box that is not a web node, so the extension being absent there
+  says nothing about the nodes serving requests. It warns instead.
+
+**The key prefix.** Left empty it is `firewall:`, which is what the library
+would use on its own — and on a network, `firewall:<table prefix>:`, so sites
+sharing one Redis do not share one block list. Anything typed is used exactly,
+so give each site its own.
+
+**Authentication.** A password alone is the ordinary `requirepass` case; fill in
+the username as well only for a server using ACLs. The password is kept as typed
+— not trimmed — and never echoed back into the page: leave the field blank to
+keep the stored one, or tick *Remove the stored password*. It is written into the
+compiled file and stripped from an export, so `%env(YOUR_VARIABLE)%` is the
+better answer: that token is not a credential, survives an export, and never
+reaches the database.
+
+Redis needs no WordPress credentials, so it works on the wp-config.php
+evaluation path exactly as it does on the mu-plugin path. If the server cannot be
+reached, the firewall carries on enforcing every rule and Site Health names the
+backend it is running without. `ext-redis` also emits a PHP warning of its own
+when a connection fails, which the library cannot suppress, so a wrong host is
+noisy in the log as well as reported.
 
 ### What a block record keeps
 

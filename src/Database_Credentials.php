@@ -189,8 +189,30 @@ final class Database_Credentials {
 	 * in `redis-cli`; a network site gets its prefix mixed in.
 	 */
 	public function rate_limit_key_prefix(): string {
+		return $this->redis_key_prefix( 'ratelimit' );
+	}
+
+	/**
+	 * The same discriminator, for the Redis block list.
+	 *
+	 * The library's own default there is a bare `firewall:`, which on a network
+	 * sharing one Redis would put every site on one block list: a client
+	 * blocked on one site refused on all of them, and each site escalating the
+	 * others' offenders. `firewall:` is kept as the stem so a single site's keys
+	 * are exactly what the library would have written.
+	 */
+	public function block_list_key_prefix(): string {
+		return $this->redis_key_prefix( 'firewall' );
+	}
+
+	/**
+	 * A Redis key prefix under a stem, with this site mixed in on a network.
+	 *
+	 * @param string $stem The namespace the library would use on its own.
+	 */
+	private function redis_key_prefix( string $stem ): string {
 		if ( ! is_multisite() ) {
-			return 'ratelimit:';
+			return $stem . ':';
 		}
 
 		$discriminator = trim( $this->prefix(), '_' );
@@ -199,6 +221,6 @@ final class Database_Credentials {
 			$discriminator = 'site' . get_current_blog_id();
 		}
 
-		return 'ratelimit:' . $discriminator . ':';
+		return $stem . ':' . $discriminator . ':';
 	}
 }

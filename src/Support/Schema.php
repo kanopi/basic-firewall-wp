@@ -30,6 +30,8 @@ use Kanopi\BasicFirewall\Compiler\Library_Map;
  *              redactor reads to decide what to strip. Declaring it here rather
  *              than in the exporter means a new field is redacted because of
  *              what it is, not because somebody remembered to list it.
+ * - `trim`     false to keep a string exactly as given. Every other string is
+ *              trimmed, which is right for a hostname and wrong for a password.
  *
  * Rule settings are deliberately absent: a rule's `settings` sub-tree is
  * resolved by its own rule type, so a type contributed through the
@@ -314,7 +316,7 @@ final class Schema {
 					 * large one, so the readme explains the trade instead.
 					 */
 					'default' => 'file',
-					'choices' => array( 'memory', 'file', 'database' ),
+					'choices' => array( 'memory', 'file', 'database', 'redis' ),
 				),
 				'file'           => array(
 					'type'     => 'map',
@@ -369,7 +371,76 @@ final class Schema {
 						'parameters'        => self::connection_parameters(),
 					),
 				),
+				'redis'          => self::redis_storage(),
 				'record_request' => self::record_request(),
+			),
+		);
+	}
+
+	/**
+	 * The Redis block list.
+	 *
+	 * Its own keys rather than the rate limit's `redis_host` and `redis_port`,
+	 * because the two backends do not read the same shape: the block list takes
+	 * its options nested under `config.redis`, spelled the way `ext-redis`
+	 * spells them. Borrowing the familiar field names is how a configuration
+	 * ends up ignored by the backend and connected to localhost while the
+	 * screen says otherwise -- and nothing reports it, because localhost
+	 * usually answers.
+	 *
+	 * @return array<string, mixed>
+	 */
+	private static function redis_storage(): array {
+		return array(
+			'type'     => 'map',
+			'label'    => 'Redis block list settings',
+			'children' => array(
+				'host'     => array(
+					'type'    => 'string',
+					'label'   => 'Redis host',
+					'default' => '127.0.0.1',
+				),
+				'port'     => array(
+					'type'    => 'int',
+					'label'   => 'Redis port',
+					'default' => 6379,
+					'min'     => 1,
+					'max'     => 65535,
+				),
+
+				/*
+				 * Empty by default, and empty is not "no prefix": the compiler
+				 * derives one from the site, the way it does for rate limit
+				 * counters, so two sites of a network sharing one Redis do not
+				 * share one block list.
+				 */
+				'prefix'   => array(
+					'type'    => 'string',
+					'label'   => 'Key prefix',
+					'default' => '',
+				),
+
+				// Half a credential rather than the secret half, so it is kept
+				// in an export: without it an import cannot say which account
+				// the missing password belongs to.
+				'username' => array(
+					'type'    => 'string',
+					'label'   => 'Redis username, for ACL authentication',
+					'default' => '',
+				),
+				'password' => array(
+					'type'    => 'string',
+					'label'   => 'Redis password',
+					'default' => '',
+					'secret'  => true,
+
+					/*
+					 * Not trimmed. A password is whatever was issued, trailing
+					 * space included, and quietly altering it produces an
+					 * authentication failure nobody can see on the screen.
+					 */
+					'trim'    => false,
+				),
 			),
 		);
 	}

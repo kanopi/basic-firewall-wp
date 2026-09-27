@@ -12,6 +12,7 @@ namespace Kanopi\BasicFirewall\Admin\Screen;
 use Kanopi\BasicFirewall\Admin\Notices;
 use Kanopi\BasicFirewall\Admin\Screen;
 use Kanopi\BasicFirewall\Database_Credentials;
+use Kanopi\BasicFirewall\Library_Capabilities;
 use Kanopi\BasicFirewall\Settings;
 
 /**
@@ -53,7 +54,23 @@ final class Storage_Screen extends Screen {
 		$settings = $this->plugin()->settings();
 		$all      = $settings->all();
 
-		$all['storage']['backend'] = $this->posted( 'backend', 'file' );
+		$previous = (string) ( $all['storage']['backend'] ?? 'file' );
+		$backend  = $this->posted( 'backend', 'file' );
+
+		/*
+		 * Redis is only offered where it can work, so choosing it here without
+		 * it is a stale form or a hand-built request. Refused rather than
+		 * stored: the block list would keep nothing. A site already on Redis
+		 * keeps it -- it did not choose anything just now, and flipping it to
+		 * file would move the block list without asking.
+		 */
+		if ( 'redis' === $backend && 'redis' !== $previous && ! ( new Library_Capabilities() )->has_redis_storage() ) {
+			Notices::add( esc_html( $this->redis_unavailable_reason() ), 'error' );
+
+			$backend = $previous;
+		}
+
+		$all['storage']['backend'] = $backend;
 
 		$all['storage']['file']['storage_file'] = $this->posted( 'storage_file' );
 		$all['storage']['file']['offense_file'] = $this->posted( 'offense_file' );
@@ -65,6 +82,8 @@ final class Storage_Screen extends Screen {
 		foreach ( array( 'cookies', 'headers', 'query', 'body' ) as $bucket ) {
 			$all['storage']['record_request'][ $bucket ] = $this->posted_textarea( 'record_' . $bucket );
 		}
+
+		$this->take_redis( $all );
 
 		$dsn = $this->posted( 'dsn' );
 
@@ -87,6 +106,10 @@ final class Storage_Screen extends Screen {
 			Notices::add( __( 'Storage settings saved, and the firewall recompiled.', 'basic-firewall' ) );
 		}
 
+		if ( 'redis' === $backend && ! ( new Library_Capabilities() )->has_redis_storage() ) {
+			Notices::add( esc_html( $this->redis_unavailable_reason() ), 'error' );
+		}
+
 		$this->redirect( $this->slug() );
 	}
 
@@ -94,9 +117,43 @@ final class Storage_Screen extends Screen {
 	 * {@inheritDoc}
 	 */
 	public function render(): void {
-		$settings    = $this->plugin()->settings();
-		$credentials = new Database_Credentials();
-		$backend     = (string) $settings->get( 'storage.backend', 'file' );
+		$settings     = $this->plugin()->settings();
+		$credentials  = new Database_Credentials();
+		$backend      = (string) $settings->get( 'storage.backend', 'file' );
+		$redis_usable = ( new Library_Capabilities() )->has_redis_storage();
+
+		$options = array(
+			'file'     => __( 'File — single web node, no database needed', 'basic-firewall' ),
+			'database' => __( 'Database — shared between web nodes, flat lookup cost', 'basic-firewall' ),
+		);
+
+		/*
+		 * Offered where it can work, and shown where it is already chosen even
+		 * though it cannot. Dropping the option outright for a site already on
+		 * it would leave the select on its first entry, and the next save --
+		 * of anything on this screen -- would move the block list to file
+		 * storage without anybody deciding to.
+		 */
+		if ( $redis_usable ) {
+			$options['redis'] = __( 'Redis — shared between web nodes, and expiry costs nothing', 'basic-firewall' );
+		} elseif ( 'redis' === $backend ) {
+			$options['redis'] = __( 'Redis — not usable on this server; change it', 'basic-firewall' );
+		}
+
+		$backend_note = __( '<strong>File</strong> is faster on a quiet site (0.007 ms against 0.07 ms), but its lookup cost grows with the size of the block list — about 0.75 ms at 2,000 clients — so it gets slower exactly when the firewall is busiest. <strong>Database</strong> stays flat. File is the default because most sites never block at volume; switch once yours does. Both work on the wp-config.php evaluation path, provided the bootstrap is required below the DB_ constants — the Dashboard shows the snippet and the placement.', 'basic-firewall' );
+
+		if ( $redis_usable ) {
+			$backend_note .= '<br><br>' . __( '<strong>Redis</strong> also works on the wp-config.php path, because it needs no WordPress credentials — everything it connects with is in the compiled file.', 'basic-firewall' );
+		} elseif ( 'redis' !== $backend ) {
+			$backend_note .= '<br><br>' . esc_html( $this->redis_unavailable_reason() );
+		}
+
+		if ( 'redis' === $backend && ! $redis_usable ) {
+			printf(
+				'<div class="notice notice-error inline"><p>%s</p></div>',
+				esc_html( $this->redis_unavailable_reason() . ' ' . __( 'The firewall is still evaluating every rule, but on this server it keeps no block list at all: no client is recorded, repeat offenders are never recognised, and escalation never happens.', 'basic-firewall' ) )
+			);
+		}
 
 		$this->open_form();
 
@@ -104,20 +161,15 @@ final class Storage_Screen extends Screen {
 
 		$this->row(
 			__( 'Backend', 'basic-firewall' ),
-			self::select(
-				'backend',
-				array(
-					'file'     => __( 'File — single web node, no database needed', 'basic-firewall' ),
-					'database' => __( 'Database — shared between web nodes, flat lookup cost', 'basic-firewall' ),
-				),
-				$backend
-			),
-			wp_kses_post(
-				__( '<strong>File</strong> is faster on a quiet site (0.007 ms against 0.07 ms), but its lookup cost grows with the size of the block list — about 0.75 ms at 2,000 clients — so it gets slower exactly when the firewall is busiest. <strong>Database</strong> stays flat. File is the default because most sites never block at volume; switch once yours does. Both work on the wp-config.php evaluation path, provided the bootstrap is required below the DB_ constants — the Dashboard shows the snippet and the placement.', 'basic-firewall' )
-			)
+			self::select( 'backend', $options, $backend ),
+			wp_kses_post( $backend_note )
 		);
 
 		echo '</tbody></table>';
+
+		if ( isset( $options['redis'] ) ) {
+			$this->render_redis( $settings );
+		}
 
 		$this->open_section( __( 'File storage', 'basic-firewall' ), 'backend:file' );
 
@@ -196,6 +248,128 @@ final class Storage_Screen extends Screen {
 		$this->render_record_request( $settings );
 
 		$this->close_form();
+	}
+
+	/**
+	 * Why Redis is not offered here, naming whichever half is missing.
+	 *
+	 * The two are different fixes made by different people -- a library update
+	 * against the host's PHP build -- so saying only "unavailable" would send
+	 * somebody to the wrong one.
+	 */
+	private function redis_unavailable_reason(): string {
+		if ( ! ( new Library_Capabilities() )->has_redis_storage_class() ) {
+			return __( 'Redis block list storage is not offered: the installed firewall library does not provide it. It needs kanopi/firewall 2.22.0 or later.', 'basic-firewall' );
+		}
+
+		return __( 'Redis block list storage is not offered: this server\'s PHP does not have the redis extension loaded. The library lists it as a suggestion rather than a requirement, so it can be present without it — ask your host to enable ext-redis.', 'basic-firewall' );
+	}
+
+	/**
+	 * Copy the posted Redis fields into the document.
+	 *
+	 * Only when the section was rendered. On a server where Redis is neither
+	 * usable nor chosen the fields are absent, and reading them as empty would
+	 * blank a stored configuration every time anything else on this screen was
+	 * saved.
+	 *
+	 * @param array<string, mixed> $all The settings document, by reference.
+	 */
+	private function take_redis( array &$all ): void {
+		// phpcs:ignore WordPress.Security.NonceVerification.Missing -- verify() is called by handle().
+		if ( ! isset( $_POST['redis_host'] ) ) {
+			return;
+		}
+
+		$all['storage']['redis']['host']     = $this->posted( 'redis_host', '127.0.0.1' );
+		$all['storage']['redis']['port']     = $this->posted( 'redis_port', '6379' );
+		$all['storage']['redis']['prefix']   = $this->posted( 'redis_prefix' );
+		$all['storage']['redis']['username'] = $this->posted( 'redis_username' );
+
+		if ( '' !== $this->posted( 'redis_password_clear' ) ) {
+			$all['storage']['redis']['password'] = '';
+
+			return;
+		}
+
+		/*
+		 * Read as typed rather than through sanitize_text_field(), which trims
+		 * and strips: a password is whatever was issued, and quietly altering
+		 * it produces an authentication failure nobody can see on this screen.
+		 * It is never echoed back into the page, so nothing here reaches HTML.
+		 *
+		 * Empty means "keep the stored one" -- the field is never pre-filled,
+		 * so the stored password does not travel to the browser on every visit.
+		 */
+		// phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- verified in handle(); a password is kept byte for byte.
+		$password = isset( $_POST['redis_password'] ) && is_string( $_POST['redis_password'] ) ? wp_unslash( $_POST['redis_password'] ) : '';
+
+		if ( '' !== $password ) {
+			$all['storage']['redis']['password'] = $password;
+		}
+	}
+
+	/**
+	 * The Redis connection.
+	 *
+	 * @param Settings $settings Current settings.
+	 */
+	private function render_redis( Settings $settings ): void {
+		$this->open_section(
+			__( 'Redis storage', 'basic-firewall' ),
+			'backend:redis',
+			wp_kses_post(
+				__( 'File and database storage both sweep expired blocks as they go. Redis does not need to: a block is stored with a TTL and Redis evicts it itself, so the sweep has nothing to do at all. That matters most during an attack, which is when the block list is largest and when you least want a lapsed batch landing on one unlucky visitor. If the server cannot be reached the firewall carries on enforcing every rule and Site Health names the backend it is running without.', 'basic-firewall' )
+			)
+		);
+
+		echo '<table class="form-table" role="presentation"><tbody>';
+
+		$this->row(
+			__( 'Host', 'basic-firewall' ),
+			self::text( 'redis_host', (string) $settings->get( 'storage.redis.host', '127.0.0.1' ) ),
+			wp_kses_post( __( 'A hostname or address. A Unix socket path such as <code>/var/run/redis/redis.sock</code> also works.', 'basic-firewall' ) )
+		);
+
+		$this->row(
+			__( 'Port', 'basic-firewall' ),
+			self::text( 'redis_port', (string) $settings->get( 'storage.redis.port', 6379 ), 'number', 'min="1" max="65535"' )
+		);
+
+		$credentials = new Database_Credentials();
+
+		$this->row(
+			__( 'Key prefix', 'basic-firewall' ),
+			self::text( 'redis_prefix', (string) $settings->get( 'storage.redis.prefix', '' ), 'text', 'placeholder="' . esc_attr( $credentials->block_list_key_prefix() ) . '"' ),
+			sprintf(
+				/* translators: %s: the prefix used when the field is left empty. */
+				__( 'Every key this site writes starts with it. Left empty, it is <code>%s</code>, which on a network includes this site\'s table prefix — so sites sharing one Redis do not share one block list. Anything typed here is used exactly, so give each site its own.', 'basic-firewall' ),
+				esc_html( $credentials->block_list_key_prefix() )
+			)
+		);
+
+		$this->row(
+			__( 'Username', 'basic-firewall' ),
+			self::text( 'redis_username', (string) $settings->get( 'storage.redis.username', '' ), 'text', 'autocomplete="off"' ),
+			wp_kses_post( __( 'Only for a server using ACL authentication. Leave empty for the ordinary <code>requirepass</code> case, where a password alone is enough.', 'basic-firewall' ) )
+		);
+
+		$stored = (string) $settings->get( 'storage.redis.password', '' );
+
+		$this->row(
+			__( 'Password', 'basic-firewall' ),
+			self::text( 'redis_password', '', 'password', 'autocomplete="new-password"' )
+				. ( '' !== $stored ? '<br>' . self::checkbox( 'redis_password_clear', false, __( 'Remove the stored password', 'basic-firewall' ) ) : '' ),
+			wp_kses_post(
+				( '' !== $stored ? __( 'A password is stored. Leave blank to keep it. ', 'basic-firewall' ) : '' )
+				/* translators: the %env()% below is a literal token the firewall reads, not a placeholder. */
+				. __( 'Stored in the settings as typed and written into the compiled file, and stripped from an export. Type <code>%env(YOUR_VARIABLE)%</code> to read it from the environment instead: that is not a credential, survives an export, and never reaches the database.', 'basic-firewall' )
+			)
+		);
+
+		echo '</tbody></table>';
+
+		$this->close_section();
 	}
 
 	/**

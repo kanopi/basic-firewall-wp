@@ -368,7 +368,7 @@ if ( ! class_exists( $base ) ) {
  * The features detected by a class rather than a method, asked the way
  * Library_Capabilities::library_class() asks: scoped spelling first.
  */
-foreach ( array( 'Utility\\ReverseDnsVerifier', 'Plugins\\EdgeSignal' ) as $relative ) {
+foreach ( array( 'Utility\\ReverseDnsVerifier', 'Plugins\\EdgeSignal', 'Storage\\RedisStorage' ) as $relative ) {
 	if ( class_exists( $prefix . '\\Kanopi\\Firewall\\' . $relative ) ) {
 		bfw_pass( sprintf( '%s is detectable under the prefix', $relative ) );
 

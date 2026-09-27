@@ -1190,6 +1190,34 @@ final class Site_Health {
 			);
 		}
 
+		if ( 'redis' === $backend ) {
+			$capabilities = new Library_Capabilities();
+
+			if ( ! $capabilities->has_redis_storage_class() ) {
+				return self::recommended(
+					__( 'Redis block list storage is selected, but the installed library cannot provide it', 'basic-firewall' ),
+					esc_html__( 'The firewall is recording blocks in file storage instead, so a client is still remembered on this web node. Update kanopi/firewall to 2.22.0 or later, or choose file or database storage on the Storage screen so the setting says what is happening.', 'basic-firewall' )
+				);
+			}
+
+			/*
+			 * Critical, as in-memory storage is, because it amounts to the same
+			 * thing. Since library 2.29.0 the backend degrades rather than
+			 * failing without `ext-redis` -- which keeps the site up and leaves
+			 * a block list that stores nothing, while every other screen says
+			 * storage is configured. Asked of this PHP directly, rather than
+			 * waiting for the degraded-backends check, because that one only
+			 * knows once a firewall has been built in this request.
+			 */
+			if ( ! Library_Capabilities::has_redis_extension() ) {
+				return self::critical(
+					__( 'Redis block list storage is selected, but this server has no redis extension', 'basic-firewall' ),
+					'<p>' . esc_html__( 'Every rule is still evaluated and a matching request is still refused, but no client is recorded: repeat offenders are never recognised and escalation never happens. The library lists ext-redis as a suggestion rather than a requirement, so it installs without it.', 'basic-firewall' ) . '</p>'
+					. '<p>' . esc_html__( 'Ask your host to enable ext-redis, or choose file or database storage on the Storage screen. If only some web nodes lack it, this result is from the one that answered.', 'basic-firewall' ) . '</p>'
+				);
+			}
+		}
+
 		if ( 'database' === $backend && self::early_path_active() && ! self::early_path_reaches_database() ) {
 			/*
 			 * The module's one documented fail-open -- but checked rather than
