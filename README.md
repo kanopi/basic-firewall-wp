@@ -859,6 +859,31 @@ A custom CDN naming no header the library can read, or a signal it does not
 know, is refused on the screen and skipped by the compiler: the library refuses
 to start on either, and a firewall that cannot start fails open on every rule.
 
+### Where a location or a network comes from
+
+A **Geolocation** rule reads from one of two places, chosen on the rule under
+*Reader*; an **ASN** rule reads only the first.
+
+- **A MaxMind database**, looked up on this server. Authoritative, needs no
+  proxy configuration, and fills every field — but MaxMind databases cannot be
+  redistributed, so the plugin never ships one. Give the path to the `.mmdb`
+  file: relative resolves inside the private directory, absolute is used as
+  given. A path to a file that is not there yet saves with a warning, because the
+  download job may not have run; until it does, the rule matches nothing.
+- **The lookup your CDN already did**, read from a request header. Nothing to
+  license and no lookup cost — but a geo header is a claim, not a fact. Anything
+  that can reach the site directly can send `CF-IPCountry: US`, so the firewall
+  believes it only from a trusted proxy, and the rule warns when the site has not
+  said it is behind one. Only Cloudflare sends anything unasked, and only the
+  country; a field the CDN does not send matches nothing rather than wrongly. For
+  a CDN not in the list, map each field to its header, one `field: Header-Name`
+  per line. The fields are the library's — `country`, `country.name`,
+  `continent`, `city`, `postal`, `region`, `location.latitude`,
+  `location.longitude` — and any other is refused, because the library refuses
+  to start on it and the firewall then fails open on every rule.
+
+Switching source keeps the other one's settings, so switching back loses nothing.
+
 ### How a rate limit counts
 
 The counter is keyed on the visitor's **address and the pattern that matched** —

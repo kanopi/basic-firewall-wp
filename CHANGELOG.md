@@ -174,6 +174,19 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **Geolocation and ASN rules match again, and can be saved from their own
+  screen.** The rule screen never rendered the reader — database path, source,
+  CDN — so a save posted none of it: a database-backed rule was refused for
+  having no path, and a CDN-backed one was put back on a database it did not
+  have. The reader is now on the screen, a field at a time, and posts back in
+  the shape it was read in. Separately, the reader compiled to keys the library
+  never read — a top-level `database`, `source: headers` and `edge` where it
+  reads `reader: {type, db}`, `source: header` and `provider` — so every such
+  rule loaded, reported healthy and matched nothing. A custom header mapping
+  lost its field names the next time anything saved the settings, and now
+  refuses a field the library does not know rather than storing one that stops
+  the firewall starting. An ASN rule is no longer offered the CDN, which its
+  library plugin cannot read.
 - The user agent rule wrote `metadata.cache_dir`, which the library has never
   read, so the detection corpus was always cached under the library cache
   directory whatever the compiled file said. The key is gone, and where the

@@ -707,9 +707,10 @@ final class Rule_Edit_Screen extends Screen {
 
 			/*
 			 * A condition type's own settings beyond its conditions, where it
-			 * describes them. Only the described ones: a nested map such as a
-			 * geolocation reader has no generic control, and a textarea of
-			 * "Array" would be worse than nothing.
+			 * describes them. Only the described ones: an undescribed nested
+			 * map has no generic control, and a textarea of "Array" would be
+			 * worse than nothing. A described one -- the geolocation reader --
+			 * lists its fields, and each is rendered on its own.
 			 *
 			 * Without this the user agent rule's cache and bot-source settings
 			 * were never on the page -- so every save through it posted neither,
@@ -1297,71 +1298,131 @@ final class Rule_Edit_Screen extends Screen {
 				continue;
 			}
 
-			$value  = $settings[ $key ] ?? $default;
-			$name   = sprintf( 'settings[%s]', $key );
-			$secret = in_array( (string) $key, $type->secret_settings(), true );
-			$field  = (array) ( $help[ $key ] ?? array() );
-			$label  = (string) ( $field['label'] ?? $this->humanize( (string) $key ) );
+			$field = (array) ( $help[ $key ] ?? array() );
+			$value = $settings[ $key ] ?? $default;
 
-			// Shown only while another control holds a value, as `field:value`.
-			$show_when = (string) ( $field['show_when'] ?? '' );
+			/*
+			 * A nested map the type has described field by field -- the
+			 * geolocation reader, whose source, database path and CDN live
+			 * under one key. Each described field is its own row, named
+			 * `settings[reader][source]`, so it posts back into the same shape
+			 * it was read from.
+			 *
+			 * Before this the reader was never on the page, so a save through
+			 * this screen posted none of it: the type's validator saw an empty
+			 * reader, and a rule reading from a database was refused for having
+			 * no path, or one reading from the CDN was quietly put back on a
+			 * database it did not have.
+			 */
+			if ( is_array( $default ) && is_array( $field['fields'] ?? null ) ) {
+				$value = is_array( $value ) ? $value : array();
 
-			if ( is_bool( $default ) ) {
-				$this->row(
-					$label,
-					self::checkbox( $name, (bool) $value, (string) ( $field['checkbox'] ?? __( 'Enabled', 'basic-firewall' ) ) ),
-					wp_kses_post( (string) ( $field['description'] ?? '' ) ),
-					$show_when
-				);
+				foreach ( (array) $field['fields'] as $child => $child_field ) {
+					if ( ! array_key_exists( $child, $default ) ) {
+						continue;
+					}
 
-				continue;
-			}
-
-			if ( is_array( $default ) ) {
-				$this->row(
-					$label,
-					self::textarea( $name, is_array( $value ) ? implode( "\n", array_map( 'strval', $value ) ) : (string) $value ),
-					wp_kses_post( (string) ( $field['description'] ?? __( 'One per line.', 'basic-firewall' ) ) ),
-					$show_when
-				);
-
-				continue;
-			}
-
-			// A fixed set of answers is a select, not a text field somebody has
-			// to guess the spelling of.
-			if ( is_array( $field['choices'] ?? null ) && array() !== $field['choices'] ) {
-				$this->row(
-					$label,
-					self::select( $name, $field['choices'], (string) $value ),
-					wp_kses_post( (string) ( $field['description'] ?? '' ) ),
-					$show_when
-				);
+					$this->render_setting_row(
+						$type,
+						sprintf( 'settings[%s][%s]', $key, $child ),
+						$key . '.' . $child,
+						$default[ $child ],
+						$value[ $child ] ?? $default[ $child ],
+						(array) $child_field
+					);
+				}
 
 				continue;
 			}
 
-			$description = wp_kses_post( (string) ( $field['description'] ?? '' ) );
+			$this->render_setting_row( $type, sprintf( 'settings[%s]', $key ), (string) $key, $default, $value, $field );
+		}
 
-			if ( $secret ) {
-				/*
-				 * Warned at the point the key is typed, not in a readme. A
-				 * literal key here is stored in the options table and travels in
-				 * a database export; a token names a variable instead.
-				 */
-				/* translators: %s: the value described in the sentence. */
-				$description = __( 'This is a credential. Prefer a token — <code>%env(MY_VARIABLE)%</code> — over the value itself: a token is exported and backed up safely, and a rotated value is picked up without a rebuild. Exports strip a literal value and say so.', 'basic-firewall' );
+		echo '</tbody></table>';
+	}
+
+	/**
+	 * One settings row, with a control chosen from the default value.
+	 *
+	 * @param Rule_Type            $type    The rule type.
+	 * @param string               $name    The control's name attribute.
+	 * @param string               $path    The setting's dotted path, as secret_settings() names it.
+	 * @param mixed                $initial The default value, which decides the control.
+	 * @param mixed                $value   The current value.
+	 * @param array<string, mixed> $field   The type's description of the setting.
+	 */
+	private function render_setting_row( Rule_Type $type, string $name, string $path, $initial, $value, array $field ): void {
+		$secret = in_array( $path, $type->secret_settings(), true );
+		$label  = (string) ( $field['label'] ?? $this->humanize( (string) substr( (string) strrchr( '.' . $path, '.' ), 1 ) ) );
+
+		// Shown only while another control holds a value, as `field:value`.
+		$show_when = (string) ( $field['show_when'] ?? '' );
+
+		if ( is_bool( $initial ) ) {
+			$this->row(
+				$label,
+				self::checkbox( $name, (bool) $value, (string) ( $field['checkbox'] ?? __( 'Enabled', 'basic-firewall' ) ) ),
+				wp_kses_post( (string) ( $field['description'] ?? '' ) ),
+				$show_when
+			);
+
+			return;
+		}
+
+		if ( is_array( $initial ) ) {
+			$lines = array();
+
+			/*
+			 * A map is written a pair to a line, as `key: value`, which is the
+			 * shape its validator reads back -- the reader's header mapping is
+			 * one. Imploding the values alone would drop the keys and post back
+			 * something the validator refuses.
+			 */
+			foreach ( is_array( $value ) ? $value : array( $value ) as $item_key => $item ) {
+				$lines[] = is_string( $item_key ) ? $item_key . ': ' . (string) $item : (string) $item;
 			}
 
 			$this->row(
 				$label,
-				self::text( $name, (string) $value, is_int( $default ) ? 'number' : 'text' ),
-				$description,
+				self::textarea( $name, implode( "\n", $lines ) ),
+				wp_kses_post( (string) ( $field['description'] ?? __( 'One per line.', 'basic-firewall' ) ) ),
 				$show_when
 			);
+
+			return;
 		}
 
-		echo '</tbody></table>';
+		// A fixed set of answers is a select, not a text field somebody has
+		// to guess the spelling of.
+		if ( is_array( $field['choices'] ?? null ) && array() !== $field['choices'] ) {
+			$this->row(
+				$label,
+				self::select( $name, $field['choices'], (string) $value ),
+				wp_kses_post( (string) ( $field['description'] ?? '' ) ),
+				$show_when
+			);
+
+			return;
+		}
+
+		$description = wp_kses_post( (string) ( $field['description'] ?? '' ) );
+
+		if ( $secret ) {
+			/*
+			 * Warned at the point the key is typed, not in a readme. A literal
+			 * key here is stored in the options table and travels in a database
+			 * export; a token names a variable instead.
+			 */
+			/* translators: %s: the value described in the sentence. */
+			$description = trim( $description . ' ' . __( 'This is a credential. Prefer a token — <code>%env(MY_VARIABLE)%</code> — over the value itself: a token is exported and backed up safely, and a rotated value is picked up without a rebuild. Exports strip a literal value and say so.', 'basic-firewall' ) );
+		}
+
+		$this->row(
+			$label,
+			self::text( $name, (string) $value, is_int( $initial ) ? 'number' : 'text' ),
+			$description,
+			$show_when
+		);
 	}
 
 	/**

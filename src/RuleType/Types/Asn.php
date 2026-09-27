@@ -110,6 +110,22 @@ final class Asn extends Condition_Rule_Type_Base {
 	/**
 	 * {@inheritDoc}
 	 */
+	public function settings_help(): array {
+		return $this->reader_help();
+	}
+
+	/**
+	 * {@inheritDoc}
+	 *
+	 * The library's ASN plugin reads a MaxMind database and nothing else.
+	 */
+	protected function reader_reads_edge(): bool {
+		return false;
+	}
+
+	/**
+	 * {@inheritDoc}
+	 */
 	public function secret_settings(): array {
 		return array( 'reader.license_key' );
 	}
