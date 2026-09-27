@@ -361,17 +361,24 @@ generated.
 
 ### Responses
 
-Six, evaluated in order, and a match ends evaluation. Within a group, lower
-weights run first.
+Six, evaluated in this order. Within a group, lower weights run first.
 
 | Response | What happens | Recorded? |
 |---|---|---|
 | **Allow** | Let the request through and stop evaluating | no |
-| **Challenge** | Serve an interstitial the visitor must solve | no |
 | **Mark** | Let the request through, and flag it | only if you say so |
 | **Record** | Let the request through, and block them next time | yes |
+| **Challenge** | Serve an interstitial the visitor must solve | no |
 | **Redirect** | Send the visitor somewhere else | only if you say so |
 | **Block** | Reject the request | yes, unless you say not to |
+
+Two parts of that order are worth stating, because the obvious order is
+different. **Mark and record do not end evaluation, and run even on a request
+something below is about to refuse** — a signal that only appeared on requests
+nobody refused could not be correlated with a block, and a honeypot has to
+record the client even though something below ends the request. And **redirect
+beats block** because the terminal responses run gentlest first: a redirect
+leaves the visitor somewhere to go.
 
 The last four need `kanopi/firewall` 2.26.0 or later. On an older library they
 are not offered, and a rule carrying one is skipped at compile time with a
@@ -408,6 +415,30 @@ pipeline — that was never written to know this plugin exists.
 a 301 is cached by browsers and intermediaries more or less forever: somebody
 caught by a rule you later tune would keep being sent to the notice page long
 after it stopped matching them.
+
+**A redirect has to name somewhere.** That is not tidiness. The library does not
+reject a redirect rule with no destination when it loads; it throws when the
+rule *matches*, so every request the rule was written for becomes a firewall
+error — which the plugin fails open on, serving the visitor as though the rule
+did not exist and never reaching a block rule below it. The rule screen refuses
+to save one, and refuses a destination beginning `//`, which reads like a path
+and sends the visitor to another site. Anything that bypasses the screen — an
+import, WP-CLI, a hand-edited option — is caught by the compiler instead, which
+skips the rule and says so on the Status screen. On a URL rule whose own path
+conditions look like they match the destination, you get a warning: that
+combination is a loop the visitor experiences as a dead browser.
+
+A mark name has to be letters, numbers, hyphens and underscores, because it
+becomes part of a request attribute key your code addresses. A redirect or mark
+carries no status code of its own, so that field disappears when you choose
+either.
+
+**The Test screen names all three.** A redirect is reported as *Redirected*,
+with the destination and status, and a record or mark as *Served, and recorded
+for next time* or *Served, and marked*. Both of those serve the request by
+design, and reporting them as *Allowed* — which is what the screen says when no
+rule matched at all — would tell somebody testing their honeypot that it does
+not work at the moment it has just caught them.
 
 ### Adding your own rule type
 

@@ -13,6 +13,7 @@ use Kanopi\BasicFirewall\Database_Credentials;
 use Kanopi\BasicFirewall\Library_Capabilities;
 use Kanopi\BasicFirewall\Install\Challenge_Secret;
 use Kanopi\BasicFirewall\Plugin;
+use Kanopi\BasicFirewall\RuleType\Response_Settings;
 use Kanopi\BasicFirewall\Runtime\Lockdown;
 use Kanopi\BasicFirewall\Support\Schema;
 use Symfony\Component\Yaml\Yaml;
@@ -622,6 +623,26 @@ final class Config_Compiler {
 					__( 'Rule "%1$s" responds with "%2$s", which needs kanopi/firewall 2.26.0 or later. The installed library would never evaluate it, so it was skipped rather than compiled into a rule that silently does nothing.', 'basic-firewall' ),
 					(string) ( $rule['id'] ?? '?' ),
 					$response
+				);
+
+				continue;
+			}
+
+			/*
+			 * A redirect naming nowhere, or somewhere it should not, is skipped.
+			 *
+			 * The rule screen refuses to save one. This is the same refusal for
+			 * every other way a document arrives -- an import, WP-CLI, a
+			 * hand-edited option -- because the library does not reject such a
+			 * rule when it loads: it throws when the rule *matches*, which turns
+			 * each of those requests into a firewall failure that is failed open
+			 * on, with any block rule below never reached.
+			 */
+			if ( 'redirect' === $response && null !== Response_Settings::redirect_problem( (string) ( $rule['redirect_to'] ?? '' ) ) ) {
+				$this->problems[] = sprintf(
+					/* translators: %s: rule identifier. */
+					__( 'Rule "%s" redirects, but not to a path on this site or an http(s) URL. It was skipped rather than compiled into a rule that fails every request it matches.', 'basic-firewall' ),
+					(string) ( $rule['id'] ?? '?' )
 				);
 
 				continue;

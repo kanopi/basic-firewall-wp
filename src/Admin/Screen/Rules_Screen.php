@@ -409,7 +409,7 @@ final class Rules_Screen extends Screen {
 				printf( '<td class="column-type">%s</td>', esc_html( $type->label() ) );
 			}
 
-			printf( '<td class="column-response">%s</td>', esc_html( (string) ( $rule['response'] ?? '' ) ) );
+			printf( '<td class="column-response">%s</td>', esc_html( $this->response_label( (string) ( $rule['response'] ?? '' ) ) ) );
 			printf( '<td class="column-weight">%d</td>', (int) ( $rule['weight'] ?? 0 ) );
 
 			printf( '<td class="column-summary">%s</td>', esc_html( $this->summarize( $type, (array) ( $rule['settings'] ?? array() ) ) ) );
@@ -462,6 +462,28 @@ final class Rules_Screen extends Screen {
 		}
 
 		echo '</tbody></table>';
+	}
+
+	/**
+	 * What a response is called in the rule list.
+	 *
+	 * Record and mark get a word of explanation, because on their own they
+	 * read like a logging setting and a label. The thing worth knowing at a
+	 * glance is that a record rule refuses the client from its next request,
+	 * and that a mark rule refuses nobody.
+	 *
+	 * @param string $response The stored response.
+	 */
+	private function response_label( string $response ): string {
+		return match ( $response ) {
+			'allow'     => __( 'Allow', 'basic-firewall' ),
+			'block'     => __( 'Block', 'basic-firewall' ),
+			'challenge' => __( 'Challenge', 'basic-firewall' ),
+			'record'    => __( 'Record (serve, then refuse next time)', 'basic-firewall' ),
+			'redirect'  => __( 'Redirect', 'basic-firewall' ),
+			'mark'      => __( 'Mark (serve, and signal)', 'basic-firewall' ),
+			default     => $response,
+		};
 	}
 
 	/**

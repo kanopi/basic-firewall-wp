@@ -12,6 +12,7 @@ namespace Kanopi\BasicFirewall;
 use Kanopi\BasicFirewall\Compiler\Library_Map;
 use Kanopi\Firewall\Exception\ChallengeRequiredException;
 use Kanopi\Firewall\Exception\FirewallBlockedException;
+use Kanopi\Firewall\Exception\FirewallRedirectException;
 use Kanopi\Firewall\Firewall;
 use Monolog\Handler\TestHandler;
 use Monolog\Level;
@@ -74,6 +75,14 @@ final class Request_Tester {
 		try {
 			$allowed = $firewall->evaluate( $request );
 
+			if ( $allowed ) {
+				$served = $this->served_but_noticed( $capture );
+
+				if ( null !== $served ) {
+					return $served;
+				}
+			}
+
 			return array(
 				'verdict' => $allowed ? 'allow' : 'block',
 				'status'  => null,
@@ -102,9 +111,101 @@ final class Request_Tester {
 				'log'     => $this->format_log( $capture ),
 				'error'   => null,
 			);
+		} catch ( FirewallRedirectException $e ) {
+			/*
+			 * Caught by name. In `exception` mode a redirect arrives as an
+			 * exception like every other decision, and before this it fell
+			 * through to the catch-all below -- so testing a redirect rule that
+			 * worked perfectly reported that the request could not be tested.
+			 */
+			return array(
+				'verdict' => 'redirect',
+				'status'  => $e->getStatusCode(),
+				'rule'    => $this->rule_from_log( $capture ),
+				'message' => sprintf(
+					/* translators: 1: destination, 2: HTTP status. */
+					__( 'A redirect rule matched. This request would be sent to %1$s with a %2$d.', 'basic-firewall' ),
+					$e->getLocation(),
+					$e->getStatusCode()
+				),
+				'log'     => $this->format_log( $capture ),
+				'error'   => null,
+			);
 		} catch ( \Throwable $e ) {
 			return $this->failure( $e->getMessage(), $this->format_log( $capture ) );
 		}
+	}
+
+	/**
+	 * A served request that a record or mark rule acted on, or null.
+	 *
+	 * Both responses serve the request by design, so the firewall answers
+	 * "allowed" and the log line is the only evidence either rule fired.
+	 * Without reading it, testing a honeypot reports "no rule matched" at the
+	 * moment it has just caught the tester -- which reads as the rule being
+	 * broken.
+	 *
+	 * Record outranks mark. A request can be marked and then recorded; the mark
+	 * says a rule noticed, the record that the client will be refused next
+	 * time, and the stronger claim is the one worth leading with.
+	 *
+	 * @param TestHandler $capture The capture handler.
+	 *
+	 * @return array{verdict: string, status: int|null, rule: string|null, message: string, log: list<string>, error: string|null}|null
+	 */
+	private function served_but_noticed( TestHandler $capture ): ?array {
+		$recorded = null;
+		$marked   = null;
+		$mark     = null;
+
+		foreach ( $capture->getRecords() as $record ) {
+			$message = (string) ( $record['message'] ?? '' );
+			$context = $record['context'] ?? array();
+			$plugin  = is_string( $context['plugin_name'] ?? null ) ? $context['plugin_name'] : null;
+
+			if ( null === $plugin ) {
+				continue;
+			}
+
+			if ( false !== stripos( $message, 'client recorded without being refused' ) ) {
+				$recorded = $plugin;
+			}
+
+			if ( false !== stripos( $message, 'request marked' ) ) {
+				$marked = $plugin;
+				$mark   = is_string( $context['mark'] ?? null ) ? $context['mark'] : null;
+			}
+		}
+
+		if ( null !== $recorded ) {
+			return array(
+				'verdict' => 'record',
+				'status'  => null,
+				'rule'    => $recorded,
+				'message' => __( 'A record rule matched. This request would be served normally — that is the point — and the client would be refused from its next one.', 'basic-firewall' ),
+				'log'     => $this->format_log( $capture ),
+				'error'   => null,
+			);
+		}
+
+		if ( null !== $marked ) {
+			return array(
+				'verdict' => 'mark',
+				'status'  => null,
+				'rule'    => $marked,
+				'message' => null === $mark
+					? __( 'A mark rule matched. This request would be served normally, with a signal left on it for this site\'s own code to read.', 'basic-firewall' )
+					: sprintf(
+						/* translators: %s: the mark name. */
+						__( 'A mark rule matched. This request would be served normally, carrying the mark "%s" for this site\'s own code to read.', 'basic-firewall' ),
+						$mark
+					),
+				'log'     => $this->format_log( $capture ),
+				'error'   => null,
+			);
+		}
+
+		return null;
 	}
 
 	/**

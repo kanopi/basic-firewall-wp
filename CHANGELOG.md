@@ -54,6 +54,18 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- The rule screen shows every response's fields as soon as that response is
+  chosen, rather than only once a rule has been saved with it. Choosing
+  Redirect on a new rule used to offer nowhere to type the destination, so the
+  first save stored a redirect naming nowhere. Values only another response
+  reads are no longer stored — a rule switched from redirect to block does not
+  keep a destination nothing acts on.
+- The response help text and the README now give the order the library
+  actually evaluates in — allow, mark, record, challenge, redirect, block — and
+  say that mark and record do not end evaluation. The README said
+  "a match ends evaluation" of all six. The rule list names a record rule
+  *Record (serve, then refuse next time)* and a mark rule *Mark (serve, and
+  signal)*.
 - **Stored paths no longer use Drupal's `private://` scheme.** A relative path
   resolves inside the firewall's private directory and an absolute path is used
   as given. `private://` is a registered stream wrapper in Drupal and nothing at
@@ -71,6 +83,19 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- A redirect rule naming nowhere, or a destination beginning `//`, is refused.
+  The library does not reject either when it loads — an empty destination
+  throws when the rule matches, turning each of those requests into a firewall
+  error that is failed open on. The rule screen refuses to save one, and the
+  compiler skips one that arrived by import or WP-CLI and says so. A URL rule
+  redirecting into its own path conditions is saved with a loop warning. Mark
+  names and mark headers are checked for characters the site's own code could
+  not address.
+- The request tester reports a redirect rule as **Redirected**, with the
+  destination and status, instead of "could not be tested" — a redirect in
+  `exception` mode is an exception it did not know by name. A record or mark
+  rule that fired is reported as **Served, and recorded for next time** or
+  **Served, and marked**, rather than "No rule matched this request".
 - A latent fatal in scoped builds. PHP-Scoper leaves Composer's classmap key for
   `InstalledVersions` unscoped while rewriting the file it points at to declare
   the prefixed class, so asking for the unscoped name after the scoped one is
