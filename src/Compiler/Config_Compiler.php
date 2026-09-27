@@ -14,8 +14,10 @@ use Kanopi\BasicFirewall\Library_Capabilities;
 use Kanopi\BasicFirewall\Install\Challenge_Secret;
 use Kanopi\BasicFirewall\Plugin;
 use Kanopi\BasicFirewall\RuleType\Response_Settings;
+use Kanopi\BasicFirewall\RuleType\Rule_Type_Base;
 use Kanopi\BasicFirewall\Runtime\Lockdown;
 use Kanopi\BasicFirewall\Support\Schema;
+use Kanopi\Firewall\Utility\Schedule;
 use Symfony\Component\Yaml\Yaml;
 
 /**
@@ -647,6 +649,14 @@ final class Config_Compiler {
 				continue;
 			}
 
+			$problem = $this->schedule_problem( $rule, $capabilities );
+
+			if ( null !== $problem ) {
+				$this->problems[] = $problem;
+
+				continue;
+			}
+
 			/*
 			 * A redirect naming nowhere, or somewhere it should not, is skipped.
 			 *
@@ -677,6 +687,50 @@ final class Config_Compiler {
 		);
 
 		return $compiled;
+	}
+
+	/**
+	 * Why a rule's activity window stops it being compiled, or null.
+	 *
+	 * The rule screen checks a window with the library before saving it. This
+	 * is the same check for every other way a document arrives, and for a
+	 * library too old to read one at all.
+	 *
+	 * Skipped in both cases rather than compiled. A library without windows
+	 * would ignore the key and run the rule at all hours; one that cannot read
+	 * the window fails the rule at startup anyway, and this way it is named on
+	 * the Status screen instead of discovered by its absence.
+	 *
+	 * @param array<string, mixed> $rule         The stored rule.
+	 * @param Library_Capabilities $capabilities What the library can do.
+	 */
+	private function schedule_problem( array $rule, Library_Capabilities $capabilities ): ?string {
+		$declaration = Rule_Type_Base::schedule_declaration( (array) ( $rule['schedule'] ?? array() ) );
+
+		if ( array() === $declaration ) {
+			return null;
+		}
+
+		if ( ! $capabilities->has_rule_schedule() ) {
+			return sprintf(
+				/* translators: %s: rule identifier. */
+				__( 'Rule "%s" has an activity window, which the installed firewall library cannot keep — it would run at all hours instead. It was skipped.', 'basic-firewall' ),
+				(string) ( $rule['id'] ?? '?' )
+			);
+		}
+
+		try {
+			Schedule::fromMetadata( $declaration );
+		} catch ( \InvalidArgumentException $e ) {
+			return sprintf(
+				/* translators: 1: rule identifier, 2: the library's complaint. */
+				__( 'Rule "%1$s" has an activity window the firewall library cannot read, so the rule would not start. It was skipped: %2$s', 'basic-firewall' ),
+				(string) ( $rule['id'] ?? '?' ),
+				$e->getMessage()
+			);
+		}
+
+		return null;
 	}
 
 	/**

@@ -440,6 +440,76 @@ design, and reporting them as *Allowed* — which is what the screen says when n
 rule matched at all — would tell somebody testing their honeypot that it does
 not work at the moment it has just caught them.
 
+### Giving a rule opening hours
+
+Any rule can declare when it is awake, under **When this rule is awake** on the
+rule screen: a timezone, a set of days, one or more hour ranges, and optionally
+a first and last date. Leave it all alone and the rule is awake always, which is
+what nearly every rule wants.
+
+"Block this country outside business hours." "Turn this rate limit on for the
+campaign." "Allow the deploy pipeline during the maintenance window." Each of
+those is otherwise a rule somebody disables and remembers to re-enable — or
+does not.
+
+A range whose end is earlier than its start runs over midnight, so `18:00-06:00`
+is the evening and the night that follows it. Several ranges can be given at
+once, separated by commas — `09:00-12:00, 13:00-17:00` — and are compiled as a
+list, because the library reads one string as one range and refuses a line of
+several as malformed. A bare `until` date closes at the end of that day, so a
+one-day campaign runs for the day. Ticking every day is the same as ticking
+none, and a timezone on its own is not a window: neither is written into the
+compiled file.
+
+**The window is checked before the rule is evaluated**, not after. A sleeping
+geolocation rule costs a comparison rather than a database lookup, and — more
+usefully — a sleeping rate limit does not spend a request out of somebody's
+budget for a window it was never going to enforce.
+
+**The rule list says which rules are asleep, and when they wake.** A sleeping
+rule matches nothing, which from the outside looks exactly like a broken one, so
+the Response column answers it directly — *Block — asleep now (until Mon 18:00
+PDT)* — in the rule's own timezone, rather than leaving you to work out what
+time it is somewhere else. A window whose last date has passed says so, and one
+the library cannot read says the rule is not running. An observing rule says
+both: *Block — observing only, awake now (until …)*.
+
+#### Daylight saving is followed, not corrected for
+
+Comparisons are wall-clock time in the rule's own zone, so a window means what
+somebody standing in that timezone would say it means:
+
+- **Spring forward.** On the day the clocks jump from 02:00 to 03:00, a
+  `01:00-03:00` window is simply shorter — no local time inside the gap
+  happens, so none is matched.
+- **Fall back.** On the day 01:30 happens twice, a window covering it is active
+  both times, because both are 01:30 locally.
+
+Neither is a bug being worked around. A rule about business hours should follow
+the clock on the wall of the business.
+
+#### Three things worth knowing
+
+**The timezone defaults to your site's**, from *Settings → General*, not to UTC.
+The library defaults an unnamed zone to UTC on purpose, so a rule means the same
+thing wherever it is deployed — right for a library, wrong for this screen,
+where somebody typing business hours means their own. The zone is always
+written out, so the compiled file and the screen never disagree.
+
+**A window that cannot be read stops the rule.** The library does not guess:
+treating a schedule it cannot read as always-on would silently over-block, and
+always-off would silently stop protecting, so the rule fails to start. The rule
+screen hands the window to the library before saving and refuses what it
+refuses, in the library's words. A window that arrives another way — an import,
+WP-CLI — is caught by the compiler, which skips the rule and names it on the
+Status screen.
+
+**It needs the library to keep it.** Windows arrived in `kanopi/firewall`
+2.27.0. On an older library — possible when a site's own Composer autoloader
+wins the race — the window is not offered, a stored one is kept rather than
+cleared by an unrelated edit, and the compiler skips a scheduled rule rather
+than letting it run at all hours.
+
 ### Observing a rule before letting it act
 
 Any rule can be set to **Observe only**, on the rule screen. It is evaluated

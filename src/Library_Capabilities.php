@@ -162,6 +162,19 @@ final class Library_Capabilities {
 	}
 
 	/**
+	 * Whether a rule can declare when it is awake.
+	 *
+	 * Added in library 2.27.0. Without it the `active` key is inert and a rule
+	 * saved with a window would run around the clock -- the wrong direction for
+	 * a block rule somebody meant to run only after hours, and for an allow
+	 * rule meant to open only for a maintenance window. So the window is not
+	 * offered, and the compiler skips a rule that has one.
+	 */
+	public function has_rule_schedule(): bool {
+		return method_exists( self::plugin_base_class(), 'isActiveNow' );
+	}
+
+	/**
 	 * Whether the Core Rule Set is present and actually detecting.
 	 */
 	public function has_working_crs(): bool {

@@ -152,6 +152,17 @@ final class Rule_Edit_Screen extends Screen {
 		);
 
 		/*
+		 * Where the window is not offered, the stored one is kept rather than
+		 * read as blank. Clearing it on an unrelated edit would turn an
+		 * after-hours rule into an all-hours one without anybody choosing that.
+		 */
+		$windows = ( new \Kanopi\BasicFirewall\Library_Capabilities() )->has_rule_schedule();
+
+		if ( ! $windows ) {
+			$schedule = (array) ( $existing['schedule'] ?? array() );
+		}
+
+		/*
 		 * Validated by the library rather than here.
 		 *
 		 * `Schedule::fromMetadata()` is what will read this at runtime, and it
@@ -162,7 +173,7 @@ final class Rule_Edit_Screen extends Screen {
 		 */
 		$declaration = Rule_Type_Base::schedule_declaration( $schedule );
 
-		if ( array() !== $declaration ) {
+		if ( $windows && array() !== $declaration ) {
 			try {
 				Schedule::fromMetadata( $declaration );
 			} catch ( \Throwable $e ) {
@@ -526,7 +537,10 @@ final class Rule_Edit_Screen extends Screen {
 			printf( '<div class="bfw-warning"><p>%s</p></div>', esc_html( $problem ) );
 		}
 
-		$this->render_schedule( (array) ( $rule['schedule'] ?? array() ) );
+		// Offered only where the library keeps it; see has_rule_schedule().
+		if ( ( new \Kanopi\BasicFirewall\Library_Capabilities() )->has_rule_schedule() ) {
+			$this->render_schedule( (array) ( $rule['schedule'] ?? array() ) );
+		}
 
 		submit_button( __( 'Save rule', 'basic-firewall' ) );
 
@@ -698,7 +712,7 @@ final class Rule_Edit_Screen extends Screen {
 		$this->row(
 			__( 'Hours', 'basic-firewall' ),
 			self::text( 'schedule_hours', (string) ( $schedule['hours'] ?? '' ), 'text', 'placeholder="18:00-06:00"' ),
-			esc_html__( 'A range on the 24-hour clock. One that ends earlier than it starts runs overnight, so 18:00-06:00 is the evening through to the morning rather than an empty window.', 'basic-firewall' )
+			esc_html__( 'A range on the 24-hour clock, or several separated by commas, such as 09:00-12:00, 13:00-17:00. One that ends earlier than it starts runs overnight, so 18:00-06:00 is the evening through to the morning rather than an empty window.', 'basic-firewall' )
 		);
 
 		$this->row(

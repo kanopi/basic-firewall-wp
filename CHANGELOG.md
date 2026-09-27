@@ -9,6 +9,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **The rule list says whether a scheduled rule is awake**, and until when, in
+  the rule's own timezone — *Block — asleep now (until Mon 18:00 PDT)*. A
+  sleeping rule matches nothing, which from the outside looks exactly like a
+  broken one. A window whose last date has passed says it has ended, one the
+  library cannot read says the rule is not running, and an observing rule says
+  both. Activity windows are documented in the README for the first time.
+
 - **Observe only**, per rule, so one rule can be tried on live traffic while
   every other rule keeps enforcing. An observing rule is evaluated and every
   match logged at `warning`, then treated as no match. The rule list reads
@@ -92,6 +99,18 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   generated-only.
 
 ### Fixed
+
+- Several hour ranges in an activity window, separated by commas, are compiled
+  as a list. They were handed to the library as typed, which reads one string as
+  one range, refuses the line as malformed, and does not start the rule. A
+  timezone chosen with nothing else is no longer written as a window that
+  restricts nothing, and every day ticked is written as no restriction rather
+  than seven days.
+- An activity window is only offered where the library keeps it. On an older
+  library the window is kept rather than cleared by an unrelated edit, and the
+  compiler skips a scheduled rule — and one whose imported window the library
+  cannot read — and says so, rather than letting it run at all hours or fail
+  unnamed.
 
 - A redirect rule naming nowhere, or a destination beginning `//`, is refused.
   The library does not reject either when it loads — an empty destination

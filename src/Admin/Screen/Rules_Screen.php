@@ -13,6 +13,8 @@ use Kanopi\BasicFirewall\Admin\Admin;
 use Kanopi\BasicFirewall\Admin\Notices;
 use Kanopi\BasicFirewall\Admin\Screen;
 use Kanopi\BasicFirewall\RuleType\Rule_Type;
+use Kanopi\BasicFirewall\RuleType\Rule_Type_Base;
+use Kanopi\BasicFirewall\RuleType\Rule_Window;
 use Kanopi\BasicFirewall\Transfer\Exporter;
 use Kanopi\BasicFirewall\Transfer\Importer;
 
@@ -380,6 +382,9 @@ final class Rules_Screen extends Screen {
 
 		echo '</tr></thead><tbody>';
 
+		// One instant for the whole page, so every row agrees about what now is.
+		$now = new \DateTimeImmutable( 'now' );
+
 		foreach ( $rules as $rule ) {
 			$id   = (string) ( $rule['id'] ?? '' );
 			$type = $registry->get( (string) ( $rule['type'] ?? '' ) );
@@ -409,22 +414,7 @@ final class Rules_Screen extends Screen {
 				printf( '<td class="column-type">%s</td>', esc_html( $type->label() ) );
 			}
 
-			/*
-			 * An observing rule is said first, and plainly. A row reading
-			 * "Block" on a rule that refuses nobody is the listing actively
-			 * misleading whoever came here to check what the firewall does.
-			 */
-			$response = $this->response_label( (string) ( $rule['response'] ?? '' ) );
-
-			if ( ! empty( $rule['observe'] ) ) {
-				$response = sprintf(
-					/* translators: %s: the response, such as "Block". */
-					__( '%s — observing only', 'basic-firewall' ),
-					$response
-				);
-			}
-
-			printf( '<td class="column-response">%s</td>', esc_html( $response ) );
+			printf( '<td class="column-response">%s</td>', esc_html( $this->response_cell( $rule, $now ) ) );
 			printf( '<td class="column-weight">%d</td>', (int) ( $rule['weight'] ?? 0 ) );
 
 			printf( '<td class="column-summary">%s</td>', esc_html( $this->summarize( $type, (array) ( $rule['settings'] ?? array() ) ) ) );
@@ -477,6 +467,82 @@ final class Rules_Screen extends Screen {
 		}
 
 		echo '</tbody></table>';
+	}
+
+	/**
+	 * The Response column: what the rule does, and anything that qualifies it.
+	 *
+	 * A rule that is observing, or outside its activity window, is not doing
+	 * what the bare response claims, and "why is this rule not firing" is the
+	 * question this page exists to answer. Both qualifiers are said together
+	 * when both apply -- a window saying "awake now" over a rule that refuses
+	 * nobody would be the listing misleading whoever opened it to check.
+	 *
+	 * @param array<string, mixed> $rule The stored rule.
+	 * @param \DateTimeImmutable   $now  The instant the page describes.
+	 */
+	private function response_cell( array $rule, \DateTimeImmutable $now ): string {
+		$notes = array();
+
+		if ( ! empty( $rule['observe'] ) ) {
+			$notes[] = __( 'observing only', 'basic-firewall' );
+		}
+
+		$window = ( new \Kanopi\BasicFirewall\Library_Capabilities() )->has_rule_schedule()
+			? Rule_Window::at( Rule_Type_Base::schedule_declaration( (array) ( $rule['schedule'] ?? array() ) ), $now )
+			: null;
+
+		if ( null !== $window ) {
+			$notes[] = $this->window_note( $window );
+		}
+
+		$label = $this->response_label( (string) ( $rule['response'] ?? '' ) );
+
+		if ( array() === $notes ) {
+			return $label;
+		}
+
+		return sprintf(
+			/* translators: 1: the response, such as "Block", 2: what qualifies it, such as "asleep now". */
+			__( '%1$s — %2$s', 'basic-firewall' ),
+			$label,
+			implode( ', ', $notes )
+		);
+	}
+
+	/**
+	 * Whether a scheduled rule is awake, in words, and until when.
+	 *
+	 * The same "until" either way: what somebody reading this wants is when it
+	 * stops being true, not a different word for each direction. Shown in the
+	 * rule's own timezone, because that is the clock the window was written
+	 * against.
+	 *
+	 * @param array{awake: bool, next: \DateTimeImmutable|null, ended: bool, timezone: \DateTimeZone, problem: string|null} $window The window's state.
+	 */
+	private function window_note( array $window ): string {
+		if ( null !== $window['problem'] ) {
+			return __( 'its window cannot be read, so it is not running', 'basic-firewall' );
+		}
+
+		if ( $window['ended'] ) {
+			return __( 'its window has ended', 'basic-firewall' );
+		}
+
+		$state = $window['awake']
+			? __( 'awake now', 'basic-firewall' )
+			: __( 'asleep now', 'basic-firewall' );
+
+		if ( null === $window['next'] ) {
+			return $state;
+		}
+
+		return sprintf(
+			/* translators: 1: "awake now" or "asleep now", 2: when that changes, such as "Mon 18:00 PDT". */
+			__( '%1$s (until %2$s)', 'basic-firewall' ),
+			$state,
+			wp_date( 'D H:i T', $window['next']->getTimestamp(), $window['timezone'] )
+		);
 	}
 
 	/**
