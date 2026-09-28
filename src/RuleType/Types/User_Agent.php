@@ -281,6 +281,34 @@ final class User_Agent extends Condition_Rule_Type_Base {
 	}
 
 	/**
+	 * Whether a rule asks to verify crawlers and has no domain to verify against.
+	 *
+	 * The rule screen refuses to save this, but an import, WP-CLI, a seed
+	 * script or `wp option update` can store it: the validator drops every
+	 * entry that is not a domain -- `*.googlebot.com`, a URL -- and keeps the
+	 * verify flag, so `verify: true` with an empty list is what is left. A rule
+	 * in that state has to be skipped when the configuration is compiled, not
+	 * compiled without its verification, because on an allow rule the second
+	 * lets through everybody who claims to be a crawler.
+	 *
+	 * @param array<string, mixed> $settings The rule's stored settings.
+	 */
+	public static function verification_unusable( array $settings ): bool {
+		return ! empty( $settings['verify'] ) && array() === self::usable_suffixes( $settings );
+	}
+
+	/**
+	 * The accepted domains a verifying rule can actually compile.
+	 *
+	 * @param array<string, mixed> $settings The rule's stored settings.
+	 *
+	 * @return list<string>
+	 */
+	private static function usable_suffixes( array $settings ): array {
+		return array_values( array_filter( self::normalise_suffixes( $settings['verify_suffixes'] ?? array() ), array( self::class, 'is_plausible_suffix' ) ) );
+	}
+
+	/**
 	 * Split the accepted domains into a clean list.
 	 *
 	 * Stored without the leading dot the library documents, because matching
@@ -327,10 +355,10 @@ final class User_Agent extends Condition_Rule_Type_Base {
 		$lines = parent::summarize( $settings );
 
 		if ( ! empty( $settings['verify'] ) ) {
-			$suffixes = self::normalise_suffixes( $settings['verify_suffixes'] ?? array() );
+			$suffixes = self::usable_suffixes( $settings );
 
 			$lines[] = array() === $suffixes
-				? __( 'Verified by reverse DNS — but no domain is listed, so it matches nobody.', 'basic-firewall' )
+				? __( 'Verified by reverse DNS — but no domain is listed, so the rule is skipped and matches nobody.', 'basic-firewall' )
 				: sprintf(
 					/* translators: %s: comma-separated domains. */
 					__( 'Only when verified by reverse DNS into %s.', 'basic-firewall' ),
@@ -359,8 +387,8 @@ final class User_Agent extends Condition_Rule_Type_Base {
 			$problems[] = __( 'This rule asks to verify crawlers, which the installed firewall library cannot do. It is skipped when the configuration is compiled, rather than compiled into a rule that believes every client claiming to be a crawler.', 'basic-firewall' );
 		} elseif ( ! $capabilities->identity_verification_runs() ) {
 			$problems[] = __( 'This rule verifies crawlers, but verification cannot run while rule lists are kept off the request path — so it matches nobody. Define BASIC_FIREWALL_SOURCES_OFFLINE as false, or update to kanopi/firewall 2.33.0.', 'basic-firewall' );
-		} elseif ( array() === self::normalise_suffixes( $settings['verify_suffixes'] ?? array() ) ) {
-			$problems[] = __( 'This rule verifies crawlers but lists no domain to accept, so it matches nobody.', 'basic-firewall' );
+		} elseif ( self::verification_unusable( $settings ) ) {
+			$problems[] = __( 'This rule verifies crawlers but lists no domain to accept — an entry that is not a plain domain, such as *.googlebot.com or a URL, is dropped. It is skipped when the configuration is compiled, rather than compiled into a rule that believes every client claiming to be a crawler, so it matches nobody. List a domain such as googlebot.com.', 'basic-firewall' );
 		}
 
 		return $problems;
@@ -409,7 +437,13 @@ final class User_Agent extends Condition_Rule_Type_Base {
 		}
 
 		/*
-		 * Only when both halves are present; see default_settings().
+		 * Verification with no usable domain compiles as verification all the
+		 * same: an empty list, which the library reads as "match nobody".
+		 * Dropping the keys instead would leave a plain agent match, and on an
+		 * allow rule that is a skeleton key for anyone sending Googlebot/2.1.
+		 * The compiler skips such a rule before it gets here -- see
+		 * verification_unusable() -- so this is the second line, for anything
+		 * that calls compile() without asking first.
 		 *
 		 * `verify_offline: false` rides along on every verifying rule, where
 		 * the library honours it. Without it the verifier follows
@@ -420,12 +454,9 @@ final class User_Agent extends Condition_Rule_Type_Base {
 		 * when the constant is on, so the compiled file means the same thing on
 		 * both paths and on every host.
 		 */
-		$suffixes = self::normalise_suffixes( $settings['verify_suffixes'] ?? array() );
-		$suffixes = array_values( array_filter( $suffixes, array( self::class, 'is_plausible_suffix' ) ) );
-
-		if ( ! empty( $settings['verify'] ) && array() !== $suffixes ) {
+		if ( ! empty( $settings['verify'] ) ) {
 			$metadata['verify']          = 'reverse-dns';
-			$metadata['verify_suffixes'] = $suffixes;
+			$metadata['verify_suffixes'] = self::usable_suffixes( $settings );
 
 			if ( ( new Library_Capabilities() )->has_verification_switch() ) {
 				$metadata['verify_offline'] = false;

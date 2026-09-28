@@ -892,6 +892,14 @@ Matching is on a label boundary, so `googlebot.com` does not accept
 wildcard, a bare `com` — and refuses verification with no domain listed, since
 the library treats that as matching nobody.
 
+An import, WP-CLI or a hand edit is not refused, so it keeps what the screen
+would have: the entries that are not domains are dropped and the verify box
+stays ticked. A rule left verifying against no domain at all — every entry was
+`*.googlebot.com`, say — is **skipped when the configuration is compiled**, and
+named on the Status screen and in Site Health. It is never compiled without its
+verification, because an allow rule on the agent alone lets anyone through who
+sends `Googlebot/2.1`.
+
 It **fails closed**: no PTR record, a hostname outside your list, a forward
 lookup that does not return, or DNS being unreachable all mean the rule does not
 match. On an allow rule that is the safe direction — an unverified client is

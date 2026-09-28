@@ -156,14 +156,19 @@ final class CrawlerVerificationTest extends Settings_Snapshot {
 	}
 
 	/**
-	 * Verification with no domains compiles nothing at all.
+	 * Verification with no domains never compiles as a plain agent match.
 	 *
-	 * The library reads that combination as "match nobody" and logs it --
-	 * correct of it, and not a state worth writing into a compiled file on
-	 * purpose.
+	 * The compiler skips such a rule before it is compiled. Should anything
+	 * compile it anyway, it compiles as verification against an empty list,
+	 * which the library reads as "match nobody" -- never as the same rule
+	 * without verification, which on an allow rule believes every client
+	 * claiming to be a crawler.
 	 */
-	public function test_verification_without_domains_compiles_nothing(): void {
-		$this->assertArrayNotHasKey( 'verify', $this->metadata_for( $this->rule( true, array() ) ) );
+	public function test_verification_without_domains_never_compiles_unverified(): void {
+		$metadata = $this->metadata_for( $this->rule( true, array() ) );
+
+		$this->assertSame( 'reverse-dns', $metadata['verify'] ?? null );
+		$this->assertSame( array(), $metadata['verify_suffixes'] ?? null );
 	}
 
 	/**

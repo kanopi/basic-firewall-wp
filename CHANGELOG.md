@@ -168,6 +168,11 @@ does not work as well as what does.
   password-reset links start.
 - Destructive WP-CLI commands refuse to run without `--yes` and exit non-zero
   when they refuse, rather than exiting 0 having done nothing.
+- A user agent rule that asks to verify crawlers but is left with no domain to
+  accept — an import or WP-CLI drops `*.googlebot.com` and keeps the verify flag
+  — is skipped when the configuration is compiled and reported on the Status
+  screen and in Site Health, never compiled as a plain agent match that lets
+  anyone sending `Googlebot/2.1` past an allow rule.
 - After a solved challenge in `exception` mode the visitor is sent only to a
   path on this site, rebuilt from the posted destination's path and query. A
   destination holding a control character or whitespace, raw or
