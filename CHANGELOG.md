@@ -187,6 +187,21 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   refuses a field the library does not know rather than storing one that stops
   the firewall starting. An ASN rule is no longer offered the CDN, which its
   library plugin cannot read.
+- **Geolocation and ASN conditions read the variables the library resolves.**
+  The geolocation rule offered `country_name`, `timezone`, `latitude` and
+  `longitude`, and the ASN rule `organization`; the library reads a GeoIP2
+  record by its own names — `country.name`, `location.timeZone`,
+  `location.latitude`, `location.longitude` and `asn_org` — and resolves any
+  other to nothing, so every such condition loaded, reported healthy and matched
+  nothing. The screens now offer the library's names, an upgrade rewrites stored
+  rules, and the compiler translates an old name wherever one still arrives — an
+  import, WP-CLI, a hand-edited option. The ASN rule's `network` has no library
+  equivalent: it is no longer offered, and a stored condition on it is kept
+  rather than dropped (dropping it would widen an "all" rule) but reported on
+  the rule and on the Status screen. Separately, `asn equals 16509` never
+  matched: the record holds an integer, the library compares strictly, and the
+  screen compiled the string. A number now compiles as a number, with a leading
+  `AS` taken off.
 - The user agent rule wrote `metadata.cache_dir`, which the library has never
   read, so the detection corpus was always cached under the library cache
   directory whatever the compiled file said. The key is gone, and where the

@@ -64,10 +64,85 @@ final class Asn extends Condition_Rule_Type_Base {
 	 */
 	protected function variable_options(): array {
 		return array(
-			'asn'          => __( 'Autonomous system number, such as 16509', 'basic-firewall' ),
-			'organization' => __( 'Autonomous system organisation, such as AMAZON-02', 'basic-firewall' ),
-			'network'      => __( 'The network block the address falls in', 'basic-firewall' ),
+			'asn'     => __( 'Autonomous system number, such as 16509', 'basic-firewall' ),
+			'asn_org' => __( 'Autonomous system organisation, such as AMAZON-02 — registered names vary, so "contains" is usually the comparison to use', 'basic-firewall' ),
 		);
+	}
+
+	/**
+	 * Old variable name to the library's.
+	 *
+	 * @var array<string, string>
+	 */
+	public const RENAMED_VARIABLES = array(
+		'organization' => 'asn_org',
+	);
+
+	/**
+	 * {@inheritDoc}
+	 *
+	 * The library's ASN plugin knows `asn` and `asn_org` and nothing else.
+	 */
+	protected function renamed_variables(): array {
+		return self::RENAMED_VARIABLES;
+	}
+
+	/**
+	 * {@inheritDoc}
+	 *
+	 * `network` was offered and has no library equivalent: the plugin resolves
+	 * only the number and the organisation.
+	 */
+	protected function retired_variables(): array {
+		return array(
+			'network' => __( 'Remove it; to match a network block, use an IP address rule with the range in CIDR form.', 'basic-firewall' ),
+		);
+	}
+
+	/**
+	 * {@inheritDoc}
+	 *
+	 * An autonomous system number reaches the library as the integer the
+	 * MaxMind record holds, and `equals` and `is one of` compare strictly -- so
+	 * `16509` as typed, which every form field produces as a string, never
+	 * equalled the `16509` in the record. The most obvious ASN rule there is
+	 * compiled, loaded, and matched nothing. A number is compiled as a number,
+	 * and the `AS` prefix people copy from looking-glass sites is taken off.
+	 *
+	 * @param array<string, mixed> $condition Stored condition.
+	 *
+	 * @return array<string, mixed>
+	 */
+	protected function compile_condition( array $condition ): array {
+		$compiled = parent::compile_condition( $condition );
+
+		if ( 'asn' !== $compiled['variable'] || ! in_array( $compiled['operator'], array( 'equals', 'not_equals', 'in' ), true ) ) {
+			return $compiled;
+		}
+
+		$compiled['value'] = is_array( $compiled['value'] )
+			? array_map( array( self::class, 'as_number' ), $compiled['value'] )
+			: self::as_number( $compiled['value'] );
+
+		return $compiled;
+	}
+
+	/**
+	 * An autonomous system number as the integer the record holds.
+	 *
+	 * Anything that is not one is left as it was, so a placeholder such as a
+	 * referenced list's `{value}` still reaches the library to be substituted.
+	 *
+	 * @param mixed $value Compiled value.
+	 *
+	 * @return mixed
+	 */
+	private static function as_number( $value ) {
+		if ( is_string( $value ) && 1 === preg_match( '/^\s*(?:AS)?(\d+)\s*$/i', $value, $matches ) ) {
+			return (int) $matches[1];
+		}
+
+		return $value;
 	}
 
 	/**

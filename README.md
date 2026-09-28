@@ -360,8 +360,8 @@ generated.
 | User agent | Automated flag, bot flag, device, browser, OS, brand, model — parsed, not string-matched |
 | Rate limit | Requests per address — or per account, header or field — per time window, per pattern |
 | Edge signal | The TLS fingerprint (JA3, JA4) or bot score your CDN computed. Needs a CDN sending the headers, and trusted proxies |
-| ASN | Autonomous system number or organisation. Needs a MaxMind ASN database |
-| Geolocation | Country, continent, city, postal code, timezone. MaxMind database or CDN headers |
+| ASN | Autonomous system number (`asn`) or organisation (`asn_org`). Needs a MaxMind ASN database |
+| Geolocation | Country, continent, city, postal code, timezone, coordinates. MaxMind database or CDN headers |
 | Vulnerability score | Method, country, network, attack patterns, user agent — summed |
 | IP reputation | AbuseIPDB confidence score. Free API key, one cached lookup per visitor per day, fails open |
 | OWASP Core Rule Set | The full CRS ruleset, via `kanopi/crs-engine` |
@@ -883,6 +883,19 @@ A **Geolocation** rule reads from one of two places, chosen on the rule under
   to start on it and the firewall then fails open on every rule.
 
 Switching source keeps the other one's settings, so switching back loses nothing.
+
+Conditions use the library's names for what a lookup returns, whichever
+source answers: `country`, `country.name`, `continent`, `city`, `postal`,
+`location.timeZone`, `location.latitude` and `location.longitude` on a
+geolocation rule; `asn` and `asn_org` on an ASN rule. Anything else resolves to
+nothing, which is why the rule screens offer no other. Earlier releases offered
+`country_name`, `timezone`, `latitude`, `longitude` and `organization`, which
+matched nothing; they are rewritten on upgrade and translated if one arrives in
+an import. `network`, once offered on the ASN rule, is not something the library
+reads at all — a rule still carrying it says so, and a network block belongs in
+an IP address rule. Coordinates are floats, so compare them with "is greater
+than" or "is less than"; an autonomous system number can be typed with or
+without its `AS`.
 
 ### How a rate limit counts
 

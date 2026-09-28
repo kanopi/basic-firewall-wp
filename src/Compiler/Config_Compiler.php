@@ -14,6 +14,7 @@ use Kanopi\BasicFirewall\Database_Credentials;
 use Kanopi\BasicFirewall\Library_Capabilities;
 use Kanopi\BasicFirewall\Install\Challenge_Secret;
 use Kanopi\BasicFirewall\Plugin;
+use Kanopi\BasicFirewall\RuleType\Condition_Rule_Type_Base;
 use Kanopi\BasicFirewall\RuleType\Response_Settings;
 use Kanopi\BasicFirewall\RuleType\Rule_Type_Base;
 use Kanopi\BasicFirewall\RuleType\Types\Edge_Signal;
@@ -879,6 +880,24 @@ final class Config_Compiler {
 				);
 
 				continue;
+			}
+
+			/*
+			 * A condition on a variable the library cannot read is reported,
+			 * and the rule compiled as it stands. Skipping it would stop its
+			 * other conditions enforcing; dropping the one condition would
+			 * widen an "all" rule. Either is a change nobody asked for. What
+			 * was wrong was the silence -- the rule reported itself healthy.
+			 */
+			if ( $type instanceof Condition_Rule_Type_Base ) {
+				foreach ( $type->unreadable_variables( (array) ( $rule['settings'] ?? array() ) ) as $variable ) {
+					$this->problems[] = sprintf(
+						/* translators: 1: rule identifier, 2: variable name. */
+						__( 'Rule "%1$s" has a condition on %2$s, which the firewall library cannot read. That condition compares against nothing on every request. Edit the rule to remove it.', 'basic-firewall' ),
+						(string) ( $rule['id'] ?? '?' ),
+						$variable
+					);
+				}
 			}
 
 			$compiled[] = $type->compile( $rule );

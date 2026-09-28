@@ -207,7 +207,71 @@ final class Upgrader {
 
 				$settings->replace( $settings->all() );
 			},
+
+			/*
+			 * 7: store condition variables under the names the library reads.
+			 *
+			 * The geolocation type offered `country_name`, `timezone`,
+			 * `latitude` and `longitude`, and the ASN type `organization`. The
+			 * library knows them as `country.name`, `location.timeZone`,
+			 * `location.latitude`, `location.longitude` and `asn_org`, and
+			 * resolves any other name to nothing -- so every rule on one saved,
+			 * reported itself healthy, and matched nobody.
+			 *
+			 * Each rule type's own rename map is used, so a type contributed by
+			 * another plugin that renames a variable is migrated the same way.
+			 * Nothing depends on the routine having run: the compiler translates
+			 * an old name wherever it finds one. This is what stops the old name
+			 * being shown back on the rule screen.
+			 */
+			7 => static function (): void {
+				$settings = Plugin::instance()->settings();
+				$values   = $settings->all();
+
+				self::rename_condition_variables( $values );
+
+				$settings->replace( $values );
+			},
 		);
+	}
+
+	/**
+	 * Rewrite every stored condition and list variable to the library's name.
+	 *
+	 * @param array<string, mixed> $values Settings, modified in place.
+	 */
+	private static function rename_condition_variables( array &$values ): void {
+		if ( ! isset( $values['rules'] ) || ! is_array( $values['rules'] ) ) {
+			return;
+		}
+
+		$registry = Plugin::instance()->rule_types();
+
+		foreach ( $values['rules'] as $rule_index => $rule ) {
+			if ( ! is_array( $rule ) || ! is_array( $rule['settings'] ?? null ) ) {
+				continue;
+			}
+
+			$type = $registry->get( (string) ( $rule['type'] ?? '' ) );
+
+			if ( ! $type instanceof Condition_Rule_Type_Base ) {
+				continue;
+			}
+
+			foreach ( array( 'conditions', 'sources' ) as $list ) {
+				if ( ! is_array( $rule['settings'][ $list ] ?? null ) ) {
+					continue;
+				}
+
+				foreach ( $rule['settings'][ $list ] as $index => $row ) {
+					if ( ! is_array( $row ) || ! is_string( $row['variable'] ?? null ) ) {
+						continue;
+					}
+
+					$values['rules'][ $rule_index ]['settings'][ $list ][ $index ]['variable'] = $type->library_variable( $row['variable'] );
+				}
+			}
+		}
 	}
 
 	/**

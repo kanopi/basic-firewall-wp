@@ -75,6 +75,97 @@ abstract class Condition_Rule_Type_Base extends Rule_Type_Base {
 	abstract protected function variable_options(): array;
 
 	/**
+	 * Variables this type once offered under a name the library does not know.
+	 *
+	 * Old name to the library's name for the same thing. A stored condition on
+	 * the old name is translated wherever it is read -- validated, compiled, or
+	 * rewritten by an upgrade routine -- so a rule written before the rename
+	 * keeps matching what it was written to match, however it reaches the
+	 * library.
+	 *
+	 * @return array<string, string>
+	 */
+	protected function renamed_variables(): array {
+		return array();
+	}
+
+	/**
+	 * Variables this type once offered that the library cannot read at all.
+	 *
+	 * Name to an explanation of what to use instead. No longer offered, but a
+	 * stored condition on one is kept rather than dropped: every settings write
+	 * re-validates every rule, and dropping a condition out of an "all" group
+	 * would widen what the rule matches without anybody having asked. It is
+	 * reported instead -- on the rule, and by the compiler -- so it stops
+	 * reporting itself healthy.
+	 *
+	 * @return array<string, string>
+	 */
+	protected function retired_variables(): array {
+		return array();
+	}
+
+	/**
+	 * The name the library reads a variable by.
+	 *
+	 * @param string $variable Stored variable name.
+	 */
+	public function library_variable( string $variable ): string {
+		return $this->renamed_variables()[ $variable ] ?? $variable;
+	}
+
+	/**
+	 * Stored variables on this rule that the library cannot read.
+	 *
+	 * @param array<string, mixed> $settings Rule settings.
+	 *
+	 * @return list<string> Variable names, each once.
+	 */
+	public function unreadable_variables( array $settings ): array {
+		$retired = $this->retired_variables();
+		$found   = array();
+		$rows    = array_merge(
+			is_array( $settings['conditions'] ?? null ) ? $settings['conditions'] : array(),
+			is_array( $settings['sources'] ?? null ) ? $settings['sources'] : array()
+		);
+
+		foreach ( $rows as $row ) {
+			if ( ! is_array( $row ) ) {
+				continue;
+			}
+
+			$variable = $this->library_variable( (string) ( $row['variable'] ?? '' ) );
+
+			if ( isset( $retired[ $variable ] ) ) {
+				$found[ $variable ] = $variable;
+			}
+		}
+
+		return array_values( $found );
+	}
+
+	/**
+	 * {@inheritDoc}
+	 *
+	 * @param array<string, mixed> $settings Described by the interface.
+	 */
+	public function check_requirements( array $settings ): array {
+		$problems = parent::check_requirements( $settings );
+		$retired  = $this->retired_variables();
+
+		foreach ( $this->unreadable_variables( $settings ) as $variable ) {
+			$problems[] = sprintf(
+				/* translators: 1: variable name, 2: what to use instead. */
+				__( 'A condition on this rule reads %1$s, which the firewall library cannot read. It compares against nothing on every request, so it never matches — or, negated, always does. %2$s', 'basic-firewall' ),
+				$variable,
+				$retired[ $variable ]
+			);
+		}
+
+		return $problems;
+	}
+
+	/**
 	 * Whether a variable name outside variable_options() is allowed.
 	 *
 	 * True for types whose variables carry a free-form suffix, such as
@@ -129,9 +220,11 @@ abstract class Condition_Rule_Type_Base extends Rule_Type_Base {
 				continue;
 			}
 
-			$variable = $this->join_variable(
-				trim( (string) ( $condition['variable'] ?? '' ) ),
-				trim( (string) ( $condition['variable_name'] ?? '' ) )
+			$variable = $this->library_variable(
+				$this->join_variable(
+					trim( (string) ( $condition['variable'] ?? '' ) ),
+					trim( (string) ( $condition['variable_name'] ?? '' ) )
+				)
 			);
 			$operator = (string) ( $condition['operator'] ?? 'equals' );
 			$value    = (string) ( $condition['value'] ?? '' );
@@ -224,13 +317,15 @@ abstract class Condition_Rule_Type_Base extends Rule_Type_Base {
 		$variables = $this->variable_options();
 
 		foreach ( $clean['sources'] as $index => $source ) {
-			$variable = (string) ( $source['variable'] ?? '' );
+			$variable = $this->library_variable( (string) ( $source['variable'] ?? '' ) );
 
 			if ( '' === $variable || '' !== (string) ( $source['template'] ?? '' ) ) {
 				continue;
 			}
 
-			if ( ! isset( $variables[ $variable ] ) && ! $this->is_prefixed_variable( $variable ) ) {
+			$clean['sources'][ $index ]['variable'] = $variable;
+
+			if ( ! isset( $variables[ $variable ] ) && ! isset( $this->retired_variables()[ $variable ] ) && ! $this->is_prefixed_variable( $variable ) ) {
 				$errors[ 'sources.' . $index . '.variable' ] = sprintf(
 					/* translators: %s: the rejected variable. */
 					__( '%s is not something this rule type can read, so every entry in the list would be compared against nothing.', 'basic-firewall' ),
@@ -292,7 +387,7 @@ abstract class Condition_Rule_Type_Base extends Rule_Type_Base {
 	 * @param string $variable Variable name.
 	 */
 	protected function variable_is_known( string $variable ): bool {
-		if ( isset( $this->variable_options()[ $variable ] ) ) {
+		if ( isset( $this->variable_options()[ $variable ] ) || isset( $this->retired_variables()[ $variable ] ) ) {
 			return true;
 		}
 
@@ -538,8 +633,15 @@ abstract class Condition_Rule_Type_Base extends Rule_Type_Base {
 
 		$operator = self::LIBRARY_OPERATORS[ $operator ] ?? $operator;
 
+		/*
+		 * The variable is translated for the same reason as the operators: a
+		 * rule saved under a name this type used to offer, and the library
+		 * never knew, compiles to the name it does know. The upgrade routine
+		 * rewrites storage too; this covers an import, a hand-edited option,
+		 * or a site whose upgrade has not run.
+		 */
 		$compiled = array(
-			'variable'       => (string) ( $condition['variable'] ?? '' ),
+			'variable'       => $this->library_variable( (string) ( $condition['variable'] ?? '' ) ),
 			'operator'       => $operator,
 
 			/*
