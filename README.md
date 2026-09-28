@@ -523,6 +523,12 @@ add_action( 'basic_firewall_request_marked', function ( array $marks ) {
 if ( Kanopi\BasicFirewall\Runtime\Runner::is_marked( 'honeypot' ) ) { … }
 ```
 
+The last mark applied is also mirrored into `$_SERVER['HTTP_X_FIREWALL_MARK']`,
+for code that reads request headers the ordinary way. That is where PHP puts an
+`X-Firewall-Mark` header the client sent, too, so one arriving with the request
+is removed before evaluation on both paths: if the key is set, the firewall set
+it.
+
 A rule can also set a request header, for something downstream — a CDN, a log
 pipeline — that was never written to know this plugin exists.
 
