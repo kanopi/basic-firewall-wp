@@ -387,9 +387,11 @@ record the client even though something below ends the request. And **redirect
 beats block** because the terminal responses run gentlest first: a redirect
 leaves the visitor somewhere to go.
 
-The last four need `kanopi/firewall` 2.26.0 or later. On an older library they
-are not offered, and a rule carrying one is skipped at compile time with a
-warning rather than compiled into something the library would never evaluate.
+The last four arrived in `kanopi/firewall` 2.26.0, which the plugin's ^2.33
+requirement covers. On an older library — possible when a site's own Composer
+autoloader wins the race — they are not offered, and a rule carrying one is
+skipped at compile time with a warning rather than compiled into something the
+library would never evaluate.
 
 **Refusing and recording are separate.** That split is what makes two common
 setups possible:
@@ -829,8 +831,8 @@ The **Edge signal** rule matches on what a CDN computed at the edge and this
 site cannot: a **TLS fingerprint** — `ja3`, `ja4` — which identifies the client
 stack rather than what it claims to be, so a script wearing a browser's user
 agent still negotiates TLS like a script; and a **bot score**, the edge's own
-verdict from signals that never reach the origin. Needs `kanopi/firewall`
-2.27.0.
+verdict from signals that never reach the origin. Arrived in
+`kanopi/firewall` 2.27.0, which the plugin's ^2.33 requirement covers.
 
 Choose the CDN — Cloudflare, Fastly, or *something else* with the header names
 typed as `signal: Header-Name`. Akamai and CloudFront are not named on purpose:
@@ -927,8 +929,8 @@ what a line without one counts:
 /wp-json/* 100 60 client_ip,path    # each endpoint, rather than the API as a whole
 ```
 
-`log` is the username field on WordPress's own login form. Needs
-`kanopi/firewall` 2.27.0.
+`log` is the username field on WordPress's own login form. Arrived in
+`kanopi/firewall` 2.27.0, which the plugin's ^2.33 requirement covers.
 
 **Read this before reaching for it:** the two key shapes catch opposite attacks,
 and swapping one for the other removes protection while looking like it adds

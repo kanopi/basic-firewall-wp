@@ -206,9 +206,6 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   read, so the detection corpus was always cached under the library cache
   directory whatever the compiled file said. The key is gone, and where the
   corpus is cached is now the Storage screen's cache backend.
-- The edge signals entry of the library capability report was written into the
-  wrong method, so Site Health never listed edge signals as unavailable on a
-  library without them.
 - **Conditions using "is greater than", "is less than" (or equal) and "does not
   contain" match again.** The screen stored `gt`, `gte`, `lt`, `lte` and
   `not_contains` and compiled them as stored, and the library knows none of
