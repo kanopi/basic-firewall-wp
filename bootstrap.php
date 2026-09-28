@@ -48,6 +48,27 @@
  * baked into the compiled file with the site's prefix already applied, which is
  * why storage needs nothing from $wpdb at this point.
  *
+ * `EXCEPTION` MODE.
+ *
+ * In every other mode the library sends its own response and exits, so nothing
+ * here is involved. In `exception` mode it throws the verdict for the host to
+ * answer, and this file is the host. It answers a block, a lockdown, a redirect
+ * and a challenge on the spot, with the plugin's own Outcome_Responder loaded
+ * by hand -- not later from the mu-plugin, because advanced-cache.php runs in
+ * between, and a page cache would serve the refused visitor the page. The one
+ * verdict it leaves for WordPress is a solved challenge, which needs settings
+ * to set the pass cookie; see basic_firewall_answer_outcome().
+ *
+ * The plugin being deactivated does not reach this file: whether it is active
+ * is an option, and there are no options here. Deactivation deletes the
+ * compiled file instead, so this path stops evaluating in every mode at once.
+ * A plugin switched off without that hook running -- `active_plugins` edited
+ * by hand, a database restored from before activation -- leaves the compiled
+ * file behind, and this path goes on enforcing the last configuration in
+ * `exception` mode exactly as it would in `block` mode, where the library
+ * answers without asking anyone. Only a solved challenge, left for a runner
+ * that never loads, goes unanswered -- and that grants nothing.
+ *
  * Usage -- the Site Health screen prints this with your site's real path
  * filled in, because the private directory carries a random per-site suffix:
  *
@@ -67,7 +88,9 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 	 *
 	 * @param array<string, mixed> $options Bootstrap options. See basic_firewall_options().
 	 *
-	 * @return bool True when the request may continue.
+	 * @return bool True when the request may continue. False when `exception`
+	 *              mode reached a verdict this path left for WordPress to
+	 *              answer; every verdict it answers itself ends the request.
 	 */
 	function basic_firewall_evaluate( array $options = array() ) {
 		/*
@@ -98,6 +121,14 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 		);
 
 		$options = basic_firewall_options( $options );
+
+		/*
+		 * `responder` -- whether this path can answer an `exception` mode
+		 * verdict itself, or would have to leave it until the mu-plugin loads,
+		 * after a page cache has had the chance to serve the page. Site Health
+		 * reports the second as critical when the mode is `exception`.
+		 */
+		$GLOBALS['basic_firewall_early']['responder'] = null !== basic_firewall_responder_file( $options );
 
 		if ( ! $options['enabled'] ) {
 			$GLOBALS['basic_firewall_early']['reason'] = 'disabled';
@@ -148,6 +179,8 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 			? 'Kanopi\\Firewall\\Firewall'
 			: 'Kanopi\\BasicFirewall\\Vendor\\Kanopi\\Firewall\\Firewall';
 
+		$request = null;
+
 		try {
 			$firewall = call_user_func(
 				array( $class, 'create' ),
@@ -168,7 +201,7 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 			 * there is something listening. Without this, a mark applied on the
 			 * early path is invisible to the entire site.
 			 */
-			$request_class = class_exists( 'Symfony\\Component\\HttpFoundation\\Request' )
+			$request_class = 'Kanopi\\Firewall\\Firewall' === $class
 				? 'Symfony\\Component\\HttpFoundation\\Request'
 				: 'Kanopi\\BasicFirewall\\Vendor\\Symfony\\Component\\HttpFoundation\\Request';
 
@@ -185,16 +218,172 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 			return $allowed;
 		} catch ( \Throwable $e ) {
 			/*
-			 * Includes every outcome `exception` mode throws -- a block, a
-			 * challenge, a redirect. On this path there is no responder to hand
-			 * them to -- the plugin's own is not loadable without its
-			 * autoloader having been registered, and the library exits by
-			 * itself in every other mode -- so anything reaching here allows
-			 * the request. Fail open. The normal path answers all of them;
-			 * `exception` mode is for testing, and this is one more reason.
+			 * Every verdict `exception` mode throws lands here -- a block, a
+			 * lockdown, a challenge, a redirect -- alongside every genuine
+			 * failure. The library exits by itself in every other mode, so this
+			 * is only ever `exception` mode or a firewall that could not run.
+			 *
+			 * This used to allow all of it. The mu-plugin never evaluated again
+			 * because BASIC_FIREWALL_EVALUATED was already defined, so a site in
+			 * `exception` mode on this path refused nobody at all.
 			 */
+			return basic_firewall_answer_outcome( $e, $request, $options );
+		}
+	}
+
+	/**
+	 * Answer what `exception` mode threw, or fail open on anything else.
+	 *
+	 * **Answered here, not later.** The tempting design stashes the verdict and
+	 * lets the mu-plugin answer it once WordPress has loaded, which is how a
+	 * mark crosses the gap. For a refusal that is wrong in exactly the case this
+	 * path exists for: advanced-cache.php loads between here and the mu-plugin,
+	 * and on a cache hit it serves the page and exits. The visitor the firewall
+	 * refused would get the page from the cache instead. So a block, a lockdown,
+	 * a redirect and a challenge are answered now, by the same Outcome_Responder
+	 * the normal path uses, loaded by hand the way Decision_Dispatcher is.
+	 *
+	 * **Stashed, for the runner.** A solved challenge is not a refusal. It sets
+	 * the pass cookie, whose name lives in settings, which need WordPress; and
+	 * it is a POST to the challenge path, which no page cache serves. So it is
+	 * left in a global and answered by the runner at `muplugins_loaded`, before
+	 * any ordinary plugin loads. The same global carries a refusal in the one
+	 * case this path cannot answer it -- the responder missing from this copy
+	 * of the plugin -- so it is still answered, late, rather than dropped; the
+	 * bootstrap's self-report says so and Site Health calls it critical.
+	 *
+	 * A stash nobody answers -- the plugin switched off without its
+	 * deactivation hook running -- fails open. For a solved challenge that
+	 * grants nothing: the visitor has no pass cookie and is challenged again.
+	 *
+	 * Anything that is not a verdict is a failure of the firewall rather than
+	 * a decision about the request, and fails open exactly as it always has.
+	 *
+	 * @param \Throwable           $outcome What the firewall threw.
+	 * @param object|null          $request The request it was about, when it got that far.
+	 * @param array<string, mixed> $options Bootstrap options.
+	 *
+	 * @return bool True when the request may continue.
+	 */
+	function basic_firewall_answer_outcome( \Throwable $outcome, $request, array $options ) {
+		$kind = basic_firewall_outcome_kind( $outcome );
+
+		if ( null === $kind ) {
 			return true;
 		}
+
+		$GLOBALS['basic_firewall_early']['outcome'] = $kind;
+		$GLOBALS['basic_firewall_outcome']          = array(
+			'outcome' => $outcome,
+			'request' => $request,
+		);
+
+		if ( 'solved' === $kind ) {
+			return false;
+		}
+
+		$responder = basic_firewall_outcome_responder( $options );
+
+		if ( null === $responder ) {
+			$GLOBALS['basic_firewall_early']['deferred'] = true;
+
+			return false;
+		}
+
+		unset( $GLOBALS['basic_firewall_outcome'] );
+
+		try {
+			// Ends the request for every verdict it is handed.
+			return $responder->respond( $outcome, $request );
+		} catch ( \Throwable $e ) {
+			// A responder that cannot answer is not a reason for a fatal
+			// error on every refused request. Hand it to the runner instead.
+			$GLOBALS['basic_firewall_outcome']           = array(
+				'outcome' => $outcome,
+				'request' => $request,
+			);
+			$GLOBALS['basic_firewall_early']['deferred'] = true;
+
+			return false;
+		}
+	}
+
+	/**
+	 * Which verdict an exception is, or null when it is not one.
+	 *
+	 * By class name in both spellings, because a release build carries the
+	 * library under a prefix and a Composer install does not, and this file is
+	 * copied into the release verbatim rather than scoped.
+	 *
+	 * @param \Throwable $outcome What the firewall threw.
+	 *
+	 * @return string|null `solved`, `challenge`, `redirect`, `blocked`, or null.
+	 */
+	function basic_firewall_outcome_kind( \Throwable $outcome ) {
+		$kinds = array(
+			'ChallengeSolvedException'   => 'solved',
+			'ChallengeRequiredException' => 'challenge',
+			'FirewallRedirectException'  => 'redirect',
+
+			// FirewallLockdownException extends this one.
+			'FirewallBlockedException'   => 'blocked',
+		);
+
+		foreach ( $kinds as $class => $kind ) {
+			foreach ( array( 'Kanopi\\Firewall\\Exception\\', 'Kanopi\\BasicFirewall\\Vendor\\Kanopi\\Firewall\\Exception\\' ) as $namespace ) {
+				if ( is_a( $outcome, $namespace . $class ) ) {
+					return $kind;
+				}
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * Where the plugin's outcome responder lives, when this copy has one.
+	 *
+	 * @param array<string, mixed> $options Bootstrap options.
+	 *
+	 * @return string|null
+	 */
+	function basic_firewall_responder_file( array $options ) {
+		$file = rtrim( (string) $options['plugin_path'], '/' ) . '/src/Runtime/Outcome_Responder.php';
+
+		return is_readable( $file ) ? $file : null;
+	}
+
+	/**
+	 * The plugin's own outcome responder, loaded without its autoloader.
+	 *
+	 * The same class the normal path answers with, so the two paths cannot
+	 * answer the same verdict differently. Loaded by hand for the reason
+	 * Decision_Dispatcher is: the release build's autoloader carries the
+	 * vendored tree and not this plugin's own `src/`. Only reached when a
+	 * verdict needs answering, so an allowed request never pays for it.
+	 *
+	 * @param array<string, mixed> $options Bootstrap options.
+	 *
+	 * @return object|null
+	 */
+	function basic_firewall_outcome_responder( array $options ) {
+		$class = 'Kanopi\\BasicFirewall\\Runtime\\Outcome_Responder';
+
+		if ( ! class_exists( $class, false ) ) {
+			$file = basic_firewall_responder_file( $options );
+
+			if ( null === $file ) {
+				return null;
+			}
+
+			try {
+				require_once $file;
+			} catch ( \Throwable $e ) {
+				return null;
+			}
+		}
+
+		return class_exists( $class, false ) ? new $class() : null;
 	}
 
 	/**

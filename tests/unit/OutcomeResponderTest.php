@@ -1,6 +1,6 @@
 <?php
 /**
- * Tests for how an `exception` mode redirect is answered.
+ * Tests for how `exception` mode redirects and solved challenges are answered.
  *
  * @package Kanopi\BasicFirewall
  */
@@ -10,8 +10,10 @@ declare( strict_types = 1 );
 namespace Kanopi\BasicFirewall\Tests\unit;
 
 use Kanopi\BasicFirewall\Runtime\Outcome_Responder;
+use Kanopi\Firewall\Exception\ChallengeSolvedException;
 use Kanopi\Firewall\Exception\FirewallRedirectException;
 use PHPUnit\Framework\TestCase;
+use Symfony\Component\HttpFoundation\Request;
 
 /**
  * A redirect outcome is answered with a redirect, not a refusal.
@@ -74,6 +76,45 @@ final class OutcomeResponderTest extends TestCase {
 				302,
 				Outcome_Responder::redirect_target( new FirewallRedirectException( '/elsewhere', $status ) )['status'],
 				sprintf( 'Status %d was sent as-is.', $status )
+			);
+		}
+	}
+
+	/**
+	 * The interstitial's own submission is answered with JSON.
+	 *
+	 * It posts with fetch() asking for JSON and reads the token out of the
+	 * reply. A redirect there is followed by the browser, the script receives
+	 * a page, and a visitor who answered correctly is told they failed.
+	 */
+	public function test_a_solution_posted_by_the_interstitial_is_answered_with_json(): void {
+		$request = Request::create( '/bfw-challenge', 'POST', array(), array(), array(), array( 'HTTP_ACCEPT' => 'application/json' ) );
+
+		$solved = Outcome_Responder::solved_response( new ChallengeSolvedException( 'token', '/where-i-was' ), $request );
+
+		$this->assertSame( 'json', $solved['format'] );
+		$this->assertSame( '/where-i-was', $solved['redirect'] );
+	}
+
+	/**
+	 * A plain form post, with no script, is still redirected.
+	 */
+	public function test_a_plain_form_post_is_redirected(): void {
+		$solved = Outcome_Responder::solved_response( new ChallengeSolvedException( 'token', '/where-i-was' ), Request::create( '/bfw-challenge', 'POST' ) );
+
+		$this->assertSame( 'redirect', $solved['format'] );
+		$this->assertSame( 'redirect', Outcome_Responder::solved_response( new ChallengeSolvedException( 'token', '/' ), null )['format'] );
+	}
+
+	/**
+	 * The destination came back through the visitor, so only a site path is kept.
+	 */
+	public function test_a_solved_challenge_never_redirects_off_site(): void {
+		foreach ( array( 'https://example.com/', '//example.com/', '/\\example.com/', '', 'relative' ) as $target ) {
+			$this->assertSame(
+				'/',
+				Outcome_Responder::solved_response( new ChallengeSolvedException( 'token', $target ), null )['redirect'],
+				sprintf( 'The destination %s was followed.', $target )
 			);
 		}
 	}

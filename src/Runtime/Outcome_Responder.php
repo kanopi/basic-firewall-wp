@@ -15,6 +15,7 @@ use Kanopi\Firewall\Exception\ChallengeSolvedException;
 use Kanopi\Firewall\Exception\FirewallBlockedException;
 use Kanopi\Firewall\Exception\FirewallLockdownException;
 use Kanopi\Firewall\Exception\FirewallRedirectException;
+use Symfony\Component\HttpFoundation\Request;
 
 /**
  * Sends the response for a rejected or challenged request.
@@ -24,6 +25,14 @@ use Kanopi\Firewall\Exception\FirewallRedirectException;
  * rather than through `wp_die()` or a template. That is not a limitation to work
  * around: rejecting a request has to stay cheap, and the point of evaluating
  * this early is to spend as little as possible on traffic being turned away.
+ *
+ * **Runs without WordPress.** The wp-config.php bootstrap loads this class by
+ * hand and answers `exception` mode refusals with it before WordPress exists,
+ * because the alternative -- waiting for the mu-plugin -- lets a page cache in
+ * advanced-cache.php serve the page first. So every WordPress function reached
+ * on the way to a refusal is guarded, and the one outcome that genuinely needs
+ * WordPress, a solved challenge, is left by the bootstrap for the runner. See
+ * basic_firewall_answer_outcome() in bootstrap.php.
  */
 final class Outcome_Responder {
 
@@ -34,17 +43,20 @@ final class Outcome_Responder {
 	 * to, it ends -- so the return value is only reached for outcomes that are
 	 * not terminal.
 	 *
-	 * @param \Throwable $outcome What the firewall threw.
+	 * @param \Throwable   $outcome What the firewall threw.
+	 * @param Request|null $request The request it was thrown about. A challenge
+	 *                              needs it to render the interstitial, and a
+	 *                              solved one to know how the page asked.
 	 */
-	public function respond( \Throwable $outcome ): bool {
+	public function respond( \Throwable $outcome, ?Request $request = null ): bool {
 		if ( $outcome instanceof ChallengeSolvedException ) {
-			$this->send_solved( $outcome );
+			$this->send_solved( $outcome, $request );
 
 			return false;
 		}
 
 		if ( $outcome instanceof ChallengeRequiredException ) {
-			$this->send_challenge( $outcome );
+			$this->send_challenge( $outcome, $request );
 
 			return false;
 		}
@@ -107,8 +119,12 @@ final class Outcome_Responder {
 		 */
 		$message = $this->escape( $outcome->getMessage() );
 
+		// Translated when WordPress is there to translate it; on the
+		// wp-config.php path it is not, and English is better than nothing.
+		$title = function_exists( '__' ) ? __( 'Request blocked', 'basic-firewall' ) : 'Request blocked';
+
 		// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
-		echo $this->document( __( 'Request blocked', 'basic-firewall' ), $message );
+		echo $this->document( $title, $message );
 
 		$this->finish();
 	}
@@ -182,28 +198,66 @@ final class Outcome_Responder {
 	 * sends the interstitial itself and then exits, answering 200 with
 	 * `Cache-Control: no-store` and a `noindex` page, so none of this runs.
 	 *
-	 * The 503 below is therefore the answer for a caller that asked the firewall
-	 * a question rather than for an ordinary visitor. It is still the right
-	 * status for that case: the visitor is not being refused, they are being
-	 * asked to do something and come back, and a 403 would tell a crawler the
-	 * page is forbidden and remove it from search results.
+	 * The page is the library's own, rendered by the exception from the
+	 * context the firewall assembled -- including the signed provider token,
+	 * without which a solved challenge mints a pass the rule then refuses and
+	 * the visitor is served the same interstitial forever. This used to echo
+	 * the exception's message, which is a sentence naming the rule, not a page:
+	 * a challenged visitor in `exception` mode got that sentence and no way to
+	 * answer it.
+	 *
+	 * 503 rather than the library's 200, because the visitor is not being
+	 * served the page they asked for, and a 403 would tell a crawler the page
+	 * is forbidden and remove it from search results. 503 with Retry-After says
+	 * "come back", which is what is meant.
 	 *
 	 * @param ChallengeRequiredException $outcome The challenge.
+	 * @param Request|null               $request The request being challenged.
 	 */
-	private function send_challenge( ChallengeRequiredException $outcome ): void {
-		/*
-		 * 503 rather than 403. The visitor is not refused -- they are asked to
-		 * do something and try again -- and a 403 tells a crawler the page is
-		 * forbidden, which removes it from search results. 503 with Retry-After
-		 * says "come back", which is what is meant.
-		 */
+	private function send_challenge( ChallengeRequiredException $outcome, ?Request $request ): void {
+		$body = null;
+
+		if ( null !== $request ) {
+			try {
+				$body = $outcome->renderInterstitial( $request );
+			} catch ( \Throwable $e ) {
+				// No provider was resolved, which the library reports on its
+				// own. Handled below.
+				$body = null;
+			}
+		}
+
 		$this->send_headers( 503 );
-		header( 'Retry-After: 60' );
+
+		if ( ! headers_sent() ) {
+			header( 'Retry-After: 60' );
+		}
+
+		if ( null === $body ) {
+			/*
+			 * A challenge that cannot be put in front of the visitor still
+			 * does not serve them the page. The rule decided they must prove
+			 * something first, and nothing can be proven -- so they get a
+			 * temporary refusal saying so, rather than the page the rule was
+			 * written to stand in front of.
+			 */
+			$title = function_exists( '__' ) ? __( 'Verification required', 'basic-firewall' ) : 'Verification required';
+			$text  = function_exists( '__' )
+				? __( 'This request needs a verification step that could not be shown. Please try again shortly.', 'basic-firewall' )
+				: 'This request needs a verification step that could not be shown. Please try again shortly.';
+
+			// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+			echo $this->document( $title, $this->escape( $text ) );
+
+			$this->finish();
+
+			return;
+		}
 
 		// The library composes the interstitial, including whatever widget the
 		// provider needs. It is markup by contract, so it is not escaped.
 		// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
-		echo $outcome->getMessage();
+		echo $body;
 
 		$this->finish();
 	}
@@ -211,9 +265,15 @@ final class Outcome_Responder {
 	/**
 	 * A challenge was solved: set the pass cookie and send the visitor on.
 	 *
+	 * Needs WordPress, for the cookie name in settings and for `is_ssl()`. The
+	 * wp-config.php bootstrap therefore never answers this outcome itself; it
+	 * leaves it for the runner, which is safe because a solution is a POST to
+	 * the challenge path and no page cache serves a POST.
+	 *
 	 * @param ChallengeSolvedException $outcome The solved challenge.
+	 * @param Request|null             $request The submission.
 	 */
-	private function send_solved( ChallengeSolvedException $outcome ): void {
+	private function send_solved( ChallengeSolvedException $outcome, ?Request $request ): void {
 		$settings = Plugin::instance()->settings();
 		$name     = (string) $settings->get( 'challenge.cookie_name', 'bfw_pass' );
 
@@ -239,22 +299,75 @@ final class Outcome_Responder {
 			)
 		);
 
+		$solved = self::solved_response( $outcome, $request );
+
+		if ( 'json' === $solved['format'] ) {
+			if ( ! headers_sent() ) {
+				$this->status_header( 200 );
+				header( 'Content-Type: application/json; charset=utf-8' );
+				header( 'Cache-Control: no-store, no-cache, must-revalidate, max-age=0' );
+			}
+
+			$json = (string) wp_json_encode(
+				array(
+					'token'    => $outcome->getToken(),
+					'redirect' => $solved['redirect'],
+				),
+				JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_SLASHES
+			);
+
+			// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- JSON, encoded with the flags that keep it inert if anything renders it as HTML.
+			echo $json;
+
+			$this->finish();
+
+			return;
+		}
+
+		header( 'Location: ' . $solved['redirect'], true, 302 );
+
+		$this->finish();
+	}
+
+	/**
+	 * How a solved challenge is answered, and where it sends the visitor.
+	 *
+	 * Separate from sending it so the decision can be tested; sending ends the
+	 * request.
+	 *
+	 * **JSON when the page asked for JSON.** The library's interstitial posts
+	 * its solution with `fetch()`, asking for `application/json`, and reads the
+	 * token and destination out of the reply -- which is what the library
+	 * sends in blocking mode. A 302 there is followed by the browser, the
+	 * script receives the destination page instead of JSON, and the visitor is
+	 * told their correct answer failed. A plain form post, with no script, is
+	 * still answered with the redirect.
+	 *
+	 * The redirect target came back through the challenge flow, so it is
+	 * treated as untrusted: only a site-relative path is followed. Without
+	 * this the challenge page is an open redirect, and an open redirect on
+	 * the one page every blocked visitor is sent to is worth more to an
+	 * attacker than most.
+	 *
+	 * @param ChallengeSolvedException $outcome The solved challenge.
+	 * @param Request|null             $request The submission.
+	 *
+	 * @return array{format: string, redirect: string}
+	 */
+	public static function solved_response( ChallengeSolvedException $outcome, ?Request $request ): array {
 		$redirect = $outcome->getRedirect();
 
-		/*
-		 * The redirect target came back through the challenge flow, so it is
-		 * treated as untrusted: only a site-relative path is followed. Without
-		 * this the challenge page is an open redirect, and an open redirect on
-		 * the one page every blocked visitor is sent to is worth more to an
-		 * attacker than most.
-		 */
-		if ( '' === $redirect || 0 !== strpos( $redirect, '/' ) || 0 === strpos( $redirect, '//' ) ) {
+		if ( '' === $redirect || 0 !== strpos( $redirect, '/' ) || 0 === strpos( $redirect, '//' ) || 0 === strpos( $redirect, '/\\' ) ) {
 			$redirect = '/';
 		}
 
-		header( 'Location: ' . $redirect, true, 302 );
+		$wants_json = null !== $request
+			&& false !== stripos( (string) $request->headers->get( 'Accept', '' ), 'application/json' );
 
-		$this->finish();
+		return array(
+			'format'   => $wants_json ? 'json' : 'redirect',
+			'redirect' => $redirect,
+		);
 	}
 
 	/**
@@ -297,11 +410,16 @@ final class Outcome_Responder {
 			return;
 		}
 
-		$protocol = isset( $_SERVER['SERVER_PROTOCOL'] )
-			? sanitize_text_field( wp_unslash( (string) $_SERVER['SERVER_PROTOCOL'] ) )
-			: 'HTTP/1.1';
+		/*
+		 * Read raw rather than through sanitize_text_field(): this branch is
+		 * the one that runs without WordPress, so calling it here was a fatal
+		 * error in exactly the case the branch exists for. The allowlist below
+		 * is the sanitisation -- anything not on it is replaced, not cleaned.
+		 */
+		// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- compared against a fixed list below and replaced unless it matches exactly.
+		$protocol = isset( $_SERVER['SERVER_PROTOCOL'] ) ? (string) $_SERVER['SERVER_PROTOCOL'] : 'HTTP/1.1';
 
-		// Only the two protocols PHP will be serving under, so a forged
+		// Only the protocols PHP will be serving under, so a forged
 		// SERVER_PROTOCOL cannot be reflected into the response line.
 		if ( ! in_array( $protocol, array( 'HTTP/1.0', 'HTTP/1.1', 'HTTP/2', 'HTTP/3' ), true ) ) {
 			$protocol = 'HTTP/1.1';

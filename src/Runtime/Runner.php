@@ -60,11 +60,12 @@ final class Runner {
 			/*
 			 * The wp-config.php path already dealt with this request -- but it
 			 * did so before WordPress existed, so anything it wants to announce
-			 * has been waiting in a global for somewhere to announce it.
+			 * has been waiting in a global for somewhere to announce it, and
+			 * anything it could not answer has been waiting to be answered.
 			 */
 			$this->adopt_early_marks();
 
-			return true;
+			return $this->answer_early_outcome();
 		}
 
 		if ( ! $this->is_enabled() ) {
@@ -141,8 +142,52 @@ final class Runner {
 		} catch ( \Throwable $e ) {
 			// A blocking exception is the library's way of saying "rejected" in
 			// exception mode. The responder decides what the visitor sees.
-			return ( new Outcome_Responder() )->respond( $e );
+			return ( new Outcome_Responder() )->respond( $e, $request );
 		}
+	}
+
+	/**
+	 * Answer an `exception` mode verdict the wp-config.php path left behind.
+	 *
+	 * The bootstrap answers refusals itself, before a page cache can serve the
+	 * page. What it leaves here is a solved challenge, which needs settings to
+	 * set the pass cookie -- and, only if this copy of the plugin is missing
+	 * its responder, a refusal it had no way to answer. Either way it is
+	 * answered here, at `muplugins_loaded` when the loader is installed, and
+	 * at `plugins_loaded` when it is not. Late, but answered: dropping it would
+	 * serve a refused visitor the page.
+	 *
+	 * Taken out of the global before it is answered, so nothing answers it
+	 * twice.
+	 */
+	private function answer_early_outcome(): bool {
+		$early = self::early_outcome();
+
+		if ( null === $early ) {
+			return true;
+		}
+
+		unset( $GLOBALS['basic_firewall_outcome'] );
+
+		return ( new Outcome_Responder() )->respond( $early['outcome'], $early['request'] );
+	}
+
+	/**
+	 * The verdict the wp-config.php path left for WordPress to answer, if any.
+	 *
+	 * @return array{outcome: \Throwable, request: Request|null}|null
+	 */
+	public static function early_outcome(): ?array {
+		$stash = $GLOBALS['basic_firewall_outcome'] ?? null;
+
+		if ( ! is_array( $stash ) || ! ( ( $stash['outcome'] ?? null ) instanceof \Throwable ) ) {
+			return null;
+		}
+
+		return array(
+			'outcome' => $stash['outcome'],
+			'request' => ( $stash['request'] ?? null ) instanceof Request ? $stash['request'] : null,
+		);
 	}
 
 	/**

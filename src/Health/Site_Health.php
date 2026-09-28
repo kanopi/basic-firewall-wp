@@ -833,6 +833,23 @@ final class Site_Health {
 			);
 		}
 
+		if ( $early && ! self::early_report()['responder'] && 'exception' === self::effective_mode() ) {
+			/*
+			 * The bootstrap answers `exception` mode verdicts itself, with the
+			 * plugin's own responder, because the mu-plugin runs after
+			 * advanced-cache.php. Without that responder it hands them to the
+			 * runner instead: still answered, but after a page cache has had
+			 * the chance to serve the page to a visitor the firewall refused.
+			 * That is a fail-open on cache hits, and the one kind this check
+			 * exists to say out loud.
+			 */
+			return self::critical(
+				__( 'Exception mode cannot answer refusals before a page cache on the wp-config.php path', 'basic-firewall' ),
+				'<p>' . esc_html__( 'The operating mode is exception, so the firewall hands each block, redirect and challenge to the plugin to answer rather than sending it itself. The wp-config.php bootstrap could not find the plugin\'s responder, so those answers wait until the mu-plugin loads — after advanced-cache.php, which serves cached pages to refused visitors before they are answered.', 'basic-firewall' ) . '</p>'
+				. '<p>' . esc_html__( 'Reinstall the plugin so src/Runtime/Outcome_Responder.php is present, or switch the operating mode to Block, where the library answers every refusal itself.', 'basic-firewall' ) . '</p>'
+			);
+		}
+
 		if ( $early ) {
 			$where = '<p>' . esc_html__( 'wp-config.php calls the firewall bootstrap, which is the earliest any PHP on this site can act. A page cache cannot serve a request without it being evaluated first.', 'basic-firewall' )
 				. ' ' . (
@@ -928,7 +945,12 @@ final class Site_Health {
 	 * bug described above -- reporting the early path as active on a site whose
 	 * wp-config.php said nothing about the firewall at all.
 	 *
-	 * @return array{called: bool, credentials: bool, evaluated: bool, reason: string|null}
+	 * `responder` is whether the bootstrap can answer an `exception` mode
+	 * verdict itself, before a page cache runs. It defaults to true when the
+	 * bootstrap did not say, so a report from a bootstrap that predates the
+	 * question is not read as a failure.
+	 *
+	 * @return array{called: bool, credentials: bool, evaluated: bool, reason: string|null, responder: bool}
 	 */
 	public static function early_report(): array {
 		$report = $GLOBALS['basic_firewall_early'] ?? array();
@@ -938,7 +960,22 @@ final class Site_Health {
 			'credentials' => ! empty( $report['credentials'] ),
 			'evaluated'   => ! empty( $report['evaluated'] ),
 			'reason'      => isset( $report['reason'] ) ? (string) $report['reason'] : null,
+			'responder'   => ! isset( $report['responder'] ) || ! empty( $report['responder'] ),
 		);
+	}
+
+	/**
+	 * The operating mode requests are actually evaluated in.
+	 *
+	 * BASIC_FIREWALL_MODE first, because it wins over the setting on both
+	 * paths.
+	 */
+	private static function effective_mode(): string {
+		if ( defined( 'BASIC_FIREWALL_MODE' ) && is_string( constant( 'BASIC_FIREWALL_MODE' ) ) ) {
+			return (string) constant( 'BASIC_FIREWALL_MODE' );
+		}
+
+		return (string) Plugin::instance()->settings()->get( 'global.mode', 'log' );
 	}
 
 	/**

@@ -246,6 +246,16 @@ read database credentials, and **database-backed storage must not be used
 there**. That is the module's one known fail-open. It is documented, it is
 reported in Site Health, and it is the only one — no second fail-open is added.
 
+That rules out one tempting shortcut. In `exception` mode the library hands its
+verdict to the host rather than answering it, and the early path used to wave
+every such verdict through, because nothing before WordPress could answer it.
+It now answers them itself, with the plugin's own responder loaded by hand,
+rather than stashing them for the mu-plugin the way a mark waits: the
+mu-plugin runs after `advanced-cache.php`, so a stashed refusal would be
+served the cached page first. Only a solved challenge waits for WordPress,
+because it needs settings to set the pass cookie and no page cache serves the
+POST that carries it.
+
 The part the module does not have to say, and this one does: **no PHP-level
 firewall can touch a host edge cache.** On Pantheon, WP Engine or Kinsta,
 requests served by the platform's own cache layer never reach PHP, and nothing

@@ -235,6 +235,45 @@ path reads them from needs a WordPress that does not exist yet. The sidecar
 holds path strings only — the credentials are read from the constants per
 request and never touch disk, on either path.
 
+### `exception` mode before WordPress
+
+In every other mode the library sends its own response and exits. In `exception`
+mode it hands each verdict to the plugin to answer — and on the early path the
+plugin answers it there and then, with the same responder the mu-plugin uses,
+loaded without WordPress:
+
+| Verdict | Answered | With |
+|---|---|---|
+| Block | in `bootstrap.php` | the status and message, `no-store` |
+| Lockdown | in `bootstrap.php` | 503 and its `Retry-After` |
+| Redirect | in `bootstrap.php` | the rule's destination and status, `no-store` |
+| Challenge | in `bootstrap.php` | the library's interstitial, 503, `Retry-After` |
+| Solved challenge | at `muplugins_loaded` | the pass cookie, and JSON for the interstitial's script |
+
+Not later, from the mu-plugin, because `advanced-cache.php` runs in between: a
+page cache would serve the refused visitor the page. The solved challenge is
+the exception because it needs settings to name the pass cookie, and it is safe
+to leave because it is a POST to the challenge path, which no page cache serves.
+The bootstrap leaves it in a global and the runner answers it before any
+ordinary plugin loads — or at `plugins_loaded`, if the mu-plugin loader is
+missing or was copied by an older release.
+
+If the bootstrap cannot find the plugin's responder it hands refusals to the
+runner the same way, so they are still answered, but after a page cache has had
+its chance. Site Health reports that as **critical** while the mode is
+`exception`.
+
+**Deactivating the plugin switches this path off in every mode.** Whether the
+plugin is active is an option, and the bootstrap has no options to read — so
+deactivation deletes the compiled file, and without it the bootstrap evaluates
+nothing. A plugin switched off without its deactivation hook running — the
+`active_plugins` option edited by hand, a database restored from before it was
+activated — leaves the compiled file behind: the early path then goes on
+enforcing the last configuration, in `exception` mode exactly as in `block`
+mode. The one thing that goes unanswered then is a solved challenge, which
+grants nothing — the visitor is simply challenged again. Delete the compiled
+file, or the snippet, to stop it.
+
 ## The private directory, and why WordPress makes this hard
 
 Drupal has a private file system: a directory outside the web root, served only
@@ -428,8 +467,8 @@ after it stopped matching them.
 **A redirect is a redirect in every mode that acts.** In `exception` mode the
 library hands the redirect to the plugin rather than sending it, and the plugin
 answers it the way the library would have — the destination, the status, and
-`Cache-Control: no-store`. On the wp-config.php path `exception` mode fails open
-on every outcome, redirects included; it is a mode for testing.
+`Cache-Control: no-store`. That holds on the wp-config.php path too — see
+[`exception` mode before WordPress](#exception-mode-before-wordpress).
 
 **A redirect has to name somewhere.** That is not tidiness. The library does not
 reject a redirect rule with no destination when it loads; it throws when the
