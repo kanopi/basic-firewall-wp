@@ -147,6 +147,173 @@ final class Library_Capabilities {
 	}
 
 	/**
+	 * Whether a single rule can be set to observe instead of enforce.
+	 *
+	 * Added in library 2.20.0, older than the version this plugin requires --
+	 * checked anyway, because a site whose own Composer autoloader wins the race
+	 * can hand this plugin an older library than it shipped with. Without the
+	 * method the `mode` key is inert, and a rule saved as observing would
+	 * enforce on live traffic while the screen said it was only watching: the
+	 * one direction this must never fail in. So the box is not offered, and the
+	 * compiler skips an observing rule rather than letting it enforce.
+	 */
+	public function has_observe_mode(): bool {
+		return method_exists( self::plugin_base_class(), 'isObserveMode' );
+	}
+
+	/**
+	 * Whether a rule can declare when it is awake.
+	 *
+	 * Added in library 2.27.0. Without it the `active` key is inert and a rule
+	 * saved with a window would run around the clock -- the wrong direction for
+	 * a block rule somebody meant to run only after hours, and for an allow
+	 * rule meant to open only for a maintenance window. So the window is not
+	 * offered, and the compiler skips a rule that has one.
+	 */
+	public function has_rule_schedule(): bool {
+		return method_exists( self::plugin_base_class(), 'isActiveNow' );
+	}
+
+	/**
+	 * Whether a user agent rule can verify a crawler by reverse DNS.
+	 *
+	 * Added in library 2.20.0. Detected rather than assumed for the reason
+	 * observe mode is: a site's own Composer autoloader can hand this plugin an
+	 * older library, and on one without the verifier a stored `verify` key is
+	 * ignored. On an allow rule that is the worst direction there is -- the rule
+	 * lets through everyone who *says* they are Googlebot while the screen says
+	 * it checks. So the setting is not offered, and the compiler skips a rule
+	 * that asks for it.
+	 */
+	public function has_identity_verification(): bool {
+		return class_exists( self::library_class( 'Utility', 'ReverseDnsVerifier' ) );
+	}
+
+	/**
+	 * Whether a rule can say for itself that its verification goes online.
+	 *
+	 * Added in library 2.33.0, and the difference between verification working
+	 * and not. Before it, the verifier read `KANOPI_FIREWALL_SOURCES_OFFLINE` --
+	 * the switch this plugin turns on so that a rule-list refresh never lands on
+	 * a visitor's request -- and the same switch reached the two DNS lookups.
+	 * Every verifying rule therefore matched nobody on a default install, with
+	 * nothing but a debug line to say so (kanopi/firewall#391).
+	 *
+	 * With `metadata.verify_offline` a rule overrides the constant, and the
+	 * compiler writes `false` on every rule that verifies: somebody who ticked
+	 * the box asked for the lookups, and keeping rule lists off the request path
+	 * is a separate decision that should not quietly revoke it.
+	 */
+	public function has_verification_switch(): bool {
+		return method_exists( self::plugin_base_class(), 'verificationOffline' );
+	}
+
+	/**
+	 * Whether a verifying rule would actually verify anybody on this site.
+	 *
+	 * Always, on a library with the per-rule switch. On an older one, only
+	 * where the site has opted out of offline rule sources -- and the opt-out is
+	 * read the way both evaluation paths read it: only an explicit `false`.
+	 */
+	public function identity_verification_runs(): bool {
+		if ( ! $this->has_identity_verification() ) {
+			return false;
+		}
+
+		if ( $this->has_verification_switch() ) {
+			return true;
+		}
+
+		return defined( 'BASIC_FIREWALL_SOURCES_OFFLINE' ) && false === constant( 'BASIC_FIREWALL_SOURCES_OFFLINE' );
+	}
+
+	/**
+	 * Whether a rate limit can count something other than the address.
+	 *
+	 * Added in library 2.27.0, with the rule that a limit counting anything
+	 * but the address records no offense. Detected on the method that resolves
+	 * the key, so the check names the thing it is asking about. Without it a
+	 * limit line's key is ignored and the line counts the address -- the
+	 * stricter answer, so the rule still compiles, and says so.
+	 */
+	public function has_composable_rate_limit_key(): bool {
+		return method_exists( self::library_class( 'Plugins', 'RateLimit' ), 'keyComponents' );
+	}
+
+	/**
+	 * Whether a rule can match on what the CDN worked out at the edge.
+	 *
+	 * Added in library 2.27.0. Checked for the status report; the rule type
+	 * itself is offered or withheld on its own plugin class, like every other.
+	 */
+	public function has_edge_signals(): bool {
+		return class_exists( self::library_class( 'Plugins', 'EdgeSignal' ) );
+	}
+
+	/**
+	 * Whether the block list can be kept in Redis on this host.
+	 *
+	 * Two conditions, not one. The class arrived in library 2.22.0, but
+	 * `ext-redis` is a Composer `suggest` upstream rather than a `require`, so
+	 * a site can have the class with no extension behind it. Since 2.29.0 the
+	 * backend survives that and degrades rather than taking the firewall down,
+	 * which is right of it at runtime and no reason to offer a choice that
+	 * cannot work: a block list that silently stores nothing records no
+	 * client, recognises no repeat offender and never escalates, while the
+	 * Storage screen reports storage as configured.
+	 */
+	public function has_redis_storage(): bool {
+		return $this->has_redis_storage_class() && self::has_redis_extension();
+	}
+
+	/**
+	 * Whether the installed library ships the Redis block list at all.
+	 *
+	 * Asked apart from the extension so that the screen and Site Health can say
+	 * which of the two is missing. They are different fixes, made by different
+	 * people: one is a library update, the other is the host's PHP build.
+	 */
+	public function has_redis_storage_class(): bool {
+		return class_exists( self::library_class( 'Storage', 'RedisStorage' ) );
+	}
+
+	/**
+	 * Whether this PHP has `ext-redis` loaded.
+	 *
+	 * Only this process's PHP. A compiled file written from WP-CLI on a box
+	 * without the extension is still read by web nodes that have it, which is
+	 * why a missing extension is reported rather than compiled around.
+	 */
+	public static function has_redis_extension(): bool {
+		return extension_loaded( 'redis' );
+	}
+
+	/**
+	 * A library class, in whichever spelling this build has.
+	 *
+	 * Assembled for the reasons plugin_base_class() gives: a `::class` constant
+	 * would be folded to a constant answer by static analysis, and would name
+	 * only the spelling that exists in one kind of build.
+	 *
+	 * @param string ...$segments The class name below `Kanopi\Firewall`.
+	 *
+	 * @return class-string
+	 */
+	private static function library_class( string ...$segments ): string {
+		$bare   = implode( '\\', array_merge( array( 'Kanopi', 'Firewall' ), $segments ) );
+		$scoped = implode( '\\', array( 'Kanopi', 'BasicFirewall', 'Vendor' ) ) . '\\' . $bare;
+
+		/**
+		 * Whichever spelling this build actually has.
+		 *
+		 * @var class-string $resolved
+		 */
+		$resolved = class_exists( $scoped ) ? $scoped : $bare;
+
+		return $resolved;
+	}
+
+	/**
 	 * Whether the Core Rule Set is present and actually detecting.
 	 */
 	public function has_working_crs(): bool {
@@ -284,6 +451,36 @@ final class Library_Capabilities {
 				'reason'  => __( 'The installed library always records a block in the durable block list. Refusing without recording — what a temporary lockdown needs, so lifting it does not leave every visitor banned — needs kanopi/firewall 2.26.0 or later.', 'basic-firewall' ),
 			);
 		}
+
+		if ( ! $this->has_identity_verification() ) {
+			$missing[] = array(
+				'feature' => __( 'Crawler verification', 'basic-firewall' ),
+				'reason'  => __( 'The installed library cannot verify a crawler by reverse DNS, so a user agent rule can only take the client at its word. Needs kanopi/firewall 2.20.0 or later.', 'basic-firewall' ),
+			);
+		}
+
+		if ( ! $this->has_edge_signals() ) {
+			$missing[] = array(
+				'feature' => __( 'Edge signals', 'basic-firewall' ),
+				'reason'  => __( 'The installed library cannot match on what a CDN worked out at the edge — a TLS fingerprint, or the bot score the edge computed. Needs kanopi/firewall 2.27.0 or later.', 'basic-firewall' ),
+			);
+		}
+
+		if ( ! $this->has_redis_storage_class() ) {
+			$missing[] = array(
+				'feature' => __( 'Redis block list', 'basic-firewall' ),
+				'reason'  => __( 'The installed library cannot keep the block list in Redis. Needs kanopi/firewall 2.22.0 or later.', 'basic-firewall' ),
+			);
+		}
+
+		/*
+		 * A missing `ext-redis` is deliberately not listed. It is not something
+		 * the library lacks, most hosts do not have it, and a site that never
+		 * wanted Redis would be told on every visit to Site Health that its
+		 * library is incomplete. The Storage screen says why Redis is not
+		 * offered, and the storage check turns critical only for a site that
+		 * chose Redis and cannot have it.
+		 */
 
 		$crs = $this->crs_probe();
 

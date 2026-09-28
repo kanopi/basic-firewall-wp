@@ -183,6 +183,19 @@ abstract class Rule_Type_Base implements Rule_Type {
 			$metadata['challenge_provider'] = $provider;
 		}
 
+		/*
+		 * Only when observing. The library accepts `block` and `enforce` as
+		 * well, and both mean exactly what omitting the key means, so writing
+		 * one would be a value in an exported document that changes nothing.
+		 *
+		 * Written whatever the response is, unlike the keys below: observing is
+		 * orthogonal to what the rule would have done, and that is the point --
+		 * it is how you find out what a block rule *would* have blocked.
+		 */
+		if ( true === ( $rule['observe'] ?? false ) ) {
+			$metadata['mode'] = 'log';
+		}
+
 		$metadata = $this->apply_response_metadata( $metadata, $rule );
 		$metadata = self::apply_schedule( $metadata, $rule );
 
@@ -235,7 +248,7 @@ abstract class Rule_Type_Base implements Rule_Type {
 	public static function schedule_declaration( array $schedule ): array {
 		$declaration = array();
 
-		foreach ( array( 'timezone', 'hours', 'from', 'until' ) as $key ) {
+		foreach ( array( 'from', 'until' ) as $key ) {
 			$value = trim( (string) ( $schedule[ $key ] ?? '' ) );
 
 			if ( '' !== $value ) {
@@ -243,18 +256,56 @@ abstract class Rule_Type_Base implements Rule_Type {
 			}
 		}
 
-		$days = array_values(
+		/*
+		 * Several ranges are typed on one line, separated by commas, and the
+		 * library reads several as a list. Handing it the line as typed is not
+		 * a smaller version of the same thing: it reads one string as one range,
+		 * refuses "09:00-12:00, 13:00-17:00" as malformed, and the rule does not
+		 * start at all. One range stays a string, so every compiled file written
+		 * before this reads exactly as it did.
+		 */
+		$ranges = array_values(
 			array_filter(
-				array_map(
-					static fn ( $day ): string => strtolower( trim( (string) $day ) ),
-					(array) ( $schedule['days'] ?? array() )
-				),
-				static fn ( string $day ): bool => '' !== $day
+				array_map( 'trim', explode( ',', (string) ( $schedule['hours'] ?? '' ) ) ),
+				static fn ( string $range ): bool => '' !== $range
 			)
 		);
 
-		if ( array() !== $days ) {
+		if ( array() !== $ranges ) {
+			$declaration['hours'] = 1 === count( $ranges ) ? $ranges[0] : $ranges;
+		}
+
+		$days = array_values(
+			array_unique(
+				array_filter(
+					array_map(
+						static fn ( $day ): string => strtolower( trim( (string) $day ) ),
+						(array) ( $schedule['days'] ?? array() )
+					),
+					static fn ( string $day ): bool => '' !== $day
+				)
+			)
+		);
+
+		/*
+		 * Every day ticked is the same as none, and is left out rather than
+		 * enumerated: seven entries meaning "no restriction" is a value the next
+		 * reader of an export has to count before they can disregard it.
+		 */
+		$week = array( 'mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun' );
+
+		if ( array() !== $days && array() !== array_diff( $week, $days ) ) {
 			$declaration['days'] = $days;
+		}
+
+		/*
+		 * A timezone on its own is not a window. It parses, and leaves the rule
+		 * awake at all times, which is never what somebody who opened this part
+		 * of the form meant -- so nothing is written, and the rule is plainly
+		 * unscheduled rather than scheduled to always be on.
+		 */
+		if ( array() === $declaration ) {
+			return array();
 		}
 
 		/*
@@ -266,19 +317,22 @@ abstract class Rule_Type_Base implements Rule_Type {
 		 * and WordPress already knows what those are. Left to the default, a
 		 * 09:00-17:00 window would be out by up to twelve hours and look
 		 * correct while it was.
-		 *
-		 * Only when the rest of the schedule says something, so an untouched
-		 * form still stores nothing at all.
 		 */
-		if ( array() !== $declaration && ! isset( $declaration['timezone'] ) ) {
-			$site = wp_timezone_string();
+		$timezone = trim( (string) ( $schedule['timezone'] ?? '' ) );
 
-			if ( '' !== $site ) {
-				$declaration['timezone'] = $site;
-			}
+		if ( '' === $timezone ) {
+			$timezone = wp_timezone_string();
 		}
 
-		return $declaration;
+		if ( '' !== $timezone ) {
+			$declaration['timezone'] = $timezone;
+		}
+
+		// In the order the form asks, so an export reads the way it was written.
+		return array_filter(
+			array_replace( array_fill_keys( array( 'timezone', 'days', 'hours', 'from', 'until' ), null ), $declaration ),
+			static fn ( $value ): bool => null !== $value
+		);
 	}
 
 	/**

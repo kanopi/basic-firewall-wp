@@ -50,7 +50,7 @@ final class Geo_Location extends Condition_Rule_Type_Base {
 	 * {@inheritDoc}
 	 */
 	public function description(): string {
-		return __( 'Matches the country, continent, city, postal code or timezone the client address resolves to. Reads from a MaxMind database or from your CDN.', 'basic-firewall' );
+		return __( 'Matches the country, continent, city, postal code, timezone or coordinates the client address resolves to. Reads from a MaxMind database or from your CDN.', 'basic-firewall' );
 	}
 
 	/**
@@ -72,16 +72,40 @@ final class Geo_Location extends Condition_Rule_Type_Base {
 	 */
 	protected function variable_options(): array {
 		return array(
-			'country'      => __( 'Country code, such as US or GB', 'basic-firewall' ),
-			'country_name' => __( 'Country name', 'basic-firewall' ),
-			'continent'    => __( 'Continent code, such as EU', 'basic-firewall' ),
-			'city'         => __( 'City — needs a City database, and most CDNs do not send it', 'basic-firewall' ),
-			'postal'       => __( 'Postal code — needs a City database', 'basic-firewall' ),
-			'timezone'     => __( 'Timezone — needs a City database', 'basic-firewall' ),
-			'latitude'     => __( 'Latitude', 'basic-firewall' ),
-			'longitude'    => __( 'Longitude', 'basic-firewall' ),
+			'country'            => __( 'Country code, such as US or GB', 'basic-firewall' ),
+			'country.name'       => __( 'Country name, such as United Kingdom — from the database, or a CDN that sends it (CloudFront, Fastly)', 'basic-firewall' ),
+			'continent'          => __( 'Continent code, such as EU', 'basic-firewall' ),
+			'city'               => __( 'City — needs a City database, and most CDNs do not send it', 'basic-firewall' ),
+			'postal'             => __( 'Postal code — needs a City database', 'basic-firewall' ),
+			'location.timeZone'  => __( 'Timezone, such as Europe/London — needs a City database; no CDN sends it', 'basic-firewall' ),
+			'location.latitude'  => __( 'Latitude — compare with greater than or less than', 'basic-firewall' ),
+			'location.longitude' => __( 'Longitude — compare with greater than or less than', 'basic-firewall' ),
 		);
 	}
+
+	/**
+	 * {@inheritDoc}
+	 *
+	 * The names this type used to offer. The library reads a GeoIP2
+	 * record by its own property path -- `country.name`, `location.timeZone`
+	 * -- and resolves anything else to nothing, so every rule written on these
+	 * saved, reported itself healthy, and matched nobody.
+	 */
+	protected function renamed_variables(): array {
+		return self::RENAMED_VARIABLES;
+	}
+
+	/**
+	 * Old variable name to the library's.
+	 *
+	 * @var array<string, string>
+	 */
+	public const RENAMED_VARIABLES = array(
+		'country_name' => 'country.name',
+		'timezone'     => 'location.timeZone',
+		'latitude'     => 'location.latitude',
+		'longitude'    => 'location.longitude',
+	);
 
 	/**
 	 * {@inheritDoc}
@@ -118,6 +142,13 @@ final class Geo_Location extends Condition_Rule_Type_Base {
 	 */
 	public function check_requirements( array $settings ): array {
 		return array_merge( parent::check_requirements( $settings ), $this->reader_requirements( $settings ) );
+	}
+
+	/**
+	 * {@inheritDoc}
+	 */
+	public function settings_help(): array {
+		return $this->reader_help();
 	}
 
 	/**

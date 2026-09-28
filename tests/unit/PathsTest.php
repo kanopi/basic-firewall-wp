@@ -170,4 +170,33 @@ final class PathsTest extends TestCase {
 			),
 		);
 	}
+
+	/**
+	 * With no BASIC_FIREWALL_CACHE_DIR, the constant says nothing.
+	 */
+	public function test_an_undefined_cache_constant_says_nothing(): void {
+		if ( defined( 'BASIC_FIREWALL_CACHE_DIR' ) ) {
+			$this->markTestSkipped( 'BASIC_FIREWALL_CACHE_DIR is defined in this process.' );
+		}
+
+		$this->assertNull( Paths::cache_dir_constant() );
+	}
+
+	/**
+	 * BASIC_FIREWALL_CACHE_DIR is read trimmed, with no trailing slash.
+	 *
+	 * The bootstrap reads the same constant the same way before WordPress
+	 * exists, and the two have to produce the same directory or the early path
+	 * looks for imported list bodies where cron never wrote them.
+	 *
+	 * In a process of its own, because a constant cannot be undefined.
+	 *
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_the_cache_constant_is_read_the_way_the_bootstrap_reads_it(): void {
+		define( 'BASIC_FIREWALL_CACHE_DIR', ' /tmp/basic-firewall/ ' );
+
+		$this->assertSame( '/tmp/basic-firewall', Paths::cache_dir_constant() );
+	}
 }

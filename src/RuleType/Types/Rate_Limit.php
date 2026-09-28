@@ -36,13 +36,28 @@ use Kanopi\Firewall\Plugins\RateLimit;
  * And if the site is behind a CDN with trusted proxies unconfigured, *every*
  * visitor shares one address and one bucket.
  *
- * **A limit cannot depend on who is asking.** The account is not part of the
- * key, so a different allowance for logged-in, anonymous or premium users cannot
- * be expressed here. A premium *endpoint* can carry its own limit; a premium
- * *user* cannot. Per-user quotas belong in the application, where the account is
- * known.
+ * That is the default, not the only choice. Since library 2.27.0 a limit line
+ * can name what to count -- `post.log`, the username on the login form -- so the
+ * budget belongs to an account rather than an address. It still cannot give
+ * different accounts different allowances: a premium *endpoint* can carry its
+ * own limit, a premium *user* cannot, and per-user quotas belong in the
+ * application, where the account is known.
  */
 final class Rate_Limit extends Rule_Type_Base {
+
+	/**
+	 * Key components that stand alone.
+	 *
+	 * `client_ip` and `rule_pattern` are the library's own default pair; the
+	 * rest is the vocabulary the Request / URL rule already reads, because that
+	 * is the vocabulary the library resolves them with.
+	 */
+	public const KEY_ATOMS = array( 'client_ip', 'rule_pattern', 'path', 'method', 'host', 'scheme', 'port', 'query' );
+
+	/**
+	 * Key components that take a name after a dot.
+	 */
+	public const KEY_PREFIXES = array( 'header', 'post', 'cookie', 'query' );
 
 	/**
 	 * {@inheritDoc}
@@ -126,7 +141,7 @@ final class Rate_Limit extends Rule_Type_Base {
 			'paths' => array(
 				'label'       => __( 'Limits', 'basic-firewall' ),
 				'description' => wp_kses_post(
-					__( 'One per line, as <code>pattern requests seconds</code> — <code>/wp-login.php 5 300</code> is five attempts in five minutes.<br><br>A fourth field names <strong>what to count</strong>, comma separated. Left off, the firewall counts the client address and the pattern, which is what it has always done. <code>/login 5 300 post.log</code> counts the account being tried rather than the address trying it, so a credential-stuffing run spread over a thousand addresses still hits one limit. <code>/api/* 100 60 client_ip,path</code> counts each endpoint separately rather than the API as a whole.', 'basic-firewall' )
+					__( 'One per line, as <code>pattern requests seconds</code> — <code>/wp-login.php 5 300</code> is five attempts in five minutes.<br><br>A fourth field names <strong>what to count</strong>, comma separated. Left off, the firewall counts the client address and the pattern, which is what it has always done. <code>/wp-login.php 5 300 post.log</code> counts the account being tried rather than the address trying it, so a credential-stuffing run spread over a thousand addresses still hits one limit. <code>/api/* 100 60 client_ip,path</code> counts each endpoint separately rather than the API as a whole.<br><br><strong>A limit that counts an account is not a replacement for one that counts the address.</strong> The two catch opposite attacks — an account key misses one client walking a list of usernames, which gets a fresh budget per name — and a limit without <code>client_ip</code> in its key refuses but never bans. Keep an address-keyed limit on the same pattern, <em>in a separate rate limit rule</em>: within one rule only the first line whose pattern matches is ever used.', 'basic-firewall' )
 				),
 			),
 		);
@@ -153,13 +168,11 @@ final class Rate_Limit extends Rule_Type_Base {
 			 * so importing a rate limit rule exported from this very plugin
 			 * silently produced a rule with no limits in it.
 			 */
-			$key = array();
-
 			if ( is_array( $line ) ) {
 				$pattern = (string) ( $line['pattern'] ?? '' );
 				$limit   = (int) ( $line['limit'] ?? 0 );
 				$window  = (int) ( $line['window'] ?? 0 );
-				$key     = self::parse_key( implode( ',', (array) ( $line['key'] ?? array() ) ) );
+				$raw_key = implode( ',', array_map( 'strval', (array) ( $line['key'] ?? array() ) ) );
 				$line    = trim( $pattern . ' ' . $limit . ' ' . $window );
 			} else {
 				// "pattern limit window", whitespace or pipe separated.
@@ -169,8 +182,10 @@ final class Rate_Limit extends Rule_Type_Base {
 				$pattern = (string) ( $parts[0] ?? '' );
 				$limit   = (int) ( $parts[1] ?? 0 );
 				$window  = (int) ( $parts[2] ?? 0 );
-				$key     = self::parse_key( implode( ',', array_slice( $parts, 3 ) ) );
+				$raw_key = implode( ',', array_slice( $parts, 3 ) );
 			}
+
+			$key = self::parse_key( $raw_key );
 
 			if ( '' === $pattern || $limit < 1 || $window < 1 ) {
 				$errors['paths'] = sprintf(
@@ -196,6 +211,62 @@ final class Rate_Limit extends Rule_Type_Base {
 					$pattern,
 					rtrim( $pattern, '/' ) . '/*',
 					rtrim( $pattern, '/' )
+				);
+
+				continue;
+			}
+
+			/*
+			 * A key the library cannot resolve does not degrade to the address.
+			 * Each unresolvable component becomes an empty string, so every
+			 * request lands in the same bucket -- one visitor spending the
+			 * allowance for the whole site. On a login form that is a lockout
+			 * anybody can trigger.
+			 */
+			$unknown = self::unknown_key_components( $key );
+
+			if ( array() !== $unknown ) {
+				$errors['paths'] = sprintf(
+					/* translators: 1: the rejected components, 2: the pattern. */
+					__( '%1$s is not something a limit can count by, on %2$s. Every request would share one count, so one visitor could spend the allowance for everybody. Use client_ip, rule_pattern, path, method, host, scheme, port or query, or header., post., cookie. or query. followed by a name.', 'basic-firewall' ),
+					implode( ', ', $unknown ),
+					$pattern
+				);
+
+				continue;
+			}
+
+			/*
+			 * The library lower-cases every component before resolving it. That
+			 * is right for a header, whose name is case-insensitive, and wrong
+			 * for a form field, a cookie or a query parameter, whose names are
+			 * not: `post.userName` looks for `username`, finds nothing, and
+			 * counts every request in one bucket.
+			 */
+			$miscased = self::miscased_key_components( self::raw_key_components( $raw_key ) );
+
+			if ( array() !== $miscased ) {
+				$errors['paths'] = sprintf(
+					/* translators: %s: the rejected components. */
+					__( '%s names a field with capital letters. The firewall compares these names in lower case, so that field would never be found and every request would share one count. Only a field whose name is already lower case can be counted.', 'basic-firewall' ),
+					implode( ', ', $miscased )
+				);
+
+				continue;
+			}
+
+			/*
+			 * Within one rule only the first line whose pattern matches a
+			 * request is used, so a second line with the same pattern is never
+			 * reached. The obvious way to pair an account limit with an address
+			 * limit -- two lines for /wp-login.php -- is exactly this, and it
+			 * leaves whichever line comes second doing nothing.
+			 */
+			if ( in_array( $pattern, array_column( $paths, 'pattern' ), true ) ) {
+				$errors['paths'] = sprintf(
+					/* translators: %s: the pattern. */
+					__( '%s is listed twice. Only the first line whose pattern matches a request is ever used, so the second would never apply. To count an account and an address on the same pattern, put the second limit in a rate limit rule of its own.', 'basic-firewall' ),
+					$pattern
 				);
 
 				continue;
@@ -510,6 +581,204 @@ final class Rate_Limit extends Rule_Type_Base {
 	}
 
 	/**
+	 * Split a typed key without changing its case.
+	 *
+	 * @param string $value Raw field.
+	 *
+	 * @return list<string>
+	 */
+	private static function raw_key_components( string $value ): array {
+		return array_values(
+			array_filter(
+				array_map( 'trim', explode( ',', $value ) ),
+				static fn ( string $part ): bool => '' !== $part
+			)
+		);
+	}
+
+	/**
+	 * The components the library could not resolve against any request.
+	 *
+	 * @param list<string> $components Parsed, lower-cased components.
+	 *
+	 * @return list<string>
+	 */
+	public static function unknown_key_components( array $components ): array {
+		$unknown = array();
+
+		foreach ( $components as $component ) {
+			if ( in_array( $component, self::KEY_ATOMS, true ) ) {
+				continue;
+			}
+
+			foreach ( self::KEY_PREFIXES as $prefix ) {
+				if ( 0 === strpos( $component, $prefix . '.' ) && strlen( $component ) > strlen( $prefix ) + 1 ) {
+					continue 2;
+				}
+			}
+
+			$unknown[] = $component;
+		}
+
+		return $unknown;
+	}
+
+	/**
+	 * The components naming a case-sensitive field with capitals in it.
+	 *
+	 * @param list<string> $components Components as typed.
+	 *
+	 * @return list<string>
+	 */
+	public static function miscased_key_components( array $components ): array {
+		$miscased = array();
+
+		foreach ( $components as $component ) {
+			$dot = strpos( $component, '.' );
+
+			if ( false === $dot ) {
+				continue;
+			}
+
+			$family = strtolower( substr( $component, 0, $dot ) );
+
+			if ( in_array( $family, array( 'post', 'cookie', 'query' ), true ) && substr( $component, $dot + 1 ) !== strtolower( substr( $component, $dot + 1 ) ) ) {
+				$miscased[] = $component;
+			}
+		}
+
+		return $miscased;
+	}
+
+	/**
+	 * Whether a limit counts something other than the client address.
+	 *
+	 * A key that includes `client_ip` is still address-keyed as far as banning
+	 * goes: the library withholds the offense only when the address is not
+	 * part of what was counted.
+	 *
+	 * @param list<string> $components Parsed components; empty for the default.
+	 */
+	public static function counts_an_identity( array $components ): bool {
+		return array() !== $components && ! in_array( 'client_ip', $components, true );
+	}
+
+	/**
+	 * The stored limits of a rule, each read into a map.
+	 *
+	 * @param array<string, mixed> $settings Rule settings.
+	 *
+	 * @return list<array{pattern: string, limit: int, window: int, key: list<string>}>
+	 */
+	public static function limits( array $settings ): array {
+		$limits = array();
+
+		foreach ( (array) ( $settings['paths'] ?? array() ) as $path ) {
+			if ( is_string( $path ) ) {
+				$path = self::parse_path_line( $path );
+			}
+
+			if ( ! is_array( $path ) || '' === (string) ( $path['pattern'] ?? '' ) ) {
+				continue;
+			}
+
+			$limits[] = array(
+				'pattern' => (string) $path['pattern'],
+				'limit'   => (int) ( $path['limit'] ?? 0 ),
+				'window'  => (int) ( $path['window'] ?? 0 ),
+				'key'     => self::parse_key( implode( ',', array_map( 'strval', (array) ( $path['key'] ?? array() ) ) ) ),
+			);
+		}
+
+		return $limits;
+	}
+
+	/**
+	 * Identity-keyed limits with no address-keyed limit beside them.
+	 *
+	 * The pairing the library's documentation asks for, checked the way the
+	 * library actually evaluates: a companion has to be in a *different* rate
+	 * limit rule, because within one rule only the first matching line is
+	 * used. An address-keyed line on the same pattern in the same rule is
+	 * never reached, and pairing with it would be pairing with nothing.
+	 *
+	 * The pattern has to be the same, written the same way. `/wp-*` in another
+	 * rule does cover `/wp-login.php`, but proving that one pattern covers
+	 * another is a question with enough edge cases to be wrong in both
+	 * directions, and a warning that is occasionally too cautious is the
+	 * cheaper mistake.
+	 *
+	 * @param array<int|string, mixed> $rules Every stored rule.
+	 *
+	 * @return array<string, list<string>> Rule identifier to unpaired patterns.
+	 */
+	public static function unpaired_identity_limits( array $rules ): array {
+		$by_rule = array();
+
+		foreach ( $rules as $rule ) {
+			if ( ! is_array( $rule ) || empty( $rule['enabled'] ) || 'rate_limit' !== ( $rule['type'] ?? '' ) ) {
+				continue;
+			}
+
+			$by_rule[ (string) ( $rule['id'] ?? '' ) ] = self::limits( (array) ( $rule['settings'] ?? array() ) );
+		}
+
+		$unpaired = array();
+
+		foreach ( $by_rule as $id => $limits ) {
+			foreach ( $limits as $limit ) {
+				if ( ! self::counts_an_identity( $limit['key'] ) ) {
+					continue;
+				}
+
+				$paired = false;
+
+				foreach ( $by_rule as $other => $others ) {
+					if ( $other === $id ) {
+						continue;
+					}
+
+					foreach ( $others as $candidate ) {
+						if ( $candidate['pattern'] === $limit['pattern'] && ! self::counts_an_identity( $candidate['key'] ) ) {
+							$paired = true;
+
+							break 2;
+						}
+					}
+				}
+
+				if ( ! $paired ) {
+					$unpaired[ $id ][] = $limit['pattern'];
+				}
+			}
+		}
+
+		return $unpaired;
+	}
+
+	/**
+	 * {@inheritDoc}
+	 *
+	 * @param array<string, mixed> $settings Described by the interface.
+	 */
+	public function check_requirements( array $settings ): array {
+		$problems = parent::check_requirements( $settings );
+
+		$keyed = array_filter( self::limits( $settings ), static fn ( array $limit ): bool => array() !== $limit['key'] );
+
+		/*
+		 * On a library older than 2.27.0 the key is ignored and the line counts
+		 * the address. That is the stricter of the two, so the rule is compiled
+		 * rather than skipped -- but it is not what the line says.
+		 */
+		if ( array() !== $keyed && ! ( new \Kanopi\BasicFirewall\Library_Capabilities() )->has_composable_rate_limit_key() ) {
+			$problems[] = __( 'Some limits here name what to count, which the installed firewall library cannot do. They count the client address instead. Needs kanopi/firewall 2.27.0 or later.', 'basic-firewall' );
+		}
+
+		return $problems;
+	}
+
+	/**
 	 * {@inheritDoc}
 	 *
 	 * @param array<string, mixed> $settings Described by the interface.
@@ -539,13 +808,25 @@ final class Rate_Limit extends Rule_Type_Base {
 					continue;
 				}
 
-				$lines[] = sprintf(
+				$line = sprintf(
 					/* translators: 1: path pattern, 2: request count, 3: window in seconds. */
 					__( '%1$s — %2$d request(s) per %3$d second(s)', 'basic-firewall' ),
 					(string) ( $path['pattern'] ?? '' ),
 					(int) ( $path['limit'] ?? 0 ),
 					(int) ( $path['window'] ?? 0 )
 				);
+
+				$key = self::parse_key( implode( ',', array_map( 'strval', (array) ( $path['key'] ?? array() ) ) ) );
+
+				if ( array() !== $key ) {
+					$line .= ' ' . sprintf(
+						/* translators: %s: comma-separated key components. */
+						__( 'counting %s', 'basic-firewall' ),
+						implode( ', ', $key )
+					);
+				}
+
+				$lines[] = $line;
 			}
 		}
 

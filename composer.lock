@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "259f1de1a79e7b65e9d3d589dd95c081",
+    "content-hash": "d0ce055b297739b4b7abfdedf150372a",
     "packages": [
         {
             "name": "composer/ca-bundle",
@@ -549,16 +549,16 @@
         },
         {
             "name": "kanopi/firewall",
-            "version": "v2.32.0",
+            "version": "v2.33.0",
             "source": {
                 "type": "git",
                 "url": "https://github.com/kanopi/firewall.git",
-                "reference": "6aadf9742f91759bacbf07295205d69d9e3c08ca"
+                "reference": "d176647b7b0ce4ef3069ba853edcf8f21a528322"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/kanopi/firewall/zipball/6aadf9742f91759bacbf07295205d69d9e3c08ca",
-                "reference": "6aadf9742f91759bacbf07295205d69d9e3c08ca",
+                "url": "https://api.github.com/repos/kanopi/firewall/zipball/d176647b7b0ce4ef3069ba853edcf8f21a528322",
+                "reference": "d176647b7b0ce4ef3069ba853edcf8f21a528322",
                 "shasum": ""
             },
             "require": {
@@ -587,6 +587,7 @@
                 "symfony/var-dumper": "~6.4 || ~7.3 || ~8.1"
             },
             "suggest": {
+                "ext-memcached": "Required by Kanopi\\Firewall\\Storage\\MemcachedStorage, for a shared block list on a host that has Memcached rather than Redis. Rate limiting on Memcached needs no backend of its own: CacheRateLimitStorage takes Symfony's MemcachedAdapter.",
                 "ext-redis": "Required by Kanopi\\Firewall\\Storage\\RedisStorage and Kanopi\\Firewall\\RateLimitStorage\\RedisRateLimitStorage, for a shared block list and distributed rate limiting across more than one server. Every other backend works without it.",
                 "ext-sodium": "Required to verify a rule source declaring `signature:` — an ed25519 detached signature over the fetched body. A source declaring `checksum:` needs nothing extra, and a source declaring neither is unaffected.",
                 "symfony/event-dispatcher": "A PSR-14 dispatcher, if you want to be told what the firewall decided about each request. Any PSR-14 implementation works — Kanopi\\Firewall\\Firewall::create() takes the interface, not this package — and the events are read-only, so nothing you register can change a verdict."
@@ -625,9 +626,9 @@
             "description": "Evaluate the requests for malicious items.",
             "support": {
                 "issues": "https://github.com/kanopi/firewall/issues",
-                "source": "https://github.com/kanopi/firewall/tree/v2.32.0"
+                "source": "https://github.com/kanopi/firewall/tree/v2.33.0"
             },
-            "time": "2026-09-19T18:58:47+00:00"
+            "time": "2026-09-27T15:46:19+00:00"
         },
         {
             "name": "matomo/device-detector",

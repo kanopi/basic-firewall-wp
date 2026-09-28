@@ -30,6 +30,8 @@ use Kanopi\BasicFirewall\Compiler\Library_Map;
  *              redactor reads to decide what to strip. Declaring it here rather
  *              than in the exporter means a new field is redacted because of
  *              what it is, not because somebody remembered to list it.
+ * - `trim`     false to keep a string exactly as given. Every other string is
+ *              trimmed, which is right for a hostname and wrong for a password.
  *
  * Rule settings are deliberately absent: a rule's `settings` sub-tree is
  * resolved by its own rule type, so a type contributed through the
@@ -51,7 +53,7 @@ final class Schema {
 	/**
 	 * Current schema version. Bumped whenever an upgrade routine is added.
 	 */
-	public const VERSION = 6;
+	public const VERSION = 7;
 
 	/**
 	 * The full settings tree.
@@ -68,6 +70,7 @@ final class Schema {
 					'default' => true,
 				),
 				'global'        => self::global_section(),
+				'cache'         => self::cache_section(),
 				'storage'       => self::storage_section(),
 				'challenge'     => self::challenge_section(),
 				'logging'       => self::logging_section(),
@@ -151,6 +154,42 @@ final class Schema {
 					 */
 					'default' => 'log',
 					'choices' => array( 'block', 'log', 'exception', 'disabled' ),
+				),
+				'panic_file'              => array(
+					'type'    => 'string',
+					'label'   => 'Panic file',
+
+					/*
+					 * Empty, and there is no suggested path either. A file that
+					 * turns the firewall down is worth exactly as much as write
+					 * access to where it lives, and a well-known default would be
+					 * the first thing worth trying against every site running
+					 * this plugin. Empty also means the library is never asked to
+					 * stat anything, so a site that arms nothing pays nothing.
+					 */
+					'default' => '',
+				),
+				'lockdown'                => array(
+					'type'    => 'bool',
+					'label'   => 'Refuse everyone but the lockdown allowlist',
+					'default' => false,
+				),
+				'lockdown_allow'          => array(
+					'type'    => 'list',
+					'label'   => 'Addresses served during lockdown',
+
+					/*
+					 * Kept when lockdown is off, so the list is ready the moment
+					 * it is needed rather than typed out mid-incident. Empty is
+					 * the library's "serve nobody", which is why the General
+					 * screen will not arm lockdown against it and the compiler
+					 * will not emit it.
+					 */
+					'default' => array(),
+					'of'      => array(
+						'type'    => 'string',
+						'default' => '',
+					),
 				),
 				'banning_status_code'     => array(
 					'type'    => 'int',
@@ -254,6 +293,48 @@ final class Schema {
 	}
 
 	/**
+	 * Where the firewall caches what it works out.
+	 *
+	 * Parsed user agents and reverse-DNS verdicts: everything here can be
+	 * worked out again, so losing it costs a rebuild and never a client going
+	 * unblocked. That is what makes a volatile backend a legitimate choice. The
+	 * block list is not a cache and is configured under `storage`.
+	 *
+	 * @return array<string, mixed>
+	 */
+	private static function cache_section(): array {
+		return array(
+			'type'     => 'map',
+			'label'    => 'Where the firewall caches what it works out',
+			'children' => array(
+				'backend'   => array(
+					'type'    => 'string',
+					'label'   => 'Cache backend',
+
+					/*
+					 * Files, which is what every release so far has done.
+					 * Changing it is worthwhile where the uploads directory is a
+					 * network mount, which is the common case on managed hosting.
+					 */
+					'default' => 'filesystem',
+					'choices' => array( 'filesystem', 'object_cache', 'apcu' ),
+				),
+				'directory' => array(
+					'type'    => 'string',
+					'label'   => 'Directory, for the files backend',
+					'default' => '',
+				),
+				'apcu_ttl'  => array(
+					'type'    => 'int',
+					'label'   => 'Seconds an APCu entry lives',
+					'default' => 86400,
+					'min'     => 60,
+				),
+			),
+		);
+	}
+
+	/**
 	 * Blocked-client storage.
 	 *
 	 * @return array<string, mixed>
@@ -278,7 +359,7 @@ final class Schema {
 					 * large one, so the readme explains the trade instead.
 					 */
 					'default' => 'file',
-					'choices' => array( 'memory', 'file', 'database' ),
+					'choices' => array( 'memory', 'file', 'database', 'redis' ),
 				),
 				'file'           => array(
 					'type'     => 'map',
@@ -333,7 +414,76 @@ final class Schema {
 						'parameters'        => self::connection_parameters(),
 					),
 				),
+				'redis'          => self::redis_storage(),
 				'record_request' => self::record_request(),
+			),
+		);
+	}
+
+	/**
+	 * The Redis block list.
+	 *
+	 * Its own keys rather than the rate limit's `redis_host` and `redis_port`,
+	 * because the two backends do not read the same shape: the block list takes
+	 * its options nested under `config.redis`, spelled the way `ext-redis`
+	 * spells them. Borrowing the familiar field names is how a configuration
+	 * ends up ignored by the backend and connected to localhost while the
+	 * screen says otherwise -- and nothing reports it, because localhost
+	 * usually answers.
+	 *
+	 * @return array<string, mixed>
+	 */
+	private static function redis_storage(): array {
+		return array(
+			'type'     => 'map',
+			'label'    => 'Redis block list settings',
+			'children' => array(
+				'host'     => array(
+					'type'    => 'string',
+					'label'   => 'Redis host',
+					'default' => '127.0.0.1',
+				),
+				'port'     => array(
+					'type'    => 'int',
+					'label'   => 'Redis port',
+					'default' => 6379,
+					'min'     => 1,
+					'max'     => 65535,
+				),
+
+				/*
+				 * Empty by default, and empty is not "no prefix": the compiler
+				 * derives one from the site, the way it does for rate limit
+				 * counters, so two sites of a network sharing one Redis do not
+				 * share one block list.
+				 */
+				'prefix'   => array(
+					'type'    => 'string',
+					'label'   => 'Key prefix',
+					'default' => '',
+				),
+
+				// Half a credential rather than the secret half, so it is kept
+				// in an export: without it an import cannot say which account
+				// the missing password belongs to.
+				'username' => array(
+					'type'    => 'string',
+					'label'   => 'Redis username, for ACL authentication',
+					'default' => '',
+				),
+				'password' => array(
+					'type'    => 'string',
+					'label'   => 'Redis password',
+					'default' => '',
+					'secret'  => true,
+
+					/*
+					 * Not trimmed. A password is whatever was issued, trailing
+					 * space included, and quietly altering it produces an
+					 * authentication failure nobody can see on the screen.
+					 */
+					'trim'    => false,
+				),
 			),
 		);
 	}
@@ -863,6 +1013,18 @@ final class Schema {
 					 * cannot honour rather than emitting it.
 					 */
 					'choices' => array( 'allow', 'challenge', 'block', 'redirect', 'mark', 'record' ),
+				),
+				'observe'            => array(
+					'type'    => 'bool',
+					'label'   => 'Match and log without acting',
+
+					/*
+					 * Compiles to `metadata.mode: log`. A boolean because the
+					 * screen asks a two-way question; the library also accepts
+					 * `block` and `enforce`, both of which mean what leaving
+					 * this off means.
+					 */
+					'default' => false,
 				),
 				'weight'             => array(
 					'type'    => 'int',

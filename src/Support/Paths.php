@@ -634,12 +634,62 @@ final class Paths {
 	/**
 	 * Directory the library writes its parsed-configuration cache into.
 	 *
-	 * Beside the compiled file, and persistent. Pointed here rather than left to
-	 * the system temporary directory because a temp directory gets cleared, and
-	 * every clear costs a 42 ms parse on the next request through every worker.
+	 * Persistent rather than the system temporary directory, because a temp
+	 * directory gets cleared, and every clear costs a 42 ms parse on the next
+	 * request through every worker.
 	 */
 	public function parse_cache_dir(): string {
-		return $this->base() . '/cache/compiled';
+		return $this->library_cache_dir() . '/compiled';
+	}
+
+	/**
+	 * What the library is handed as KANOPI_FIREWALL_CACHE_DIR.
+	 *
+	 * Two caches can only ever be files, whatever the Storage screen says: the
+	 * parsed configuration, and the downloaded bodies of imported rule lists.
+	 * Both are read on the wp-config.php path, where there is no WordPress to
+	 * hand a cache pool to and no option to read a directory from.
+	 *
+	 * So they move with a constant, which both paths can read for nothing:
+	 *
+	 *     define( 'BASIC_FIREWALL_CACHE_DIR', '/tmp/basic-firewall' );
+	 *
+	 * A constant rather than a setting on the Storage screen, deliberately. A
+	 * setting would reach the mu-plugin path and WP-CLI but not the early path,
+	 * so cron would write the list bodies to one directory while requests
+	 * looked for them in another -- and every rule built on a list would match
+	 * nothing, quietly. Everything that defines the library constant asks this
+	 * method, so they cannot disagree.
+	 */
+	public function library_cache_dir(): string {
+		return $this->cache_root() . ( null === self::cache_dir_constant() ? '/cache' : '' );
+	}
+
+	/**
+	 * Where the firewall's own file caches live, beneath which each has a
+	 * directory.
+	 *
+	 * The private directory, unless BASIC_FIREWALL_CACHE_DIR moves them.
+	 */
+	public function cache_root(): string {
+		return self::cache_dir_constant() ?? $this->base();
+	}
+
+	/**
+	 * BASIC_FIREWALL_CACHE_DIR, trimmed, or null when it says nothing.
+	 */
+	public static function cache_dir_constant(): ?string {
+		if ( ! defined( 'BASIC_FIREWALL_CACHE_DIR' ) ) {
+			return null;
+		}
+
+		$value = constant( 'BASIC_FIREWALL_CACHE_DIR' );
+
+		if ( ! is_string( $value ) || '' === trim( $value ) ) {
+			return null;
+		}
+
+		return rtrim( trim( $value ), '/' );
 	}
 
 	/**

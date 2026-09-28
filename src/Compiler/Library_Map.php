@@ -18,12 +18,15 @@ use Kanopi\Firewall\RateLimitStorage\RedisRateLimitStorage;
 use Kanopi\Firewall\Storage\DatabaseStorage;
 use Kanopi\Firewall\Storage\FileStorage;
 use Kanopi\Firewall\Storage\InMemoryStorage;
+use Kanopi\Firewall\Storage\RedisStorage;
 use Kanopi\Firewall\Storage\RecordedRequest;
 use Monolog\Formatter\JsonFormatter;
 use Monolog\Formatter\LineFormatter;
 use Monolog\Handler\ErrorLogHandler;
 use Monolog\Handler\RotatingFileHandler;
 use Monolog\Handler\StreamHandler;
+use Symfony\Component\Cache\Adapter\ApcuAdapter;
+use Symfony\Component\Cache\Adapter\FilesystemAdapter;
 
 /**
  * Short configuration keys, and the class names they compile to.
@@ -58,6 +61,7 @@ final class Library_Map {
 		'memory'   => InMemoryStorage::class,
 		'file'     => FileStorage::class,
 		'database' => DatabaseStorage::class,
+		'redis'    => RedisStorage::class,
 	);
 
 	/**
@@ -70,6 +74,21 @@ final class Library_Map {
 		'file'     => FileRateLimitStorage::class,
 		'database' => DatabaseRateLimitStorage::class,
 		'redis'    => RedisRateLimitStorage::class,
+	);
+
+	/**
+	 * Cache pools the compiled file can name, keyed by cache backend.
+	 *
+	 * Only pools whose constructor takes scalars: the library builds a named
+	 * pool from `adaptor` and `args` read out of YAML, which cannot carry an
+	 * object. That is why the WordPress object cache is not here -- it is handed
+	 * over as a live pool at request time instead.
+	 *
+	 * @var array<string, class-string>
+	 */
+	public const CACHE_POOLS = array(
+		'apcu'       => ApcuAdapter::class,
+		'filesystem' => FilesystemAdapter::class,
 	);
 
 	/**

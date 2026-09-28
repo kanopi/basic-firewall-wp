@@ -76,6 +76,29 @@ final class ValidatorTest extends TestCase {
 	}
 
 	/**
+	 * A string declared `trim => false` is kept exactly; the rest are trimmed.
+	 *
+	 * A Redis password is whatever was issued, trailing space included, and a
+	 * validator that tidied it would store a credential the server refuses --
+	 * with nothing on any screen to show why.
+	 */
+	public function test_a_password_keeps_its_spaces_and_a_host_does_not(): void {
+		$result = $this->validator->validate(
+			array(
+				'storage' => array(
+					'redis' => array(
+						'host'     => ' redis.internal ',
+						'password' => ' hunter2 ',
+					),
+				),
+			)
+		);
+
+		$this->assertSame( 'redis.internal', $result['storage']['redis']['host'] );
+		$this->assertSame( ' hunter2 ', $result['storage']['redis']['password'] );
+	}
+
+	/**
 	 * YAML reads an unquoted `no` as boolean false.
 	 *
 	 * `behind_proxy: no` is a real and meaningful value -- it asserts there is

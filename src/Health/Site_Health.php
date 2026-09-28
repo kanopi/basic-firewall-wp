@@ -9,11 +9,14 @@ declare( strict_types = 1 );
 
 namespace Kanopi\BasicFirewall\Health;
 
+use Kanopi\BasicFirewall\Admin\Admin;
+use Kanopi\BasicFirewall\Cache\Cache_Backend;
 use Kanopi\BasicFirewall\Install\Activator;
 use Kanopi\BasicFirewall\Install\Upgrader;
 use Kanopi\BasicFirewall\Library_Capabilities;
 use Kanopi\BasicFirewall\Library_Loader;
 use Kanopi\BasicFirewall\Plugin;
+use Kanopi\BasicFirewall\RuleType\Types\Rate_Limit;
 use Kanopi\BasicFirewall\Runtime\Runner;
 use Kanopi\BasicFirewall\Runtime\Trusted_Proxies;
 
@@ -64,19 +67,29 @@ final class Site_Health {
 	 * @return array<string, string>
 	 */
 	private static function test_map(): array {
+		/*
+		 * Lockdown and the panic switch first. While either is in force, every
+		 * other entry describes a firewall that is not the one running, and the
+		 * dashboard's Checks table is read top to bottom.
+		 */
 		return array(
-			'library'     => __( 'Basic Firewall library', 'basic-firewall' ),
-			'backends'    => __( 'Basic Firewall backends', 'basic-firewall' ),
-			'compiled'    => __( 'Basic Firewall compiled configuration', 'basic-firewall' ),
-			'private_dir' => __( 'Basic Firewall private directory', 'basic-firewall' ),
-			'bootstrap'   => __( 'Basic Firewall wp-config.php snippet', 'basic-firewall' ),
-			'evaluation'  => __( 'Basic Firewall evaluation point', 'basic-firewall' ),
-			'proxy'       => __( 'Basic Firewall client IP', 'basic-firewall' ),
-			'mode'        => __( 'Basic Firewall operating mode', 'basic-firewall' ),
-			'storage'     => __( 'Basic Firewall block list storage', 'basic-firewall' ),
-			'logging'     => __( 'Basic Firewall logging', 'basic-firewall' ),
-			'records'     => __( 'Basic Firewall block records', 'basic-firewall' ),
-			'upgrade'     => __( 'Basic Firewall upgrades', 'basic-firewall' ),
+			'lockdown'     => __( 'Basic Firewall lockdown', 'basic-firewall' ),
+			'panic'        => __( 'Basic Firewall panic switch', 'basic-firewall' ),
+			'library'      => __( 'Basic Firewall library', 'basic-firewall' ),
+			'backends'     => __( 'Basic Firewall backends', 'basic-firewall' ),
+			'compiled'     => __( 'Basic Firewall compiled configuration', 'basic-firewall' ),
+			'verification' => __( 'Basic Firewall crawler verification', 'basic-firewall' ),
+			'rate_keys'    => __( 'Basic Firewall rate limit keys', 'basic-firewall' ),
+			'private_dir'  => __( 'Basic Firewall private directory', 'basic-firewall' ),
+			'bootstrap'    => __( 'Basic Firewall wp-config.php snippet', 'basic-firewall' ),
+			'evaluation'   => __( 'Basic Firewall evaluation point', 'basic-firewall' ),
+			'proxy'        => __( 'Basic Firewall client IP', 'basic-firewall' ),
+			'mode'         => __( 'Basic Firewall operating mode', 'basic-firewall' ),
+			'storage'      => __( 'Basic Firewall block list storage', 'basic-firewall' ),
+			'cache'        => __( 'Basic Firewall cache', 'basic-firewall' ),
+			'logging'      => __( 'Basic Firewall logging', 'basic-firewall' ),
+			'records'      => __( 'Basic Firewall block records', 'basic-firewall' ),
+			'upgrade'      => __( 'Basic Firewall upgrades', 'basic-firewall' ),
 		);
 	}
 
@@ -104,20 +117,123 @@ final class Site_Health {
 	 */
 	public static function check( string $key ): array {
 		return match ( $key ) {
+			'lockdown'    => self::check_lockdown(),
+			'panic'       => self::check_panic(),
 			'library'     => self::check_library(),
 			'backends'    => self::check_backends(),
 			'compiled'    => self::check_compiled(),
+			'verification' => self::check_verification(),
+			'rate_keys'    => self::check_rate_keys(),
 			'private_dir' => self::check_private_dir(),
 			'bootstrap'   => self::check_bootstrap(),
 			'evaluation'  => self::check_evaluation(),
 			'proxy'       => self::check_proxy(),
 			'mode'        => self::check_mode(),
 			'storage'     => self::check_storage(),
+			'cache'       => self::check_cache(),
 			'logging'     => self::check_logging(),
 			'records'     => self::check_records(),
 			'upgrade'     => self::check_upgrade(),
 			default       => self::ok( __( 'Unknown test', 'basic-firewall' ), '' ),
 		};
+	}
+
+	/**
+	 * Is the site refusing everyone but a list?
+	 *
+	 * Critical, and first. While lockdown is on, no other entry here describes
+	 * what the site does to traffic: every rule is moot, because a client not
+	 * on the allowlist never reaches one. It is also the loudest thing the
+	 * firewall can do and the easiest to forget, exactly like the panic switch
+	 * it is often reached through.
+	 *
+	 * @return array{status: string, label: string, description: string, actions: string}
+	 */
+	private static function check_lockdown(): array {
+		if ( ! Plugin::instance()->runner()->is_locked_down() ) {
+			return self::ok(
+				__( 'The site is not in lockdown', 'basic-firewall' ),
+				esc_html__( 'Every visitor is evaluated against the rules as usual.', 'basic-firewall' )
+			);
+		}
+
+		$allow = (array) Plugin::instance()->settings()->get( 'global.lockdown_allow', array() );
+
+		return self::critical(
+			sprintf(
+				/* translators: %d: number of allowlisted addresses. */
+				_n(
+					'The site is in lockdown, serving only %d allowlisted entry',
+					'The site is in lockdown, serving only %d allowlisted entries',
+					count( $allow ),
+					'basic-firewall'
+				),
+				count( $allow )
+			),
+			esc_html__( 'Every client except the lockdown allowlist is being refused, and none of them is being recorded. Your rules are not being consulted while this is on. Switch it off on the General screen — or, if a panic file saying "lockdown" armed it, remove the file.', 'basic-firewall' ),
+			sprintf(
+				'<p><a href="%s">%s</a></p>',
+				esc_url( Admin::url( 'basic-firewall-general' ) ),
+				esc_html__( 'Open the General screen', 'basic-firewall' )
+			)
+		);
+	}
+
+	/**
+	 * Is a panic file changing what the firewall does?
+	 *
+	 * Critical while one is active, and that is deliberate. The realistic
+	 * failure is not somebody flipping it -- it is nobody noticing three weeks
+	 * later that the site has been in log mode since the incident. The file is
+	 * the whole record that it happened, and nobody reads the firewall's log
+	 * for a warning they do not know to look for, so this is where it is said
+	 * -- and, being critical, in an admin notice on every screen as well.
+	 *
+	 * A file that exists and changed nothing is only a recommendation. Nothing
+	 * is being overridden, so calling it critical would overstate it; but
+	 * somebody reached for the switch and it did not take, and they are
+	 * watching the site rather than the log to find that out.
+	 *
+	 * @return array{status: string, label: string, description: string, actions: string}
+	 */
+	private static function check_panic(): array {
+		$panic = Plugin::instance()->runner()->panic_switch();
+
+		if ( null !== $panic && $panic['active'] ) {
+			return self::critical(
+				sprintf(
+					/* translators: %s: operating mode the panic file forces. */
+					__( 'A panic file is forcing the firewall into %s mode', 'basic-firewall' ),
+					$panic['effective']
+				),
+				sprintf(
+					/* translators: 1: forced mode, 2: configured mode, 3: file path. */
+					esc_html__( 'The operating mode is %1$s because a panic file says so. The configured mode is %2$s, and it returns the moment the file is removed: %3$s', 'basic-firewall' ),
+					'<strong>' . esc_html( $panic['effective'] ) . '</strong>',
+					'<strong>' . esc_html( $panic['configured'] ) . '</strong>',
+					'<code>' . esc_html( (string) $panic['path'] ) . '</code>'
+				)
+			);
+		}
+
+		if ( null !== $panic ) {
+			return self::recommended(
+				__( 'A panic file is present but is being ignored', 'basic-firewall' ),
+				sprintf(
+					/* translators: 1: file path, 2: what is wrong with it. */
+					esc_html__( 'The panic file %1$s %2$s, so the firewall is running in its configured mode. A panic file has to name one of block, log, exception, disabled or lockdown.', 'basic-firewall' ),
+					'<code>' . esc_html( (string) $panic['path'] ) . '</code>',
+					esc_html( (string) $panic['problem'] )
+				)
+			);
+		}
+
+		return self::ok(
+			__( 'No panic file is overriding the firewall', 'basic-firewall' ),
+			'' === trim( (string) Plugin::instance()->settings()->get( 'global.panic_file', '' ) )
+				? esc_html__( 'No panic file is configured. One can be set on the General screen, so the firewall can be turned down mid-incident without a deploy.', 'basic-firewall' )
+				: esc_html__( 'A panic file is configured and nothing is at its path, so the configured mode is in force.', 'basic-firewall' )
+		);
 	}
 
 	/**
@@ -375,6 +491,122 @@ final class Site_Health {
 				esc_html__( '%1$d rule(s) and %2$d preset(s) are compiled and being enforced.', 'basic-firewall' ),
 				count( (array) $plugin->settings()->get( 'rules', array() ) ),
 				count( (array) $plugin->settings()->get( 'presets', array() ) )
+			)
+		);
+	}
+
+	/**
+	 * Does every rule that says it verifies crawlers actually verify them?
+	 *
+	 * Critical rather than a recommendation, and the reason is the direction
+	 * of the failure. Verification fails closed, so such a rule matches
+	 * *nobody*: the operator believes genuine crawlers are let through, and
+	 * they are instead judged by whatever rules follow -- blocked, if a rule
+	 * below catches them. Nothing else in the interface would say so.
+	 *
+	 * Reachable only on a library older than 2.33.0, which switches
+	 * verification off with the offline rule-sources flag, or older than
+	 * 2.20.0, which has none. The rule screen refuses to save either, so a rule
+	 * here arrived by import, WP-CLI, or a library downgrade.
+	 *
+	 * @return array{status: string, label: string, description: string, actions: string}
+	 */
+	private static function check_verification(): array {
+		$verifying = array();
+
+		foreach ( (array) Plugin::instance()->settings()->get( 'rules', array() ) as $rule ) {
+			if ( ! is_array( $rule ) || empty( $rule['enabled'] ) || 'user_agent' !== ( $rule['type'] ?? '' ) || empty( $rule['settings']['verify'] ) ) {
+				continue;
+			}
+
+			$verifying[] = (string) ( '' !== (string) ( $rule['label'] ?? '' ) ? $rule['label'] : ( $rule['id'] ?? '?' ) );
+		}
+
+		if ( array() === $verifying ) {
+			return self::ok(
+				__( 'No rule verifies crawlers', 'basic-firewall' ),
+				esc_html__( 'No user agent rule asks for reverse-DNS verification. An allow rule on the agent alone believes whatever the client typed — anyone can claim to be Googlebot — so verify any rule that lets crawlers through.', 'basic-firewall' )
+			);
+		}
+
+		$capabilities = new Library_Capabilities();
+		$names        = '<strong>' . esc_html( implode( ', ', $verifying ) ) . '</strong>';
+
+		if ( ! $capabilities->has_identity_verification() ) {
+			return self::critical(
+				__( 'Rules that verify crawlers are not running', 'basic-firewall' ),
+				sprintf(
+					/* translators: %s: rule names. */
+					esc_html__( 'These rules verify crawlers by reverse DNS: %s. The installed firewall library cannot, so they are skipped when the configuration is compiled rather than left to believe every client claiming to be a crawler.', 'basic-firewall' ),
+					$names
+				)
+			);
+		}
+
+		if ( ! $capabilities->identity_verification_runs() ) {
+			return self::critical(
+				__( 'Rules that verify crawlers are matching nobody', 'basic-firewall' ),
+				sprintf(
+					/* translators: 1: rule names, 2: the wp-config.php line. */
+					esc_html__( 'These rules verify crawlers by reverse DNS: %1$s. The installed firewall library switches verification off while rule lists are kept off the request path, so each of them currently matches nobody — a genuine crawler is treated as ordinary traffic. Update to kanopi/firewall 2.33.0, which gives verification its own switch, or add %2$s to wp-config.php.', 'basic-firewall' ),
+					$names,
+					"<code>define( 'BASIC_FIREWALL_SOURCES_OFFLINE', false );</code>"
+				)
+			);
+		}
+
+		return self::ok(
+			__( 'Rules that verify crawlers can verify them', 'basic-firewall' ),
+			sprintf(
+				/* translators: %s: rule names. */
+				esc_html__( 'These rules verify crawlers by reverse DNS: %s. Each lookup is made on the request path the first time an address is seen, and a verdict is cached — so a local caching resolver on this host is what keeps a cache miss at a couple of milliseconds rather than a hundred.', 'basic-firewall' ),
+				$names
+			)
+		);
+	}
+
+	/**
+	 * Is every identity-keyed rate limit paired with an address-keyed one?
+	 *
+	 * A recommendation rather than critical: the rule works, and the
+	 * configuration is occasionally deliberate -- an address limit can live in
+	 * front of WordPress, where this cannot see it. But the two key shapes
+	 * catch opposite attacks, and an identity-keyed limit records no offense,
+	 * so on its own it leaves brute force unprotected and the block list empty
+	 * while reading, on every screen, as a tightening.
+	 *
+	 * @return array{status: string, label: string, description: string, actions: string}
+	 */
+	private static function check_rate_keys(): array {
+		$rules    = (array) Plugin::instance()->settings()->get( 'rules', array() );
+		$unpaired = Rate_Limit::unpaired_identity_limits( $rules );
+
+		if ( array() === $unpaired ) {
+			return self::ok(
+				__( 'Every rate limit counting an account also has one counting the address', 'basic-firewall' ),
+				esc_html__( 'A limit that counts an account, a header or a field catches many clients against one account and misses one client working through many. None of the rate limits here is relying on one without the other.', 'basic-firewall' )
+			);
+		}
+
+		$lines = array();
+
+		foreach ( $unpaired as $id => $patterns ) {
+			$lines[] = sprintf(
+				'<li><strong>%s</strong> — <code>%s</code></li>',
+				esc_html( (string) $id ),
+				esc_html( implode( ', ', $patterns ) )
+			);
+		}
+
+		return self::recommended(
+			__( 'A rate limit counts an account, but nothing counts the address beside it', 'basic-firewall' ),
+			'<p>' . esc_html__( 'These limits count something other than the client address:', 'basic-firewall' ) . '</p><ul>' . implode( '', $lines ) . '</ul><p>'
+				. esc_html__( 'That catches many clients attacking one account, and misses one client working through a list of accounts — each name gets a fresh allowance, which is the attack an address-keyed limit catches. It also records no offense, so nothing reaches the block list. Add a separate rate limit rule on the same pattern that counts the address. It has to be a separate rule: within one, only the first line whose pattern matches is used.', 'basic-firewall' )
+				. '</p>',
+			sprintf(
+				'<p><a href="%s">%s</a></p>',
+				esc_url( Admin::url( 'basic-firewall-rules' ) ),
+				esc_html__( 'Open the rules', 'basic-firewall' )
 			)
 		);
 	}
@@ -961,6 +1193,34 @@ final class Site_Health {
 			);
 		}
 
+		if ( 'redis' === $backend ) {
+			$capabilities = new Library_Capabilities();
+
+			if ( ! $capabilities->has_redis_storage_class() ) {
+				return self::recommended(
+					__( 'Redis block list storage is selected, but the installed library cannot provide it', 'basic-firewall' ),
+					esc_html__( 'The firewall is recording blocks in file storage instead, so a client is still remembered on this web node. Update kanopi/firewall to 2.22.0 or later, or choose file or database storage on the Storage screen so the setting says what is happening.', 'basic-firewall' )
+				);
+			}
+
+			/*
+			 * Critical, as in-memory storage is, because it amounts to the same
+			 * thing. Since library 2.29.0 the backend degrades rather than
+			 * failing without `ext-redis` -- which keeps the site up and leaves
+			 * a block list that stores nothing, while every other screen says
+			 * storage is configured. Asked of this PHP directly, rather than
+			 * waiting for the degraded-backends check, because that one only
+			 * knows once a firewall has been built in this request.
+			 */
+			if ( ! Library_Capabilities::has_redis_extension() ) {
+				return self::critical(
+					__( 'Redis block list storage is selected, but this server has no redis extension', 'basic-firewall' ),
+					'<p>' . esc_html__( 'Every rule is still evaluated and a matching request is still refused, but no client is recorded: repeat offenders are never recognised and escalation never happens. The library lists ext-redis as a suggestion rather than a requirement, so it installs without it.', 'basic-firewall' ) . '</p>'
+					. '<p>' . esc_html__( 'Ask your host to enable ext-redis, or choose file or database storage on the Storage screen. If only some web nodes lack it, this result is from the one that answered.', 'basic-firewall' ) . '</p>'
+				);
+			}
+		}
+
 		if ( 'database' === $backend && self::early_path_active() && ! self::early_path_reaches_database() ) {
 			/*
 			 * The module's one documented fail-open -- but checked rather than
@@ -998,6 +1258,61 @@ final class Site_Health {
 				esc_html__( 'Using %1$s storage, with %2$s currently blocked.', 'basic-firewall' ),
 				esc_html( $backend ),
 				$listing['supported'] ? (string) count( $listing['clients'] ) : esc_html__( 'an unknown number', 'basic-firewall' )
+			)
+		);
+	}
+
+	/**
+	 * Is the firewall caching where it was told to?
+	 *
+	 * Two backends can be chosen and then stop working without anybody
+	 * touching the setting: an object-cache.php drop-in removed, APCu disabled
+	 * in a PHP rebuild. They fail differently, and the difference decides the
+	 * severity. Without a persistent object cache the runner hands the library
+	 * nothing and it caches in files -- slower, and still cached. Without APCu
+	 * the library cannot build the pool the compiled file names and runs agent
+	 * detection uncached, which is roughly 600 ms on every request that reaches
+	 * a user agent rule.
+	 *
+	 * @return array{status: string, label: string, description: string, actions: string}
+	 */
+	private static function check_cache(): array {
+		$backend = Cache_Backend::configured();
+
+		if ( 'object_cache' === $backend && ! Cache_Backend::has_persistent_object_cache() ) {
+			return self::recommended(
+				__( 'The firewall is set to cache in the object cache, but this site has no persistent one', 'basic-firewall' ),
+				esc_html__( 'WordPress\'s default object cache forgets everything when the request ends, so the firewall caches in files instead — still cached, but on the storage this setting was chosen to avoid. Restore the object-cache.php drop-in, or choose files or APCu on the Storage screen so the setting says what is happening.', 'basic-firewall' )
+			);
+		}
+
+		if ( 'apcu' === $backend && ! Cache_Backend::has_apcu() ) {
+			return self::critical(
+				__( 'The firewall is set to cache in APCu, which is not enabled on this server', 'basic-firewall' ),
+				esc_html__( 'The library cannot build the pool the compiled configuration names, so agent detection runs uncached — roughly 600 ms on every request that reaches a user agent rule — rather than falling back to files. Enable APCu, or choose files on the Storage screen. If only some web nodes lack it, this result is from the one that answered.', 'basic-firewall' )
+			);
+		}
+
+		$directory = Cache_Backend::directory();
+
+		if ( 'filesystem' === $backend && null !== $directory && ! wp_is_writable( $directory ) ) {
+			return self::recommended(
+				__( 'The firewall\'s cache directory is not writable', 'basic-firewall' ),
+				sprintf(
+					/* translators: %s: directory path. */
+					esc_html__( '%s cannot be written to, so agent detection runs uncached — roughly 600 ms on every request that reaches a user agent rule. Rebuild the firewall to have the directory created, or name one the web server can write.', 'basic-firewall' ),
+					esc_html( $directory )
+				),
+				self::rebuild_action()
+			);
+		}
+
+		return self::ok(
+			__( 'The firewall is caching where it was told to', 'basic-firewall' ),
+			sprintf(
+				/* translators: %s: where the cache is, as a phrase. */
+				esc_html__( 'Parsed user agents and verified crawlers are cached in %s.', 'basic-firewall' ),
+				esc_html( Cache_Backend::describe() )
 			)
 		);
 	}

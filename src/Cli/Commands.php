@@ -9,6 +9,9 @@ declare( strict_types = 1 );
 
 namespace Kanopi\BasicFirewall\Cli;
 
+use Kanopi\BasicFirewall\Cache\Cache_Backend;
+use Kanopi\BasicFirewall\Cache\Cache_Clearer;
+use Kanopi\BasicFirewall\Cache\Cache_Warmer;
 use Kanopi\BasicFirewall\Health\Site_Health;
 use Kanopi\BasicFirewall\Library_Capabilities;
 use Kanopi\BasicFirewall\Library_Loader;
@@ -235,6 +238,22 @@ final class Commands {
 
 		$forced = defined( 'BASIC_FIREWALL_MODE' ) ? (string) constant( 'BASIC_FIREWALL_MODE' ) : null;
 
+		$mode_value = null !== $forced
+			? sprintf( '%s (forced by BASIC_FIREWALL_MODE, configured as %s)', $forced, $mode )
+			: $mode;
+
+		/*
+		 * A panic file is not in the settings or the compiled configuration --
+		 * it is stat'ed on every request -- so neither can reveal it. Without
+		 * this a deploy script reading `Mode` would report a firewall that is
+		 * enforcing nothing as healthy.
+		 */
+		$panic = $plugin->runner()->panic_switch();
+
+		if ( null !== $panic && $panic['active'] ) {
+			$mode_value = sprintf( '%s — PANIC FILE ACTIVE, configured as %s', $panic['effective'], $panic['configured'] );
+		}
+
 		$rows = array(
 			array(
 				'setting' => 'Enabled',
@@ -242,9 +261,17 @@ final class Commands {
 			),
 			array(
 				'setting' => 'Mode',
-				'value'   => null !== $forced
-					? sprintf( '%s (forced by BASIC_FIREWALL_MODE, configured as %s)', $forced, $mode )
-					: $mode,
+				'value'   => $mode_value,
+			),
+			array(
+				'setting' => 'Lockdown',
+				'value'   => $plugin->runner()->is_locked_down()
+					? 'ACTIVE — refusing everyone but the allowlist, recording nobody'
+					: 'off',
+			),
+			array(
+				'setting' => 'Panic file',
+				'value'   => $this->panic_summary( $panic ),
 			),
 			array(
 				'setting' => 'Library',
@@ -294,10 +321,33 @@ final class Commands {
 			WP_CLI::warning( sprintf( '%s: %s', $missing['feature'], $missing['reason'] ) );
 		}
 
+		if ( null !== $panic && $panic['active'] ) {
+			WP_CLI::warning( sprintf( 'A panic file is forcing "%s". Remove %s to return to "%s".', $panic['effective'], (string) $panic['path'], $panic['configured'] ) );
+		}
+
 		if ( 'log' === $mode ) {
 			WP_CLI::log( '' );
 			WP_CLI::log( 'Mode is "log": rules are evaluated and matches recorded, but nothing is blocked.' );
 		}
+	}
+
+	/**
+	 * Summarise the panic switch.
+	 *
+	 * @param array{active: bool, path: string|null, problem: string|null, configured: string, effective: string}|null $panic The switch as the runner reports it.
+	 */
+	private function panic_summary( ?array $panic ): string {
+		if ( null === $panic ) {
+			return '' === trim( (string) Plugin::instance()->settings()->get( 'global.panic_file', '' ) )
+				? 'not configured'
+				: 'configured, no file present';
+		}
+
+		if ( $panic['active'] ) {
+			return sprintf( 'ACTIVE at %s, forcing %s', (string) $panic['path'], $panic['effective'] );
+		}
+
+		return sprintf( '%s %s, so it is being ignored', (string) $panic['path'], (string) $panic['problem'] );
 	}
 
 	/**
@@ -679,6 +729,79 @@ final class Commands {
 		}
 
 		WP_CLI::success( sprintf( 'Released %d client(s).', $cleared ) );
+	}
+
+	/**
+	 * Discard what the firewall has cached, on every backend.
+	 *
+	 * Parsed user agents and reverse-DNS verdicts, wherever they are kept.
+	 * The parsed configuration and imported list bodies are kept, because the
+	 * firewall is weaker until they come back. No --yes: losing a cache costs a
+	 * rebuild and nothing else.
+	 *
+	 * APCu belongs to the web server's processes, so this clears the command
+	 * line's own APCu and not the web server's. The Clear cached data button on
+	 * the Storage screen runs in a web request and reaches it.
+	 *
+	 * ## EXAMPLES
+	 *
+	 *     wp basic-firewall clear-cache
+	 *
+	 * @subcommand clear-cache
+	 *
+	 * @param array<int, string>    $args       Positional arguments.
+	 * @param array<string, string> $assoc_args Flags.
+	 */
+	public function clear_cache( array $args, array $assoc_args ): void {
+		$cleared = ( new Cache_Clearer() )->clear();
+
+		if ( 'apcu' === Cache_Backend::configured() ) {
+			WP_CLI::warning( 'The cache backend is APCu, whose memory belongs to the web server. This cleared the command line\'s APCu, not that one: use Clear cached data on the Storage screen.' );
+		}
+
+		WP_CLI::success( array() === $cleared ? 'There was no cached data to clear.' : sprintf( 'Cleared: %s.', implode( ', ', $cleared ) ) );
+	}
+
+	/**
+	 * Build the agent detection data now, so a visitor does not pay for it.
+	 *
+	 * Identifying an agent means compiling a 1.7 MB pattern set, which the
+	 * first request to reach a user agent rule otherwise pays for -- worth a
+	 * place in a deployment step. Builds only what the rules read: the library
+	 * stops at the deepest phase the conditions ask for.
+	 *
+	 * Only the agent corpus can be built ahead of time. Everything else the
+	 * firewall caches is keyed on a visitor's address.
+	 *
+	 * ## EXAMPLES
+	 *
+	 *     wp basic-firewall warm-cache
+	 *
+	 * @subcommand warm-cache
+	 *
+	 * @param array<int, string>    $args       Positional arguments.
+	 * @param array<string, string> $assoc_args Flags.
+	 */
+	public function warm_cache( array $args, array $assoc_args ): void {
+		$report = ( new Cache_Warmer() )->warm();
+
+		if ( 0 === $report['rules'] ) {
+			WP_CLI::success( 'No user agent rule caches, so there is no agent corpus to build.' );
+
+			return;
+		}
+
+		/*
+		 * Said plainly rather than left to be discovered. APCu memory belongs
+		 * to the process pool that filled it, so this has warmed the command
+		 * line's own APCu and the web server's is still cold -- a success line
+		 * on its own would be actively misleading.
+		 */
+		if ( 'apcu' === Cache_Backend::configured() ) {
+			WP_CLI::warning( 'The cache backend is APCu, which this cannot reach from the command line: what was built here is this command\'s own, and the web server\'s is still cold. Use Build cached data now on the Storage screen, which runs in a web request.' );
+		}
+
+		WP_CLI::success( sprintf( 'Built the agent corpus for %d rule(s) in %d ms.', $report['rules'], $report['ms'] ) );
 	}
 
 	/**

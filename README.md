@@ -22,8 +22,11 @@ its habit of writing down what does not work.
 - [Rule types](#rule-types)
 - [Presets](#presets)
 - [Storage](#storage)
+- [Caching on hosting where shared storage is slow](#caching-on-hosting-where-shared-storage-is-slow)
 - [Logging](#logging)
+- [Reacting to a decision](#reacting-to-a-decision)
 - [Export and import](#export-and-import)
+- [During an incident](#during-an-incident)
 - [wp-config.php options](#wp-configphp-options)
 - [WP-CLI commands](#wp-cli-commands)
 - [Multisite](#multisite)
@@ -57,7 +60,9 @@ Three things in that table are worth acting on.
 and parsing it used to happen on every request. The plugin points the library's
 cache at `cache/compiled` inside the private directory — persistent, beside the
 compiled file, and not the system temporary directory, which gets cleared. Every
-clear costs that 42 ms again, on every php-fpm worker.
+clear costs that 42 ms again, on every php-fpm worker. Where the private
+directory is a network mount, `BASIC_FIREWALL_CACHE_DIR` moves it — see
+[caching](#caching-on-hosting-where-shared-storage-is-slow).
 
 **File storage is the one cost that grows with an attack.** Its lookup is
 proportional to the size of the block list, so it gets slower exactly when the
@@ -105,9 +110,12 @@ which of the two you have and says so.
 [below](#the-private-directory-and-why-wordpress-makes-this-hard) — WordPress has
 no private file system, and on nginx the usual guard files do nothing at all.
 
-**A rate limit cannot depend on who is asking.** The counter is keyed on address
-and pattern, never on the account. A premium *endpoint* can carry its own limit;
-a premium *user* cannot. Per-user quotas belong in the application.
+**A rate limit cannot give different visitors different allowances.** A limit
+can count something other than the address — the username posted to
+`wp-login.php`, say — but every bucket it counts gets the same allowance. A
+premium *endpoint* can carry its own limit; a premium *user* cannot. Per-user
+quotas belong in the application, where the account is known. See
+[How a rate limit counts](#how-a-rate-limit-counts).
 
 **WP-Cron is request-driven.** Source refreshes and log pruning run on WP-Cron,
 which fires when somebody visits the site. On a quiet site they run late or not
@@ -350,30 +358,40 @@ generated.
 | IP address | Client IP — single addresses, CIDR blocks, `start-end` ranges, IPv4 and IPv6 |
 | Request / URL | Method, host, path, scheme, port, query, POST body, headers, cookies |
 | User agent | Automated flag, bot flag, device, browser, OS, brand, model — parsed, not string-matched |
-| Rate limit | Requests per address, per time window, per pattern |
-| ASN | Autonomous system number or organisation. Needs a MaxMind ASN database |
-| Geolocation | Country, continent, city, postal code, timezone. MaxMind database or CDN headers |
+| Rate limit | Requests per address — or per account, header or field — per time window, per pattern |
+| Edge signal | The TLS fingerprint (JA3, JA4) or bot score your CDN computed. Needs a CDN sending the headers, and trusted proxies |
+| ASN | Autonomous system number (`asn`) or organisation (`asn_org`). Needs a MaxMind ASN database |
+| Geolocation | Country, continent, city, postal code, timezone, coordinates. MaxMind database or CDN headers |
 | Vulnerability score | Method, country, network, attack patterns, user agent — summed |
 | IP reputation | AbuseIPDB confidence score. Free API key, one cached lookup per visitor per day, fails open |
 | OWASP Core Rule Set | The full CRS ruleset, via `kanopi/crs-engine` |
 
 ### Responses
 
-Six, evaluated in order, and a match ends evaluation. Within a group, lower
-weights run first.
+Six, evaluated in this order. Within a group, lower weights run first.
 
 | Response | What happens | Recorded? |
 |---|---|---|
 | **Allow** | Let the request through and stop evaluating | no |
-| **Challenge** | Serve an interstitial the visitor must solve | no |
 | **Mark** | Let the request through, and flag it | only if you say so |
 | **Record** | Let the request through, and block them next time | yes |
+| **Challenge** | Serve an interstitial the visitor must solve | no |
 | **Redirect** | Send the visitor somewhere else | only if you say so |
 | **Block** | Reject the request | yes, unless you say not to |
 
-The last four need `kanopi/firewall` 2.26.0 or later. On an older library they
-are not offered, and a rule carrying one is skipped at compile time with a
-warning rather than compiled into something the library would never evaluate.
+Two parts of that order are worth stating, because the obvious order is
+different. **Mark and record do not end evaluation, and run even on a request
+something below is about to refuse** — a signal that only appeared on requests
+nobody refused could not be correlated with a block, and a honeypot has to
+record the client even though something below ends the request. And **redirect
+beats block** because the terminal responses run gentlest first: a redirect
+leaves the visitor somewhere to go.
+
+The last four arrived in `kanopi/firewall` 2.26.0, which the plugin's ^2.33
+requirement covers. On an older library — possible when a site's own Composer
+autoloader wins the race — they are not offered, and a rule carrying one is
+skipped at compile time with a warning rather than compiled into something the
+library would never evaluate.
 
 **Refusing and recording are separate.** That split is what makes two common
 setups possible:
@@ -384,7 +402,8 @@ setups possible:
   not do. That is `record`, or `mark` if you only want the signal.
 - **A lockdown.** A rule that refuses everybody and records them leaves a block
   list full of customers once it is lifted, each on an escalating ban nobody
-  asked for. Set **Record the client** to *No* on the block rule.
+  asked for. Set **Record the client** to *No* on the block rule — or use
+  [Lockdown](#lockdown-refuse-everyone-but-a-list), which is that, already built.
 
 **Reading a mark from your own code.** A marked request is allowed through and
 flagged, and the plugin hands that to WordPress on both evaluation paths:
@@ -405,6 +424,150 @@ pipeline — that was never written to know this plugin exists.
 a 301 is cached by browsers and intermediaries more or less forever: somebody
 caught by a rule you later tune would keep being sent to the notice page long
 after it stopped matching them.
+
+**A redirect is a redirect in every mode that acts.** In `exception` mode the
+library hands the redirect to the plugin rather than sending it, and the plugin
+answers it the way the library would have — the destination, the status, and
+`Cache-Control: no-store`. On the wp-config.php path `exception` mode fails open
+on every outcome, redirects included; it is a mode for testing.
+
+**A redirect has to name somewhere.** That is not tidiness. The library does not
+reject a redirect rule with no destination when it loads; it throws when the
+rule *matches*, so every request the rule was written for becomes a firewall
+error — which the plugin fails open on, serving the visitor as though the rule
+did not exist and never reaching a block rule below it. The rule screen refuses
+to save one, and refuses a destination beginning `//`, which reads like a path
+and sends the visitor to another site. Anything that bypasses the screen — an
+import, WP-CLI, a hand-edited option — is caught by the compiler instead, which
+skips the rule and says so on the Status screen. On a URL rule whose own path
+conditions look like they match the destination, you get a warning: that
+combination is a loop the visitor experiences as a dead browser.
+
+A mark name has to be letters, numbers, hyphens and underscores, because it
+becomes part of a request attribute key your code addresses. A redirect or mark
+carries no status code of its own, so that field disappears when you choose
+either.
+
+**The Test screen names all three.** A redirect is reported as *Redirected*,
+with the destination and status, and a record or mark as *Served, and recorded
+for next time* or *Served, and marked*. Both of those serve the request by
+design, and reporting them as *Allowed* — which is what the screen says when no
+rule matched at all — would tell somebody testing their honeypot that it does
+not work at the moment it has just caught them.
+
+### Giving a rule opening hours
+
+Any rule can declare when it is awake, under **When this rule is awake** on the
+rule screen: a timezone, a set of days, one or more hour ranges, and optionally
+a first and last date. Leave it all alone and the rule is awake always, which is
+what nearly every rule wants.
+
+"Block this country outside business hours." "Turn this rate limit on for the
+campaign." "Allow the deploy pipeline during the maintenance window." Each of
+those is otherwise a rule somebody disables and remembers to re-enable — or
+does not.
+
+A range whose end is earlier than its start runs over midnight, so `18:00-06:00`
+is the evening and the night that follows it. Several ranges can be given at
+once, separated by commas — `09:00-12:00, 13:00-17:00` — and are compiled as a
+list, because the library reads one string as one range and refuses a line of
+several as malformed. A bare `until` date closes at the end of that day, so a
+one-day campaign runs for the day. Ticking every day is the same as ticking
+none, and a timezone on its own is not a window: neither is written into the
+compiled file.
+
+**The window is checked before the rule is evaluated**, not after. A sleeping
+geolocation rule costs a comparison rather than a database lookup, and — more
+usefully — a sleeping rate limit does not spend a request out of somebody's
+budget for a window it was never going to enforce.
+
+**The rule list says which rules are asleep, and when they wake.** A sleeping
+rule matches nothing, which from the outside looks exactly like a broken one, so
+the Response column answers it directly — *Block — asleep now (until Mon 18:00
+PDT)* — in the rule's own timezone, rather than leaving you to work out what
+time it is somewhere else. A window whose last date has passed says so, and one
+the library cannot read says the rule is not running. An observing rule says
+both: *Block — observing only, awake now (until …)*.
+
+#### Daylight saving is followed, not corrected for
+
+Comparisons are wall-clock time in the rule's own zone, so a window means what
+somebody standing in that timezone would say it means:
+
+- **Spring forward.** On the day the clocks jump from 02:00 to 03:00, a
+  `01:00-03:00` window is simply shorter — no local time inside the gap
+  happens, so none is matched.
+- **Fall back.** On the day 01:30 happens twice, a window covering it is active
+  both times, because both are 01:30 locally.
+
+Neither is a bug being worked around. A rule about business hours should follow
+the clock on the wall of the business.
+
+#### Three things worth knowing
+
+**The timezone defaults to your site's**, from *Settings → General*, not to UTC.
+The library defaults an unnamed zone to UTC on purpose, so a rule means the same
+thing wherever it is deployed — right for a library, wrong for this screen,
+where somebody typing business hours means their own. The zone is always
+written out, so the compiled file and the screen never disagree.
+
+**A window that cannot be read stops the rule.** The library does not guess:
+treating a schedule it cannot read as always-on would silently over-block, and
+always-off would silently stop protecting, so the rule fails to start. The rule
+screen hands the window to the library before saving and refuses what it
+refuses, in the library's words. A window that arrives another way — an import,
+WP-CLI — is caught by the compiler, which skips the rule and names it on the
+Status screen.
+
+**It needs the library to keep it.** Windows arrived in `kanopi/firewall`
+2.27.0. On an older library — possible when a site's own Composer autoloader
+wins the race — the window is not offered, a stored one is kept rather than
+cleared by an unrelated edit, and the compiler skips a scheduled rule rather
+than letting it run at all hours.
+
+### Observing a rule before letting it act
+
+Any rule can be set to **Observe only**, on the rule screen. It is evaluated
+normally and every match is logged at `warning`, then treated as no match — so
+evaluation carries on and every other rule enforces exactly as before.
+
+This is the answer to the question every new rule raises: *what will this
+actually catch?* Without it the options are enforcing a rule nobody has measured
+and finding out from visitors, or setting the whole firewall to log mode and
+stopping every other rule enforcing with it. Neither is a reasonable thing to
+ask somebody, which is why unsure rules get left disabled, where they say
+nothing at all.
+
+The workflow it exists for:
+
+1. Add the rule and tick **Observe only**.
+2. Leave it a week.
+3. Open the **Log** screen and set the enforcement filter to *Observed only*,
+   with the rule chosen. That is exactly what this rule would have done.
+4. Look at what it caught. If it is what you expected, clear the box.
+
+Worth knowing:
+
+- **It is independent of the response.** A block rule set to observe refuses
+  nobody; a challenge rule set to observe challenges nobody. The response
+  records what the rule *would* do, which is the thing you are measuring.
+- **The rule list says so.** An observing rule's Response column reads
+  *Block — observing only* rather than *Block*, because a page you opened to
+  check what your firewall does should not tell you the opposite.
+- **The Test screen says so too.** A request an observing rule matches is
+  reported as *Matched, but only observed* rather than as allowed — otherwise
+  testing the rule you just set to observe would report that it does not work.
+- **It fails towards doing nothing.** The box is only offered when the installed
+  library honours it. On a library that would ignore the key — possible when a
+  site's own Composer autoloader wins the race — the compiler skips an observing
+  rule and says so on the Status screen, rather than letting it enforce while
+  the screen says it is watching.
+- **A typo enforces.** The library accepts `log`, `block` and `enforce` in the
+  underlying `metadata.mode` and warns about anything else, then enforces. That
+  is deliberate upstream: `mode: observe` and `mode: lgo` are both easy to write
+  and neither observes anything. The screen only ever stores a value the library
+  accepts, so this concerns a hand-edited compiled file or Advanced YAML, not
+  the interface.
 
 ### Adding your own rule type
 
@@ -602,6 +765,140 @@ generic HTTP client libraries. **A rule written as `bot equals true` has been
 letting sqlmap and nikto straight through.** The rule screen says so where the
 variable is chosen.
 
+### Verifying a crawler is the crawler it claims to be
+
+A user agent is whatever the client typed. An allow rule for `bot equals true`
+is therefore a skeleton key: anyone can send `Googlebot/2.1` and be let past
+every rule below it. Since that is a rule people are actively encouraged to
+write, the hole is worth closing.
+
+Tick **Verify the crawler** on a user agent rule and list the domains you
+accept — `googlebot.com`, `search.msn.com`, `applebot.apple.com`,
+`duckduckgo.com`. The firewall then does the round trip Google, Bing, Apple and
+DuckDuckGo all document: reverse-resolve the address, check the hostname sits in
+a domain you named, then forward-resolve that hostname and confirm it comes back
+to the address it started from. Reverse DNS alone proves nothing — anyone
+controlling an address can put any name on it — so the forward confirmation is
+the part that makes it proof.
+
+Matching is on a label boundary, so `googlebot.com` does not accept
+`evilgooglebot.com`. The screen refuses anything that is not a domain — a URL, a
+wildcard, a bare `com` — and refuses verification with no domain listed, since
+the library treats that as matching nobody.
+
+It **fails closed**: no PTR record, a hostname outside your list, a forward
+lookup that does not return, or DNS being unreachable all mean the rule does not
+match. On an allow rule that is the safe direction — an unverified client is
+simply treated as ordinary traffic.
+
+**A local caching resolver is a prerequisite.** Verification was measured
+upstream at about 112 ms cold — 38 ms reverse plus 74 ms forward — against
+3.5–5 ms for the firewall's entire evaluation. `systemd-resolved`, `dnsmasq` or
+`unbound` takes that to roughly 2 ms. A cached verdict costs 0.02 ms, and
+verification only runs *after* the rule's conditions have matched, so most
+requests never pay it. But the cold figure is what a cache miss costs, and PHP
+cannot put a timeout on a DNS lookup — neither `gethostbyaddr()` nor
+`dns_get_record()` accepts one — so without a local resolver a slow nameserver
+is bounded only by the system resolver's own retries. The library trips a
+breaker after one slow lookup, and fails closed until it resets.
+
+#### It is not switched off by keeping rule lists offline
+
+The plugin keeps every rule-list refresh off the request path, by defining
+`KANOPI_FIREWALL_SOURCES_OFFLINE` on both evaluation paths. Until
+`kanopi/firewall` 2.33.0 the verifier read that same switch, so on a default
+install every verifying rule matched nobody, with nothing but a debug line to say
+so. The Drupal module answered that by refusing to save verification until the
+site opted out of offline sources — which also lets rule lists refresh while a
+visitor waits.
+
+2.33.0 gave verification its own switch, and the compiler writes
+`verify_offline: false` on every rule that verifies: ticking the box is asking
+for the lookups. `BASIC_FIREWALL_SOURCES_OFFLINE` goes on meaning only what its
+name says.
+
+On an older library — possible when a site's own Composer autoloader wins the
+race — the old behaviour is refused rather than faked. The screen will not save
+verification that cannot run, and Site Health reports an existing rule in that
+state as critical, because such a rule silently matches nobody. On a library too
+old to verify at all, the setting is not offered and the compiler skips a rule
+carrying it: that library would ignore the key and let every self-declared
+crawler through.
+
+### Reading what the CDN worked out
+
+The **Edge signal** rule matches on what a CDN computed at the edge and this
+site cannot: a **TLS fingerprint** — `ja3`, `ja4` — which identifies the client
+stack rather than what it claims to be, so a script wearing a browser's user
+agent still negotiates TLS like a script; and a **bot score**, the edge's own
+verdict from signals that never reach the origin. Arrived in
+`kanopi/firewall` 2.27.0, which the plugin's ^2.33 requirement covers.
+
+Choose the CDN — Cloudflare, Fastly, or *something else* with the header names
+typed as `signal: Header-Name`. Akamai and CloudFront are not named on purpose:
+Akamai's headers are configured per property and CloudFront computes no bot
+signal, so a named profile for either would be invented header names that look
+authoritative and match nothing.
+
+Three things to know before writing one:
+
+- **An edge header is a claim, not a fact.** Anything that can reach the site
+  directly can send `Cf-Bot-Score: 99`, so the library believes these headers
+  only on a request that arrived through a trusted proxy. Without
+  [trusted proxies](#proxies-and-the-client-ip) the rule matches nothing and
+  logs a warning on every request, and the rule screen says so.
+- **None of the headers arrive by default.** Cloudflare's need Managed
+  Transforms switched on per zone; Fastly's are set in VCL. A missing header
+  matches nothing rather than matching wrongly.
+- **Cloudflare's bot score runs backwards.** 1 is certainly a bot and 99
+  certainly a human — the opposite of every other score in the firewall. The
+  rule that blocks bots is `bot_score` *is less than or equal to* `5`. Written
+  the habitual way round, `bot_score` *is greater than* `30` on a block rule
+  blocks the humans, and it looks like it is working: what it lets through is
+  the automation. Try it with **Observe only** first.
+
+A custom CDN naming no header the library can read, or a signal it does not
+know, is refused on the screen and skipped by the compiler: the library refuses
+to start on either, and a firewall that cannot start fails open on every rule.
+
+### Where a location or a network comes from
+
+A **Geolocation** rule reads from one of two places, chosen on the rule under
+*Reader*; an **ASN** rule reads only the first.
+
+- **A MaxMind database**, looked up on this server. Authoritative, needs no
+  proxy configuration, and fills every field — but MaxMind databases cannot be
+  redistributed, so the plugin never ships one. Give the path to the `.mmdb`
+  file: relative resolves inside the private directory, absolute is used as
+  given. A path to a file that is not there yet saves with a warning, because the
+  download job may not have run; until it does, the rule matches nothing.
+- **The lookup your CDN already did**, read from a request header. Nothing to
+  license and no lookup cost — but a geo header is a claim, not a fact. Anything
+  that can reach the site directly can send `CF-IPCountry: US`, so the firewall
+  believes it only from a trusted proxy, and the rule warns when the site has not
+  said it is behind one. Only Cloudflare sends anything unasked, and only the
+  country; a field the CDN does not send matches nothing rather than wrongly. For
+  a CDN not in the list, map each field to its header, one `field: Header-Name`
+  per line. The fields are the library's — `country`, `country.name`,
+  `continent`, `city`, `postal`, `region`, `location.latitude`,
+  `location.longitude` — and any other is refused, because the library refuses
+  to start on it and the firewall then fails open on every rule.
+
+Switching source keeps the other one's settings, so switching back loses nothing.
+
+Conditions use the library's names for what a lookup returns, whichever
+source answers: `country`, `country.name`, `continent`, `city`, `postal`,
+`location.timeZone`, `location.latitude` and `location.longitude` on a
+geolocation rule; `asn` and `asn_org` on an ASN rule. Anything else resolves to
+nothing, which is why the rule screens offer no other. Earlier releases offered
+`country_name`, `timezone`, `latitude`, `longitude` and `organization`, which
+matched nothing; they are rewritten on upgrade and translated if one arrives in
+an import. `network`, once offered on the ASN rule, is not something the library
+reads at all — a rule still carrying it says so, and a network block belongs in
+an IP address rule. Coordinates are floats, so compare them with "is greater
+than" or "is less than"; an autonomous system number can be typed with or
+without its `AS`.
+
 ### How a rate limit counts
 
 The counter is keyed on the visitor's **address and the pattern that matched** —
@@ -619,6 +916,78 @@ corporate VPN, a school, a mobile carrier's gateway. And a path that both opens
 and closes with a slash (`/api/`) satisfies the library's "is this a regex?" test
 and matches any path *containing* `api`. Use `/api/*` or `/api`. The rule screen
 rejects the ambiguous form.
+
+#### Counting something other than the address
+
+A fourth field on a limit line names what to count, comma separated, using the
+vocabulary the Request / URL rule uses — `path`, `method`, `host`, `header.x`,
+`post.y`, `cookie.z`, `query.q` — plus `client_ip` and `rule_pattern`, which are
+what a line without one counts:
+
+```
+/wp-login.php 5 300 post.log        # the account being tried, from anywhere
+/wp-json/* 100 60 client_ip,path    # each endpoint, rather than the API as a whole
+```
+
+`log` is the username field on WordPress's own login form. Arrived in
+`kanopi/firewall` 2.27.0, which the plugin's ^2.33 requirement covers.
+
+**Read this before reaching for it:** the two key shapes catch opposite attacks,
+and swapping one for the other removes protection while looking like it adds
+some.
+
+| Keyed by | Catches | Misses |
+|---|---|---|
+| address | one client hammering many accounts | a botnet against one account |
+| identity, such as a posted username | many clients against one account | one client walking a list of usernames, which gets a fresh budget per name |
+
+An identity-keyed limit also **never bans**. The library records no offense for a
+key without `client_ip` in it, and the reason is stronger than "the address is not
+what misbehaved": the block list is keyed on the address, so banning there would
+let an attacker spend a victim's account budget from their own machines and get
+the *victim's* address banned — for everything, lengthening each time if
+escalation is on. The request is still refused; only the durable ban is
+withheld.
+
+So an identity-keyed limit alone leaves brute force unprotected and nothing on
+the block list. Keep the address-keyed limit and add the identity-keyed one
+beside it, rather than replacing it. The rule screen says so when you save one
+without a companion, and Site Health says so for as long as it stays that way.
+A key that *includes* `client_ip` — `client_ip, post.log` — is still
+address-keyed as far as banning goes, and is not warned about.
+
+**The companion has to be a separate rule.** Within one rate limit rule the
+library uses the first line whose pattern matches and never looks further, so
+two lines for `/wp-login.php` in the same rule leave the second doing nothing:
+
+```
+# Rule "Login accounts"
+/wp-login.php 5 300 post.log
+
+# Rule "Login addresses" — a second rate limit rule
+/wp-login.php 50 300
+```
+
+The screen refuses the same pattern twice in one rule for that reason. (The
+library's own documentation shows the pair as two entries in one list, and its
+linter accepts that; both are wrong about what the evaluator does.) The pairing
+check compares patterns as written, so `/wp-*` in another rule is not recognised
+as covering `/wp-login.php` even where it would.
+
+It also counts every attempt against the named account from anywhere, which
+means anyone can spend that account's budget for it: five failed logins as
+`alice` lock `alice` out for the window. That is the classic account-lockout
+trade — choose it when credential stuffing is the bigger worry. Setting
+**Record the client** to *Yes* on such a rule overrides the library's refusal to
+ban, and hands the ban to whichever address trips the limit next — usually the
+account's owner. The screen warns when you do.
+
+Two keys are refused outright, because they would put every request in one
+bucket and let one visitor spend the allowance for the whole site: a component
+the library cannot resolve (`pots.log`, a bare `post`), and a form field, cookie
+or query parameter named with capitals. The library lower-cases every component
+before looking it up, which is harmless for a header and means `post.userName`
+looks for `username` and finds nothing.
 
 ### Regular expressions
 
@@ -741,8 +1110,9 @@ unless replacing those is the point.
 
 | Backend | Use when |
 |---|---|
-| File | Single web node. No credentials, and the only option that works on the early path |
+| File | Single web node. No credentials needed |
 | Database | Multiple web nodes, or a block list of any size. Flat lookup cost |
+| Redis | Multiple web nodes, and you would rather expiry cost nothing. Needs `ext-redis` |
 
 Clients are keyed by IP address. **Switching backends does not move the block
 list** — each keeps its own, so a client blocked under file storage is not
@@ -761,6 +1131,52 @@ operations, and a baked snapshot goes stale silently:
 block()  -> false          the client is not recorded
 request  -> allowed        the firewall fails open
 ```
+
+### Redis, and why expiry is the interesting part
+
+File and database storage both sweep expired blocks as they go. Redis does not
+need to: a block is stored with a TTL and Redis evicts it itself, so the sweep
+has nothing to do at all. The cost is not reduced, it is gone — and that matters
+most during an attack, which is exactly when the block list is largest and when
+you least want a lapsed batch landing on one unlucky visitor.
+
+The option appears on the Storage screen only where it can work: the library has
+the backend and this PHP has `ext-redis`. The library lists the extension as a
+Composer *suggest* rather than a *require*, so it installs without it, and since
+kanopi/firewall 2.29.0 the backend degrades rather than crashing when it is
+missing — which keeps the site up and leaves a block list that stores nothing.
+No client is recorded, no repeat offender recognised, nothing escalates. So:
+
+- The Storage screen says which half is missing when Redis is not offered — the
+  library or the extension — because they are different fixes.
+- A site **already on Redis** that loses the extension keeps the setting, with
+  an error on the Storage screen, rather than being quietly moved to file
+  storage the next time anything there is saved.
+- **Site Health reports it as critical**, as it does in-memory storage, because
+  it amounts to the same thing.
+- The compiler does not fall back. The compiled file is often written from
+  WP-CLI on a box that is not a web node, so the extension being absent there
+  says nothing about the nodes serving requests. It warns instead.
+
+**The key prefix.** Left empty it is `firewall:`, which is what the library
+would use on its own — and on a network, `firewall:<table prefix>:`, so sites
+sharing one Redis do not share one block list. Anything typed is used exactly,
+so give each site its own.
+
+**Authentication.** A password alone is the ordinary `requirepass` case; fill in
+the username as well only for a server using ACLs. The password is kept as typed
+— not trimmed — and never echoed back into the page: leave the field blank to
+keep the stored one, or tick *Remove the stored password*. It is written into the
+compiled file and stripped from an export, so `%env(YOUR_VARIABLE)%` is the
+better answer: that token is not a credential, survives an export, and never
+reaches the database.
+
+Redis needs no WordPress credentials, so it works on the wp-config.php
+evaluation path exactly as it does on the mu-plugin path. If the server cannot be
+reached, the firewall carries on enforcing every rule and Site Health names the
+backend it is running without. `ext-redis` also emits a PHP warning of its own
+when a connection fails, which the library cannot suppress, so a wrong host is
+noisy in the log as well as reported.
 
 ### What a block record keeps
 
@@ -788,6 +1204,118 @@ records hold one**, which is the actionable version of the same warning.
 Redaction happens on the way in, so records written before this existed are
 unaffected by the setting. They expire with their bans; clearing the block list
 removes them sooner, at the cost of unblocking whoever is in it.
+
+## Caching on hosting where shared storage is slow
+
+The block list is one thing the firewall writes; the other is what it *works
+out* — parsed user agents and verified crawler names. All of that is cached, and
+by default all of it is cached in files in the private directory, under uploads.
+
+On hosting where uploads is a network mount — most managed WordPress hosting —
+this is usually where the firewall spends its time: not one slow read but many
+small ones through the request. The Storage screen offers three answers:
+
+| Backend | Use when |
+|---|---|
+| Files | The default. Leave the directory empty for the private directory, or name somewhere local such as `/tmp/basic-firewall` |
+| The WordPress object cache | The site has a persistent object cache — an `object-cache.php` drop-in for Redis or Memcached |
+| APCu | No shared cache. Memory per web node, not shared between them |
+
+Everything here can be worked out again. Losing it costs a rebuild, never a
+client going unblocked, so a volatile backend is a legitimate choice: APCu is cold
+after PHP restarts and a container-local directory is empty after a redeploy, and
+neither costs correctness.
+
+**The object cache means a persistent one.** Without a drop-in, WordPress's
+object cache is an array that forgets everything when the request ends, and
+handing that to the firewall would rebuild the agent detection corpus — the
+better part of a second — on every request. So the option is offered only where
+the object cache is persistent; a site that chose it and then lost its drop-in
+caches in files instead, and Site Health says so. Entries live in a
+`basic_firewall` group of their own, per site on a network, and clearing them
+never flushes the rest of the site's cache.
+
+**APCu means enabled in the web server's PHP.** It is offered only where it is,
+because the library does not fall back to files when the pool it was told to
+build cannot be built — it runs detection uncached, roughly 600 ms a request.
+Site Health reports that as critical.
+
+**Three reach the wp-config.php path; one cannot.** Files and APCu are written
+into the compiled configuration as a pool class and its arguments, which is all
+that path has. The object cache is handed to the library as a live object while
+WordPress loads, and on the wp-config.php path there is no WordPress to take it
+from — so a site using that path keeps files there, and only there.
+
+**One setting covers agent detection and crawler verification together.** A user
+agent rule does not say where it caches; the Storage screen does, for every
+rule at once. The AbuseIPDB rule is the exception: the library takes a directory
+for it and no pool, so it stays on files whatever is chosen.
+
+### The two caches that can only be files
+
+The parsed configuration and the bodies of imported rule lists cannot use the
+backend above: both are read on the wp-config.php path before WordPress exists.
+They are small — one PHP file the opcode cache then serves from memory, plus one
+file per list — but on a network mount they are still reads. Move them with a
+constant, which both evaluation paths read:
+
+```php
+define( 'BASIC_FIREWALL_CACHE_DIR', '/tmp/basic-firewall' );
+```
+
+A constant, not a field on the Storage screen, on purpose. A setting would reach
+the mu-plugin path and WP-CLI but not the early path, so cron would refresh the
+list bodies into one directory while requests looked for them in another — and
+every rule built on a list would match nothing there, without a word. With the
+constant set, the AbuseIPDB cache and the files backend's default follow it too,
+so nothing the firewall caches touches uploads. What remains there is the
+compiled configuration itself, which is read once per request and cannot move,
+and whatever the block list and the log are configured to use.
+
+**The block list is not a cache.** Do not reach for this section to make *it*
+faster — use database or Redis storage for that, and the database log handler
+instead of the file one. Those are the write-heavy settings, and they are where
+a site on slow shared storage should look first.
+
+### Building it ahead of time
+
+The agent corpus is the one expensive thing here: identifying an agent means
+compiling a 1.7 MB pattern set, and the first request to reach a user agent rule
+after a deploy, a clear or a PHP restart pays for it — the better part of a
+second. `wp basic-firewall warm-cache` pays it now instead, which is worth a
+place in a deployment step. The Storage screen has **Build cached data now**
+beside the clear button, and every rebuild — a settings save, an activation, an
+upgrade — schedules one on WP-Cron thirty seconds later, so an administrator
+saving a form does not pay for it either.
+
+On APCu the button is the only thing that works. APCu memory belongs to the
+process pool that filled it, so a warm from the command line fills the command
+line's own and leaves the web server's cold; the command says so rather than
+reporting a success that means nothing. A scheduled warm reaches it only when
+WP-Cron runs in a web request — not with `DISABLE_WP_CRON` and a system cron
+calling WP-CLI.
+
+It builds only what the rules read. The library stops parsing at the deepest
+phase the conditions ask for, so a site whose rules only ask `automated` gets the
+bot corpus and not the client, OS and device corpora it never looks at. A rule
+with *Cache agent detection* off is left alone.
+
+Only the agent corpus can be built ahead of time. Everything else the firewall
+caches — reverse-DNS and AbuseIPDB verdicts — is keyed on the visitor's address,
+and there is nothing to work out for an address that has not arrived.
+
+### Clearing it
+
+**Clear cached data** on the Storage screen discards what the firewall has
+cached, on every backend rather than only the current one — switching backends
+leaves the old one warm. Two things are kept: the parsed configuration and the
+imported list bodies, because the firewall is weaker until they come back.
+`wp basic-firewall clear-cache` does the same, with one exception it cannot fix:
+APCu memory belongs to the process pool that filled it, so a clear from the
+command line empties the command line's own APCu and leaves the web server's
+untouched. The button runs in a web request, which is the only place that clear
+can reach. WordPress has no "clear all caches" moment to hook, and
+`wp cache flush` reaches neither files nor APCu.
 
 ## Logging
 
@@ -827,6 +1355,85 @@ logger:
         args: [/var/log/firewall/firewall.log, Monolog\Level::Debug]
       - Monolog\Level::Error
 ```
+
+## Reacting to a decision
+
+Every verdict is announced as a WordPress action, so a plugin can react to one
+without polling the block list or parsing the log:
+
+```php
+add_action( 'basic_firewall_decision_blocked', function ( $event ) {
+    if ( ! $event->isEnforced() ) {
+        return; // Log mode: the rule matched, but nothing was refused.
+    }
+
+    $rule   = $event->getPlugin()?->getName() ?? 'block list';
+    $status = $event->getStatusCode();
+    $ip     = $event->getRequest()->getClientIp();
+} );
+
+// Or every decision, with its kind:
+add_action( 'basic_firewall_decision', function ( $event, string $type ) {
+    // $type is one of the names below.
+}, 10, 2 );
+```
+
+| `$type` | Announced when |
+| --- | --- |
+| `allowed` | Nothing matched, or an allow rule matched |
+| `blocked` | A blocking rule matched, or the client was already on the block list |
+| `challenged` | A visitor was asked to solve a challenge |
+| `challenge_solved` | They solved it |
+| `challenge_failed` | They did not |
+| `recorded` | A rule recorded the client without refusing them |
+| `redirected` | A rule sent the visitor elsewhere |
+| `marked` | A rule marked the request for downstream code |
+| `tarpitted` | A rule held the request before letting it continue |
+
+The Drupal module hands the library Drupal's own event dispatcher, which is
+already PSR-14. WordPress's equivalent is an action, so this plugin passes a
+small PSR-14 dispatcher that turns each decision into the two actions above. A
+few things follow from that, and are worth knowing before you build on it:
+
+- **Switch on `$type`, and duck-type the event.** Do not type-hint
+  `Kanopi\Firewall\Event\RequestBlocked`: in a release zip the library is
+  namespace-scoped, so that class name does not exist there and the callback
+  fatals. `getRequest()` and `isEnforced()` are on every event; `getPlugin()` and
+  `getStatusCode()` on a block.
+- **`getStatusCode()` is the rule's own code.** A rule left on the site-wide code
+  reports `0`: the library announces before it resolves that to the General
+  screen's status code. Set a code on the rule if a listener needs the number.
+- **A listener cannot change the verdict.** The events carry no setters and an
+  action's return value is discarded. Blocking decisions belong to rules.
+- **A listener that throws is not an outage.** The exception is written to the
+  PHP error log and the request carries on exactly as it would have — though
+  WordPress stops the rest of that action's callbacks for that decision. It also
+  means a listener is not the place for anything the request depends on: if it
+  fails, traffic will not tell you.
+- **`isEnforced()` is how log mode is visible.** In log mode a decision is still
+  announced, carrying the rule and the status it *would* have returned, with
+  `isEnforced()` false. That is what lets you measure a new rule against live
+  traffic before switching it on.
+
+**When they arrive.** The firewall evaluates at `muplugins_loaded`, before any
+regular plugin or theme has loaded, so an action fired there would reach only
+mu-plugins. Decisions are held and announced at `plugins_loaded` instead, once
+plugins have had the chance to listen. A refusal ends the request before that,
+so it is announced at shutdown — by which point WordPress has only loaded
+mu-plugins, so **to hear refusals, listen from an mu-plugin**. On the
+[wp-config.php path](#the-one-line-that-matters) the decisions that let a
+request through wait for WordPress in the same way, but a refusal exits before
+WordPress loads at all and is **never announced**.
+
+`basic_firewall_request_marked`, [above](#responses), predates this and fires as
+the mark is made — on the ordinary path, at `muplugins_loaded`. From a regular
+plugin, listen for `basic_firewall_decision_marked` or ask `Runner::is_marked()`
+instead.
+
+For metrics, prefer the library's own StatsD listener, declared under
+`metrics.statsd` in the Advanced YAML: it runs inside the library, on both
+paths, refusals included, and a Prometheus counter would not survive the
+PHP-FPM process that incremented it anyway.
 
 ## Export and import
 
@@ -877,6 +1484,83 @@ receiving site would erase its challenge secret — and a firewall that cannot
 start fails open, so every rule silently stops being enforced while the interface
 goes on reporting "Blocking".
 
+## During an incident
+
+### Lockdown: refuse everyone but a list
+
+Under attack and want only the office in? Tick **Lockdown** near the bottom of
+the General screen and name the addresses to keep serving. Every other rule stops
+mattering: a client not on that list is refused before any rule is consulted,
+with a 503 and `Retry-After` — temporary, which is what a CDN needs to hear
+rather than caching the refusal as a verdict.
+
+The part that makes this worth having rather than building it from an allow rule
+and a block-everything rule: **nobody is recorded**. That pairing refuses the
+same traffic and writes every refused client to the block list — an internet's
+worth of addresses, during exactly the incident when your storage is under the
+most pressure, each left on an escalating ban once the lockdown is lifted.
+
+Four things to know before you reach for it:
+
+- **An empty allowlist serves nobody.** The library treats absent and empty
+  alike, which is the honest reading of the word. The General screen refuses to
+  save that combination, and the compiler refuses it from an import or WP-CLI
+  too — reported, and not applied.
+- **Addresses and CIDR blocks only.** An IP rule also accepts `start-end`
+  ranges; the library does not match them on this list, so the screen refuses
+  them rather than keeping an entry that would silently match nobody.
+- **Check your own address is on the list.** The screen shows the address the
+  firewall sees for you — after trusted proxies, so behind a CDN it is yours and
+  not the CDN's — and warns if the list does not cover it. A warning rather than
+  an error, because allowlisting the office range from a laptop elsewhere is a
+  real thing to want. `define( 'BASIC_FIREWALL_ENABLED', false )` is the way back
+  in if you get it wrong.
+- **The panic file can arm it too**, with `echo lockdown > /path/to/panic`,
+  which is the no-deploy route into it and out again. See below.
+
+While it is on, Site Health reports it as critical, the Status screen leads with
+it and `wp basic-firewall status` carries a `Lockdown` row.
+
+### Turning the firewall down without a deploy
+
+`BASIC_FIREWALL_MODE` works, but it lives in `wp-config.php`, and on most
+hosting changing that file is a release — which is the wrong speed when a rule is
+refusing real customers.
+
+Set a **panic file** at the bottom of the General screen, then during an
+incident:
+
+```console
+echo log > /path/to/panic    # stop enforcing, keep recording
+rm /path/to/panic            # back to the configured mode
+```
+
+No deploy, no cache flush, no restart, on either evaluation path. It costs one
+`is_file()` per request while a path is set, and nothing at all while it is not.
+A relative path resolves inside the private directory, which is guarded against
+web access; wherever it goes, keep it out of anything a deploy recreates. A file
+that turns the firewall down is worth exactly as much as write access to its
+path, which is also why there is no default.
+
+The file has to **name** a mode — `block`, `log`, `exception`, `disabled`, or
+`lockdown`, which refuses everyone but the [lockdown
+allowlist](#lockdown-refuse-everyone-but-a-list), so fill that in first. An
+empty file, a typo, or one that cannot be read changes **nothing** and is
+reported as a problem. That is deliberate: if any file at all meant "off", one
+left behind from an incident last month would disable the firewall and nothing
+would say so.
+
+While it is active, Site Health reports it as critical and names both the
+effective and the configured mode — which also puts it in an admin notice on
+every screen — the Status screen leads with it, and `wp basic-firewall status`
+reports it on the `Mode` and `Panic file` rows. The realistic failure here is not
+somebody flipping it; it is nobody noticing three weeks later that the site has
+been in log mode since the incident.
+
+`BASIC_FIREWALL_MODE` still wins over the panic file, so an environment that pins
+the mode keeps it pinned. The request tester ignores the file too: it answers
+what the rules decide, not what an incident has them doing.
+
 ## wp-config.php options
 
 ### The one line that matters
@@ -914,6 +1598,7 @@ All optional, all added by hand. This plugin never writes to `wp-config.php`.
 define( 'BASIC_FIREWALL_ENABLED', false );
 
 // Force a mode regardless of what is configured: block, log, exception, disabled.
+// Wins over a panic file too.
 define( 'BASIC_FIREWALL_MODE', 'log' );
 
 // Supply the challenge signing secret without storing it in the database.
@@ -934,14 +1619,18 @@ define( 'BASIC_FIREWALL_SECRET_DIRECTORIES', array( '/etc/firewall' ) );
 // else, and pass Symfony's Request::HEADER_* bitmask.
 define( 'BASIC_FIREWALL_TRUSTED_HEADERS', Request::HEADER_X_FORWARDED_FOR );
 
+// Keep the parsed configuration and imported list bodies somewhere other than
+// uploads -- local disk, where uploads is a network mount. Read on both paths.
+define( 'BASIC_FIREWALL_CACHE_DIR', '/tmp/basic-firewall' );
+
 // Let rule sources fetch over the network during a request. Off unless
 // explicitly false: a firewall that makes an outbound HTTP call while a
 // visitor waits is a firewall that fails when the network does.
 define( 'BASIC_FIREWALL_SOURCES_OFFLINE', false );
 ```
 
-Both of the last two are read on **both** evaluation paths, so they belong above
-the bootstrap snippet like the rest.
+The last three are read on **both** evaluation paths, so they belong above the
+bootstrap snippet like the rest.
 
 The interface reports when any of these is in effect, so nobody wonders why the
 setting they saved is being ignored.
@@ -983,6 +1672,8 @@ wp basic-firewall block IP          # block it
 wp basic-firewall unblock IP        # unblock it
 wp basic-firewall blocked           # list every blocked client
 wp basic-firewall clear-blocked     # empty the block list
+wp basic-firewall clear-cache       # discard parsed agents and verified crawlers
+wp basic-firewall warm-cache        # build the agent corpus before a visitor has to
 wp basic-firewall find-reference REF # which rule produced this block reference
 
 wp basic-firewall export            # portable document, credentials stripped

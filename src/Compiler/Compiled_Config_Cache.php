@@ -109,7 +109,7 @@ TXT;
 				$path
 			);
 
-			$this->record_meta( $compiler->connection_paths(), false, $problems );
+			$this->record_meta( $compiler->connection_paths(), false, $problems, $compiler );
 
 			return array(
 				'written'  => false,
@@ -118,7 +118,7 @@ TXT;
 			);
 		}
 
-		$this->record_meta( $compiler->connection_paths(), true, $problems );
+		$this->record_meta( $compiler->connection_paths(), true, $problems, $compiler );
 
 		/**
 		 * Fires after the compiled configuration has been written.
@@ -185,21 +185,31 @@ TXT;
 	/**
 	 * Record what the compile produced.
 	 *
-	 * @param list<string> $connection_paths Where credentials must be injected.
-	 * @param bool         $written          Whether the file was written.
-	 * @param list<string> $problems         Problems encountered.
+	 * @param list<string>         $connection_paths Where credentials must be injected.
+	 * @param bool                 $written          Whether the file was written.
+	 * @param list<string>         $problems         Problems encountered.
+	 * @param Config_Compiler|null $compiler         The compile, when there was one.
 	 */
-	private function record_meta( array $connection_paths, bool $written, array $problems ): void {
+	private function record_meta( array $connection_paths, bool $written, array $problems, ?Config_Compiler $compiler = null ): void {
 		$this->write_connection_paths( $connection_paths );
 
 		update_option(
 			self::META_OPTION,
 			array(
-				'connection_paths' => $connection_paths,
-				'written'          => $written,
-				'problems'         => $problems,
-				'compiled_at'      => time(),
-				'plugin_version'   => BASIC_FIREWALL_VERSION,
+				'connection_paths'   => $connection_paths,
+
+				/*
+				 * Where the object cache belongs, if the site chose it. Kept in
+				 * the option and not beside the compiled file like the
+				 * connection paths: the object cache does not exist on the
+				 * wp-config.php path, so nothing there could use them.
+				 */
+				'cache_pool_paths'   => null === $compiler ? array() : $compiler->cache_pool_paths(),
+				'verify_cache_paths' => null === $compiler ? array() : $compiler->verify_cache_paths(),
+				'written'            => $written,
+				'problems'           => $problems,
+				'compiled_at'        => time(),
+				'plugin_version'     => BASIC_FIREWALL_VERSION,
 			),
 			false
 		);
@@ -258,6 +268,37 @@ TXT;
 		$paths = $this->meta()['connection_paths'] ?? array();
 
 		return is_array( $paths ) ? array_values( array_map( 'strval', $paths ) ) : array();
+	}
+
+	/**
+	 * Where an object cache pool for agent detection belongs.
+	 *
+	 * @return list<string>
+	 */
+	public function cache_pool_paths(): array {
+		return $this->meta_list( 'cache_pool_paths' );
+	}
+
+	/**
+	 * Where an object cache pool for reverse-DNS verdicts belongs.
+	 *
+	 * @return list<string>
+	 */
+	public function verify_cache_paths(): array {
+		return $this->meta_list( 'verify_cache_paths' );
+	}
+
+	/**
+	 * A list of strings out of the recorded metadata.
+	 *
+	 * @param string $key Metadata key.
+	 *
+	 * @return list<string>
+	 */
+	private function meta_list( string $key ): array {
+		$list = $this->meta()[ $key ] ?? array();
+
+		return is_array( $list ) ? array_values( array_map( 'strval', $list ) ) : array();
 	}
 
 	/**

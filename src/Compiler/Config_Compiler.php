@@ -9,11 +9,18 @@ declare( strict_types = 1 );
 
 namespace Kanopi\BasicFirewall\Compiler;
 
+use Kanopi\BasicFirewall\Cache\Cache_Backend;
 use Kanopi\BasicFirewall\Database_Credentials;
 use Kanopi\BasicFirewall\Library_Capabilities;
 use Kanopi\BasicFirewall\Install\Challenge_Secret;
 use Kanopi\BasicFirewall\Plugin;
+use Kanopi\BasicFirewall\RuleType\Condition_Rule_Type_Base;
+use Kanopi\BasicFirewall\RuleType\Response_Settings;
+use Kanopi\BasicFirewall\RuleType\Rule_Type_Base;
+use Kanopi\BasicFirewall\RuleType\Types\Edge_Signal;
+use Kanopi\BasicFirewall\Runtime\Lockdown;
 use Kanopi\BasicFirewall\Support\Schema;
+use Kanopi\Firewall\Utility\Schedule;
 use Symfony\Component\Yaml\Yaml;
 
 /**
@@ -48,6 +55,20 @@ final class Config_Compiler {
 	private array $connection_paths = array();
 
 	/**
+	 * Paths where the object cache pool for agent detection belongs.
+	 *
+	 * @var list<string>
+	 */
+	private array $cache_pool_paths = array();
+
+	/**
+	 * Paths where the object cache pool for reverse-DNS verdicts belongs.
+	 *
+	 * @var list<string>
+	 */
+	private array $verify_cache_paths = array();
+
+	/**
 	 * Problems encountered while compiling.
 	 *
 	 * @var list<string>
@@ -60,8 +81,10 @@ final class Config_Compiler {
 	 * @return array<string, mixed>
 	 */
 	public function compile(): array {
-		$this->connection_paths = array();
-		$this->problems         = array();
+		$this->connection_paths   = array();
+		$this->cache_pool_paths   = array();
+		$this->verify_cache_paths = array();
+		$this->problems           = array();
 
 		$plugin   = Plugin::instance();
 		$settings = $plugin->settings();
@@ -86,6 +109,8 @@ final class Config_Compiler {
 		if ( array() !== $presets ) {
 			$compiled['configs'] = $presets;
 		}
+
+		$rules = $this->apply_cache_backend( $rules );
 
 		/*
 		 * A rate limit's counter connection is emitted by its rule type, which
@@ -132,6 +157,74 @@ final class Config_Compiler {
 	}
 
 	/**
+	 * Aim every rule that caches at the site-wide cache backend.
+	 *
+	 * Here rather than in each rule type, because this loop is the one place
+	 * that knows every plugin's final index -- which is what an override path
+	 * needs -- and because where the firewall caches is one site-wide choice:
+	 * rules disagreeing about it would be several caches to keep warm and
+	 * several places to look when one is on slow storage.
+	 *
+	 * Where the object cache belongs is recorded for every rule that caches,
+	 * whatever backend is chosen, so switching to it takes effect without
+	 * waiting for a recompile.
+	 *
+	 * @param array<int|string, array<string, mixed>> $rules Compiled rules.
+	 *
+	 * @return array<int|string, array<string, mixed>>
+	 */
+	private function apply_cache_backend( array $rules ): array {
+		$agents   = Cache_Backend::compiled_pool( Cache_Backend::AGENTS );
+		$verdicts = Cache_Backend::compiled_pool( Cache_Backend::VERDICTS );
+
+		$directory = Cache_Backend::directory();
+
+		/*
+		 * Created rather than assumed: the library carries on uncached when a
+		 * cache directory is unwritable, and uncached agent detection is about
+		 * 600 ms a request -- a regression that announces itself only in the log.
+		 */
+		if ( null !== $agents && 'filesystem' === Cache_Backend::configured() && null !== $directory
+			&& ! is_dir( $directory ) && ! wp_mkdir_p( $directory ) ) {
+			$this->problems[] = sprintf(
+				/* translators: %s: directory path. */
+				__( 'The cache directory %s could not be created, so the firewall caches in the private directory instead.', 'basic-firewall' ),
+				$directory
+			);
+
+			$agents   = null;
+			$verdicts = null;
+		}
+
+		foreach ( $rules as $delta => $rule ) {
+			$class    = (string) ( $rule['plugin'] ?? '' );
+			$metadata = (array) ( $rule['metadata'] ?? array() );
+
+			// The whole value: a user agent rule's `cache` is its cache
+			// configuration and nothing else. `false` is the rule opting out.
+			if ( str_ends_with( $class, '\UserAgent' ) && false !== ( $metadata['cache'] ?? null ) ) {
+				$this->cache_pool_paths[] = sprintf( '[plugins][%d][metadata][cache]', $delta );
+
+				if ( null !== $agents ) {
+					$rules[ $delta ]['metadata']['cache'] = $agents;
+				}
+			}
+
+			// Any rule can verify, and since library 2.33.0 `verify_cache`
+			// takes the same shapes as every other cache setting.
+			if ( isset( $metadata['verify'] ) ) {
+				$this->verify_cache_paths[] = sprintf( '[plugins][%d][metadata][verify_cache]', $delta );
+
+				if ( null !== $verdicts ) {
+					$rules[ $delta ]['metadata']['verify_cache'] = $verdicts;
+				}
+			}
+		}
+
+		return $rules;
+	}
+
+	/**
 	 * Compile the global section.
 	 *
 	 * @param array<string, mixed> $section Stored global settings.
@@ -172,6 +265,27 @@ final class Config_Compiler {
 			$compiled['behind_proxy'] = 'yes' === $behind;
 		}
 
+		$this->compile_lockdown( $section, $compiled );
+
+		/*
+		 * Only when set. An empty key would have the library stat a path on
+		 * every request for a switch nobody armed, and the point of the feature
+		 * is that it costs nothing until it is needed.
+		 *
+		 * Resolved to an absolute path here rather than written as typed, which
+		 * is the opposite of what the storage files get. The library resolves
+		 * those two against the directory holding the compiled file; it reads
+		 * this one with a bare is_file(), which resolves a relative path against
+		 * whatever the working directory happens to be -- the web root under
+		 * php-fpm, somewhere else entirely under WP-CLI. The same setting would
+		 * then arm a different file depending on who asked.
+		 */
+		$panic_file = trim( (string) ( $section['panic_file'] ?? '' ) );
+
+		if ( '' !== $panic_file ) {
+			$compiled['panic_file'] = Plugin::instance()->paths()->resolve( $panic_file );
+		}
+
 		$repeat = (int) ( $section['repeat_offender_status'] ?? 0 );
 
 		if ( $repeat > 0 ) {
@@ -191,6 +305,46 @@ final class Config_Compiler {
 		}
 
 		return $compiled;
+	}
+
+	/**
+	 * Compile lockdown, which is written only when it is armed.
+	 *
+	 * The library reads an absent or empty `lockdown_allow` as "serve nobody".
+	 * That is the honest reading of a mode called lockdown, and it is also the
+	 * quickest way to lock an administrator out of the site they are defending
+	 * -- the General screen refuses to save it for that reason. This is the
+	 * same refusal for every other way a document arrives: an import, WP-CLI,
+	 * or a hand-edited option. Refused means not applied and reported, which is
+	 * this plugin's posture everywhere else too: the site stays reachable, and
+	 * somebody is told why the lockdown is not in force.
+	 *
+	 * @param array<string, mixed> $section  Stored global settings.
+	 * @param array<string, mixed> $compiled The global section being built.
+	 */
+	private function compile_lockdown( array $section, array &$compiled ): void {
+		if ( true !== ( $section['lockdown'] ?? false ) ) {
+			return;
+		}
+
+		$allow = Lockdown::sort( (array) ( $section['lockdown_allow'] ?? array() ) );
+
+		foreach ( $allow['invalid'] as $entry ) {
+			$this->problems[] = sprintf(
+				/* translators: %s: the rejected allowlist entry. */
+				__( 'The lockdown allowlist entry "%s" is not an address or a CIDR block, so it was left out. The library does not match start-end ranges on this list.', 'basic-firewall' ),
+				$entry
+			);
+		}
+
+		if ( array() === $allow['valid'] ) {
+			$this->problems[] = __( 'Lockdown is switched on with no usable address on its allowlist, which would refuse everybody — including whoever is trying to switch it off. It was not applied.', 'basic-firewall' );
+
+			return;
+		}
+
+		$compiled['lockdown']       = true;
+		$compiled['lockdown_allow'] = $allow['valid'];
 	}
 
 	/**
@@ -339,6 +493,36 @@ final class Config_Compiler {
 	private function compile_storage_backend( array $storage ): array {
 		$backend = (string) ( $storage['backend'] ?? 'file' );
 
+		if ( 'redis' === $backend ) {
+			$capabilities = new Library_Capabilities();
+
+			/*
+			 * A library without the class would skip a storage type it cannot
+			 * find, so the fallback is chosen here where it can be said.
+			 *
+			 * A missing *extension* is not compiled around. The compiled file
+			 * is written by whichever PHP saved the settings -- often WP-CLI on
+			 * a box that is not a web node -- and read by every web node, so
+			 * the extension being absent here says nothing about whether it is
+			 * absent where requests are served. The library degrades on a node
+			 * without it, and Site Health says so on that node.
+			 */
+			if ( $capabilities->has_redis_storage_class() ) {
+				if ( ! Library_Capabilities::has_redis_extension() ) {
+					$this->problems[] = __( 'Redis block list storage is selected, but this PHP does not have the redis extension loaded. Any web node without it keeps no block list at all: rules still run, but no client is recorded and repeat offenders are never recognised.', 'basic-firewall' );
+				}
+
+				return array(
+					'type'   => Library_Map::STORAGE['redis'],
+					'config' => array( 'redis' => self::redis_storage_options( (array) ( $storage['redis'] ?? array() ) ) ),
+				);
+			}
+
+			$this->problems[] = __( 'Redis block list storage is selected but the installed library cannot provide it. Falling back to file storage so blocks are still recorded.', 'basic-firewall' );
+
+			$backend = 'file';
+		}
+
 		if ( 'database' === $backend ) {
 			$compiled = $this->compile_database_storage( (array) ( $storage['database'] ?? array() ) );
 
@@ -398,6 +582,56 @@ final class Config_Compiler {
 		 * deliberately, which is how a test leaves no trace.
 		 */
 		return array( 'type' => Library_Map::STORAGE['memory'] );
+	}
+
+	/**
+	 * The options the Redis block list connects with.
+	 *
+	 * Public because the block list screen and WP-CLI open the same backend
+	 * the firewall writes to, and two copies of this would drift the first time
+	 * one of them learned about a new key.
+	 *
+	 * The keys are `ext-redis`'s own spelling, because it skips an option it
+	 * does not recognise with a warning rather than refusing it: a misspelled
+	 * key looks configured and does nothing.
+	 *
+	 * @param array<string, mixed> $redis Stored `storage.redis` settings.
+	 *
+	 * @return array<string, mixed>
+	 */
+	public static function redis_storage_options( array $redis ): array {
+		$host = trim( (string) ( $redis['host'] ?? '' ) );
+
+		$options = array(
+			'host' => '' !== $host ? $host : '127.0.0.1',
+
+			// An integer, because a string port is an option `ext-redis` skips.
+			'port' => (int) ( $redis['port'] ?? 6379 ),
+		);
+
+		/*
+		 * Always written, and derived from the site when left empty. Omitting
+		 * it hands the choice to the library's bare `firewall:`, which is one
+		 * block list for every site of a network sharing the server.
+		 */
+		$prefix = trim( (string) ( $redis['prefix'] ?? '' ) );
+
+		$options['prefix'] = '' !== $prefix ? $prefix : ( new Database_Credentials() )->block_list_key_prefix();
+
+		/*
+		 * A password alone is the ordinary `requirepass` case. Only a username
+		 * with a password becomes the pair ACL authentication needs, and a
+		 * username on its own is not a credential the server accepts -- so it
+		 * is not written as one.
+		 */
+		$username = trim( (string) ( $redis['username'] ?? '' ) );
+		$password = (string) ( $redis['password'] ?? '' );
+
+		if ( '' !== $password ) {
+			$options['auth'] = '' === $username ? $password : array( $username, $password );
+		}
+
+		return $options;
 	}
 
 	/**
@@ -565,6 +799,107 @@ final class Config_Compiler {
 				continue;
 			}
 
+			/*
+			 * An observing rule the library cannot observe with is skipped.
+			 *
+			 * Without observe mode the `mode` key is ignored and the rule
+			 * enforces. Skipping it errs towards doing nothing, which is what
+			 * the administrator asked this rule to do to traffic anyway;
+			 * compiling it would refuse visitors while the screen said the rule
+			 * was only watching.
+			 */
+			if ( true === ( $rule['observe'] ?? false ) && ! $capabilities->has_observe_mode() ) {
+				$this->problems[] = sprintf(
+					/* translators: %s: rule identifier. */
+					__( 'Rule "%s" is set to observe only, which the installed firewall library cannot do — it would enforce instead. It was skipped.', 'basic-firewall' ),
+					(string) ( $rule['id'] ?? '?' )
+				);
+
+				continue;
+			}
+
+			/*
+			 * A rule asking to verify crawlers, on a library that cannot, is
+			 * skipped.
+			 *
+			 * The library would ignore the key and match on the agent string
+			 * alone -- and verification is asked for on allow rules, where that
+			 * lets through everybody who claims to be Googlebot. Skipping errs
+			 * towards the rule matching nobody, which is what a verifying rule
+			 * does to anybody it cannot verify anyway.
+			 */
+			if ( ! empty( $rule['settings']['verify'] ) && 'user_agent' === (string) ( $rule['type'] ?? '' ) && ! $capabilities->has_identity_verification() ) {
+				$this->problems[] = sprintf(
+					/* translators: %s: rule identifier. */
+					__( 'Rule "%s" verifies crawlers by reverse DNS, which the installed firewall library cannot do — it would believe every client claiming to be one. It was skipped.', 'basic-firewall' ),
+					(string) ( $rule['id'] ?? '?' )
+				);
+
+				continue;
+			}
+
+			/*
+			 * An edge signal rule for a custom CDN naming no header it can read
+			 * is skipped. The library refuses to start on one, and a firewall
+			 * that cannot start fails open on every rule -- so compiling it
+			 * would trade this rule's absence for all of theirs.
+			 */
+			if ( 'edge_signal' === (string) ( $rule['type'] ?? '' ) && 'custom' === ( $rule['settings']['provider'] ?? '' ) && array() === Edge_Signal::header_map( (array) $rule['settings'] ) ) {
+				$this->problems[] = sprintf(
+					/* translators: %s: rule identifier. */
+					__( 'Rule "%s" reads edge signals from a custom CDN but names no header the firewall can read, which would stop the firewall starting. It was skipped.', 'basic-firewall' ),
+					(string) ( $rule['id'] ?? '?' )
+				);
+
+				continue;
+			}
+
+			$problem = $this->schedule_problem( $rule, $capabilities );
+
+			if ( null !== $problem ) {
+				$this->problems[] = $problem;
+
+				continue;
+			}
+
+			/*
+			 * A redirect naming nowhere, or somewhere it should not, is skipped.
+			 *
+			 * The rule screen refuses to save one. This is the same refusal for
+			 * every other way a document arrives -- an import, WP-CLI, a
+			 * hand-edited option -- because the library does not reject such a
+			 * rule when it loads: it throws when the rule *matches*, which turns
+			 * each of those requests into a firewall failure that is failed open
+			 * on, with any block rule below never reached.
+			 */
+			if ( 'redirect' === $response && null !== Response_Settings::redirect_problem( (string) ( $rule['redirect_to'] ?? '' ) ) ) {
+				$this->problems[] = sprintf(
+					/* translators: %s: rule identifier. */
+					__( 'Rule "%s" redirects, but not to a path on this site or an http(s) URL. It was skipped rather than compiled into a rule that fails every request it matches.', 'basic-firewall' ),
+					(string) ( $rule['id'] ?? '?' )
+				);
+
+				continue;
+			}
+
+			/*
+			 * A condition on a variable the library cannot read is reported,
+			 * and the rule compiled as it stands. Skipping it would stop its
+			 * other conditions enforcing; dropping the one condition would
+			 * widen an "all" rule. Either is a change nobody asked for. What
+			 * was wrong was the silence -- the rule reported itself healthy.
+			 */
+			if ( $type instanceof Condition_Rule_Type_Base ) {
+				foreach ( $type->unreadable_variables( (array) ( $rule['settings'] ?? array() ) ) as $variable ) {
+					$this->problems[] = sprintf(
+						/* translators: 1: rule identifier, 2: variable name. */
+						__( 'Rule "%1$s" has a condition on %2$s, which the firewall library cannot read. That condition compares against nothing on every request. Edit the rule to remove it.', 'basic-firewall' ),
+						(string) ( $rule['id'] ?? '?' ),
+						$variable
+					);
+				}
+			}
+
 			$compiled[] = $type->compile( $rule );
 		}
 
@@ -575,6 +910,50 @@ final class Config_Compiler {
 		);
 
 		return $compiled;
+	}
+
+	/**
+	 * Why a rule's activity window stops it being compiled, or null.
+	 *
+	 * The rule screen checks a window with the library before saving it. This
+	 * is the same check for every other way a document arrives, and for a
+	 * library too old to read one at all.
+	 *
+	 * Skipped in both cases rather than compiled. A library without windows
+	 * would ignore the key and run the rule at all hours; one that cannot read
+	 * the window fails the rule at startup anyway, and this way it is named on
+	 * the Status screen instead of discovered by its absence.
+	 *
+	 * @param array<string, mixed> $rule         The stored rule.
+	 * @param Library_Capabilities $capabilities What the library can do.
+	 */
+	private function schedule_problem( array $rule, Library_Capabilities $capabilities ): ?string {
+		$declaration = Rule_Type_Base::schedule_declaration( (array) ( $rule['schedule'] ?? array() ) );
+
+		if ( array() === $declaration ) {
+			return null;
+		}
+
+		if ( ! $capabilities->has_rule_schedule() ) {
+			return sprintf(
+				/* translators: %s: rule identifier. */
+				__( 'Rule "%s" has an activity window, which the installed firewall library cannot keep — it would run at all hours instead. It was skipped.', 'basic-firewall' ),
+				(string) ( $rule['id'] ?? '?' )
+			);
+		}
+
+		try {
+			Schedule::fromMetadata( $declaration );
+		} catch ( \InvalidArgumentException $e ) {
+			return sprintf(
+				/* translators: 1: rule identifier, 2: the library's complaint. */
+				__( 'Rule "%1$s" has an activity window the firewall library cannot read, so the rule would not start. It was skipped: %2$s', 'basic-firewall' ),
+				(string) ( $rule['id'] ?? '?' ),
+				$e->getMessage()
+			);
+		}
+
+		return null;
 	}
 
 	/**
@@ -880,6 +1259,28 @@ final class Config_Compiler {
 	 */
 	public function connection_paths(): array {
 		return $this->connection_paths;
+	}
+
+	/**
+	 * Paths where an object cache pool for agent detection belongs.
+	 *
+	 * Recorded during the compile rather than worked out later, because only
+	 * the compile knows which rule became which plugin index once disabled and
+	 * skipped rules are dropped -- the same reason the connection paths are.
+	 *
+	 * @return list<string>
+	 */
+	public function cache_pool_paths(): array {
+		return $this->cache_pool_paths;
+	}
+
+	/**
+	 * Paths where an object cache pool for reverse-DNS verdicts belongs.
+	 *
+	 * @return list<string>
+	 */
+	public function verify_cache_paths(): array {
+		return $this->verify_cache_paths;
 	}
 
 	/**

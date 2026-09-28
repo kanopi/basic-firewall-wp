@@ -205,10 +205,20 @@ final class Test_Screen extends Screen {
 			default     => 'bfw-warning',
 		};
 
+		/*
+		 * A record and a mark both serve the request, and "Allowed" would be
+		 * true and useless: it is exactly what the screen says when no rule
+		 * matched at all. The headline says what else happened -- and for a
+		 * record, that the client is about to be refused.
+		 */
 		$headline = match ( $result['verdict'] ) {
 			'allow'     => __( 'Allowed', 'basic-firewall' ),
 			'block'     => __( 'Blocked', 'basic-firewall' ),
 			'challenge' => __( 'Challenged', 'basic-firewall' ),
+			'redirect'  => __( 'Redirected', 'basic-firewall' ),
+			'record'    => __( 'Served, and recorded for next time', 'basic-firewall' ),
+			'mark'      => __( 'Served, and marked', 'basic-firewall' ),
+			'observe'   => __( 'Matched, but only observed', 'basic-firewall' ),
 			default     => __( 'Could not be tested', 'basic-firewall' ),
 		};
 

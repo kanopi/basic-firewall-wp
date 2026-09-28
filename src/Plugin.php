@@ -12,10 +12,12 @@ namespace Kanopi\BasicFirewall;
 use Kanopi\BasicFirewall\Install\Capabilities;
 use Kanopi\BasicFirewall\Install\Upgrader;
 use Kanopi\BasicFirewall\Admin\Admin;
+use Kanopi\BasicFirewall\Cache\Cache_Warmer;
 use Kanopi\BasicFirewall\Cli\Commands;
 use Kanopi\BasicFirewall\Compiler\Compiled_Config_Cache;
 use Kanopi\BasicFirewall\Health\Site_Health;
 use Kanopi\BasicFirewall\RuleType\Registry;
+use Kanopi\BasicFirewall\Runtime\Decision_Dispatcher;
 use Kanopi\BasicFirewall\Runtime\Runner;
 use Kanopi\BasicFirewall\Sources\Refresher;
 use Kanopi\BasicFirewall\Support\Paths;
@@ -124,11 +126,25 @@ final class Plugin {
 		add_action( 'plugins_loaded', array( $this, 'evaluate' ), 2 );
 
 		/*
+		 * Straight after, so decisions from either path -- held since
+		 * muplugins_loaded, or since before WordPress existed -- are announced
+		 * once plugins have had the chance to listen.
+		 */
+		add_action( 'plugins_loaded', array( Decision_Dispatcher::class, 'announce' ), 3 );
+
+		/*
 		 * The compiled file is a cache of the settings option, so it is rebuilt
 		 * whenever that option changes rather than on a timer or on a request
 		 * that happens to notice it is stale.
 		 */
 		Refresher::register();
+
+		/*
+		 * A warm of the agent corpus follows each rebuild on cron, so a
+		 * deploy, an activation or an upgrade does not leave the first visitor
+		 * to reach a user agent rule paying to build it.
+		 */
+		Cache_Warmer::register();
 
 		add_action( 'basic_firewall_settings_saved', array( $this, 'rebuild' ) );
 		add_action( 'basic_firewall_activated', array( $this, 'rebuild' ) );

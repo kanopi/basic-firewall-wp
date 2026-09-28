@@ -10,6 +10,7 @@ declare( strict_types = 1 );
 namespace Kanopi\BasicFirewall\RuleType;
 
 use Kanopi\BasicFirewall\Plugin;
+use Kanopi\Firewall\Utility\GeoHeaderMap;
 
 /**
  * Where a geolocation or ASN rule gets its answer from.
@@ -49,6 +50,91 @@ trait Geo_Reader_Settings {
 	}
 
 	/**
+	 * Whether this type can read its answer from the CDN at all.
+	 *
+	 * Geolocation can: the edge resolves the country, and more on request. The
+	 * ASN plugin cannot -- it has no header source, and no CDN in the library's
+	 * list sends the network -- so offering the choice there would store a
+	 * rule that reads nothing.
+	 */
+	protected function reader_reads_edge(): bool {
+		return true;
+	}
+
+	/**
+	 * How the rule screen presents the reader, field by field.
+	 *
+	 * Rendered as nested rows named `settings[reader][...]`, so a save posts the
+	 * reader back in the shape it was read in. Without this the reader was
+	 * never on the page, and saving the rule through the screen threw it away.
+	 *
+	 * @return array<string, array<string, mixed>>
+	 */
+	protected function reader_help(): array {
+		$source = 'settings[reader][source]';
+
+		$fields = array(
+			'source'      => array(
+				'label'       => __( 'Where the answer comes from', 'basic-firewall' ),
+				'choices'     => array(
+					'database' => __( 'A MaxMind database, looked up here', 'basic-firewall' ),
+					'edge'     => __( 'The lookup your CDN already did, read from a request header', 'basic-firewall' ),
+				),
+				'description' => __( '<strong>A geo header is a claim, not a fact.</strong> Anything that can reach the site directly can send <code>CF-IPCountry: US</code> and pick its own country, so the firewall believes these headers only from a trusted proxy — answer the proxy question on the General screen, or this rule matches nothing.', 'basic-firewall' ),
+			),
+			'database'    => array(
+				'label'       => __( 'MaxMind database', 'basic-firewall' ),
+				'description' => __( 'The path to the <code>.mmdb</code> file. A relative path resolves inside the firewall\'s private directory; an absolute one is used as given. MaxMind databases cannot be redistributed, so the plugin never ships one. A path to a file that is not there yet is saved with a warning — the download job may not have run.', 'basic-firewall' ),
+				'show_when'   => $source . ':database',
+			),
+			'license_key' => array(
+				'label'       => __( 'MaxMind license key', 'basic-firewall' ),
+				'description' => __( 'Kept with the rule for whatever downloads the database. The firewall itself reads only the file.', 'basic-firewall' ),
+				'show_when'   => $source . ':database',
+			),
+			'edge'        => array(
+				'label'       => __( 'CDN', 'basic-firewall' ),
+				'choices'     => self::known_edges(),
+				'description' => __( 'Only Cloudflare sends anything without being asked, and only the country. Every other field on every other CDN is opt-in at the edge — a field it did not send matches nothing rather than matching wrongly.', 'basic-firewall' ),
+				'show_when'   => $source . ':edge',
+			),
+			'headers'     => array(
+				'label'       => __( 'Header mapping', 'basic-firewall' ),
+				'description' => sprintf(
+					/* translators: %s: the field names the library accepts. */
+					__( 'For a CDN not in the list: one <code>field: Header-Name</code> per line, such as <code>country: X-Geo-Country</code>. The fields are %s.', 'basic-firewall' ),
+					'<code>' . implode( '</code>, <code>', array_map( 'esc_html', self::edge_fields() ) ) . '</code>'
+				),
+				'show_when'   => 'settings[reader][edge]:custom',
+			),
+		);
+
+		if ( ! $this->reader_reads_edge() ) {
+			unset( $fields['source'], $fields['edge'], $fields['headers'], $fields['database']['show_when'], $fields['license_key']['show_when'] );
+		}
+
+		return array(
+			'reader' => array(
+				'label'  => __( 'Reader', 'basic-firewall' ),
+				'fields' => $fields,
+			),
+		);
+	}
+
+	/**
+	 * The fields a custom header mapping may name, in the library's vocabulary.
+	 *
+	 * Read from the library rather than copied: it refuses to start on a field
+	 * it does not know, and a firewall that cannot start fails open on every
+	 * rule, not only this one.
+	 *
+	 * @return list<string>
+	 */
+	public static function edge_fields(): array {
+		return GeoHeaderMap::FIELDS;
+	}
+
+	/**
 	 * Reader defaults.
 	 *
 	 * @return array<string, mixed>
@@ -77,6 +163,15 @@ trait Geo_Reader_Settings {
 		$raw    = is_array( $settings['reader'] ?? null ) ? $settings['reader'] : array();
 		$source = (string) ( $raw['source'] ?? 'database' );
 
+		/*
+		 * A type that cannot read the CDN reads the database, whatever was
+		 * stored. The choice is not on its screen, so a stored `edge` could
+		 * only have come from somewhere else, and it never worked.
+		 */
+		if ( ! $this->reader_reads_edge() ) {
+			$source = 'database';
+		}
+
 		$reader = array(
 			'source'      => in_array( $source, array( 'database', 'edge' ), true ) ? $source : 'database',
 			// Kept whichever source is chosen, so switching back loses nothing.
@@ -90,7 +185,26 @@ trait Geo_Reader_Settings {
 			$reader['edge'] = 'cloudflare';
 		}
 
-		foreach ( self::lines_to_list( $raw['headers'] ?? array() ) as $line ) {
+		/*
+		 * Stored as a map, typed as lines. Both arrive here -- the screen posts
+		 * lines, and every other writer re-validates what was stored -- so a
+		 * map is turned back into the lines it was read from. Reading its
+		 * values alone threw the field names away, and a custom mapping lost
+		 * itself the next time anything saved the settings.
+		 */
+		$headers = $raw['headers'] ?? array();
+
+		if ( is_array( $headers ) ) {
+			$pairs = array();
+
+			foreach ( $headers as $field => $header ) {
+				$pairs[] = is_string( $field ) ? $field . ': ' . (string) $header : (string) $header;
+			}
+
+			$headers = $pairs;
+		}
+
+		foreach ( self::lines_to_list( $headers ) as $line ) {
 			if ( 1 !== preg_match( '/^([A-Za-z0-9_.-]+)\s*:\s*(\S.*)$/', $line, $matches ) ) {
 				$errors['reader.headers'] = sprintf(
 					/* translators: %s: the rejected line. */
@@ -101,7 +215,29 @@ trait Geo_Reader_Settings {
 				continue;
 			}
 
-			$reader['headers'][ strtolower( $matches[1] ) ] = trim( $matches[2] );
+			$field = strtolower( $matches[1] );
+
+			/*
+			 * Refused rather than stored. The library throws on a field it does
+			 * not know when the rule is built, and the firewall fails open on
+			 * every rule when that happens -- so a typo here would switch off
+			 * the whole firewall, not merely this rule. Its own spelling is
+			 * accepted whatever the case: `country.name`, not `country_name`.
+			 */
+			$known = array_combine( array_map( 'strtolower', self::edge_fields() ), self::edge_fields() );
+
+			if ( ! isset( $known[ $field ] ) ) {
+				$errors['reader.headers'] = sprintf(
+					/* translators: 1: the rejected field, 2: the fields accepted. */
+					__( '%1$s is not a field the firewall can read from a header. Use one of: %2$s.', 'basic-firewall' ),
+					$matches[1],
+					implode( ', ', self::edge_fields() )
+				);
+
+				continue;
+			}
+
+			$reader['headers'][ $known[ $field ] ] = trim( $matches[2] );
 		}
 
 		if ( 'database' === $reader['source'] && '' === $reader['database'] ) {
@@ -127,11 +263,22 @@ trait Geo_Reader_Settings {
 		$reader   = is_array( $settings['reader'] ?? null ) ? $settings['reader'] : array();
 		$metadata = $entry['metadata'] ?? array();
 
-		if ( 'edge' === ( $reader['source'] ?? 'database' ) ) {
-			$metadata['source'] = 'headers';
-			$metadata['edge']   = (string) ( $reader['edge'] ?? 'cloudflare' );
+		/*
+		 * The library's own keys, which this used to miss entirely. It wrote
+		 * `source: headers`, `edge` and a top-level `database`; the library
+		 * reads `source: header`, `provider` and `reader: {type, db}`. Every
+		 * one of those rules compiled, loaded, reported healthy -- and matched
+		 * nothing, because the plugin found no reader and no header source.
+		 */
+		if ( $this->reader_reads_edge() && 'edge' === ( $reader['source'] ?? 'database' ) ) {
+			$edge = (string) ( $reader['edge'] ?? 'cloudflare' );
 
-			if ( 'custom' === $metadata['edge'] && array() !== ( $reader['headers'] ?? array() ) ) {
+			$metadata['source'] = 'header';
+
+			// Stored under the name this plugin shows; the library calls it gcp.
+			$metadata['provider'] = 'google_cloud' === $edge ? 'gcp' : $edge;
+
+			if ( 'custom' === $edge && array() !== ( $reader['headers'] ?? array() ) ) {
 				$metadata['headers'] = $reader['headers'];
 			}
 
@@ -142,14 +289,19 @@ trait Geo_Reader_Settings {
 
 		$database = trim( (string) ( $reader['database'] ?? '' ) );
 
+		/*
+		 * No reader at all when there is no path, rather than a reader naming
+		 * nothing: the library treats an absent reader as "not configured" and
+		 * skips the rule, and a configured one it cannot open as a failure it
+		 * fails closed on. The license key is not written. Nothing in the
+		 * library reads it for a local database, and a credential in the
+		 * compiled file that nothing reads is only a liability.
+		 */
 		if ( '' !== $database ) {
-			$metadata['database'] = Plugin::instance()->paths()->resolve( $database );
-		}
-
-		$license = trim( (string) ( $reader['license_key'] ?? '' ) );
-
-		if ( '' !== $license ) {
-			$metadata['license_key'] = $license;
+			$metadata['reader'] = array(
+				'type' => 'reader',
+				'db'   => Plugin::instance()->paths()->resolve( $database ),
+			);
 		}
 
 		$entry['metadata'] = $metadata;
@@ -168,7 +320,7 @@ trait Geo_Reader_Settings {
 		$reader   = is_array( $settings['reader'] ?? null ) ? $settings['reader'] : array();
 		$problems = array();
 
-		if ( 'edge' === ( $reader['source'] ?? 'database' ) ) {
+		if ( $this->reader_reads_edge() && 'edge' === ( $reader['source'] ?? 'database' ) ) {
 			/*
 			 * The one failure nobody notices. Without trusted proxies the
 			 * library will not believe the header, so the rule matches nothing

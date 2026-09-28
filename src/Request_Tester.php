@@ -9,9 +9,12 @@ declare( strict_types = 1 );
 
 namespace Kanopi\BasicFirewall;
 
+use Kanopi\BasicFirewall\Cache\Cache_Backend;
 use Kanopi\BasicFirewall\Compiler\Library_Map;
+use Kanopi\BasicFirewall\Logging\Log_Reader;
 use Kanopi\Firewall\Exception\ChallengeRequiredException;
 use Kanopi\Firewall\Exception\FirewallBlockedException;
+use Kanopi\Firewall\Exception\FirewallRedirectException;
 use Kanopi\Firewall\Firewall;
 use Monolog\Handler\TestHandler;
 use Monolog\Level;
@@ -26,11 +29,12 @@ use Symfony\Component\HttpFoundation\Request;
  * that would block whatever address somebody typed in to ask about, which is
  * the opposite of what they wanted and is discovered at the worst moment.
  *
- * So for the duration of a run, four things are overridden:
+ * So for the duration of a run, five things are overridden:
  *
  * | Changed                        | Why                                             |
  * |--------------------------------|-------------------------------------------------|
  * | Mode becomes `exception`       | Blocking mode writes a response and calls exit(), which would take the admin page down with it |
+ * | The panic file is ignored      | It is applied over the mode above, so `block` in it would end the admin page too -- and the question here is what the rules decide, not what an incident has them doing |
  * | Storage becomes in-memory      | Otherwise the tested address is blocked for real and gains an offense |
  * | Rate limit counters in-memory  | Otherwise a test spends a real visitor's request budget |
  * | Log handlers are replaced      | The run's records go to the screen, not into your firewall log |
@@ -73,6 +77,14 @@ final class Request_Tester {
 		try {
 			$allowed = $firewall->evaluate( $request );
 
+			if ( $allowed ) {
+				$served = $this->served_but_noticed( $capture );
+
+				if ( null !== $served ) {
+					return $served;
+				}
+			}
+
 			return array(
 				'verdict' => $allowed ? 'allow' : 'block',
 				'status'  => null,
@@ -101,9 +113,124 @@ final class Request_Tester {
 				'log'     => $this->format_log( $capture ),
 				'error'   => null,
 			);
+		} catch ( FirewallRedirectException $e ) {
+			/*
+			 * Caught by name. In `exception` mode a redirect arrives as an
+			 * exception like every other decision, and before this it fell
+			 * through to the catch-all below -- so testing a redirect rule that
+			 * worked perfectly reported that the request could not be tested.
+			 */
+			return array(
+				'verdict' => 'redirect',
+				'status'  => $e->getStatusCode(),
+				'rule'    => $this->rule_from_log( $capture ),
+				'message' => sprintf(
+					/* translators: 1: destination, 2: HTTP status. */
+					__( 'A redirect rule matched. This request would be sent to %1$s with a %2$d.', 'basic-firewall' ),
+					$e->getLocation(),
+					$e->getStatusCode()
+				),
+				'log'     => $this->format_log( $capture ),
+				'error'   => null,
+			);
 		} catch ( \Throwable $e ) {
 			return $this->failure( $e->getMessage(), $this->format_log( $capture ) );
 		}
+	}
+
+	/**
+	 * A served request that a record, observing or mark rule acted on, or null.
+	 *
+	 * All three serve the request by design, so the firewall answers "allowed"
+	 * and the log line is the only evidence any of them fired. Without reading
+	 * it, testing a honeypot reports "no rule matched" at the moment it has
+	 * just caught the tester, and testing the rule you just set to observe
+	 * reports that it does not work -- both of which read as the rule being
+	 * broken.
+	 *
+	 * Strongest claim first. A record says the client will be refused next
+	 * time, which is something happening. An observed match is next: the
+	 * administrator is asking specifically what that rule would have done. A
+	 * mark says only that a rule noticed.
+	 *
+	 * @param TestHandler $capture The capture handler.
+	 *
+	 * @return array{verdict: string, status: int|null, rule: string|null, message: string, log: list<string>, error: string|null}|null
+	 */
+	private function served_but_noticed( TestHandler $capture ): ?array {
+		$recorded = null;
+		$observed = null;
+		$marked   = null;
+		$mark     = null;
+
+		foreach ( $capture->getRecords() as $record ) {
+			$message = (string) ( $record['message'] ?? '' );
+			$context = $record['context'] ?? array();
+			$plugin  = is_string( $context['plugin_name'] ?? null ) ? $context['plugin_name'] : null;
+
+			if ( null === $plugin ) {
+				continue;
+			}
+
+			if ( false !== stripos( $message, 'client recorded without being refused' ) ) {
+				$recorded = $plugin;
+			}
+
+			/*
+			 * An observed match is treated as no match, so the request goes on
+			 * to be decided by something else entirely; this line is the only
+			 * trace of it.
+			 */
+			if ( false !== stripos( $message, Log_Reader::OBSERVED_MESSAGE ) ) {
+				$observed = $plugin;
+			}
+
+			if ( false !== stripos( $message, 'request marked' ) ) {
+				$marked = $plugin;
+				$mark   = is_string( $context['mark'] ?? null ) ? $context['mark'] : null;
+			}
+		}
+
+		if ( null !== $recorded ) {
+			return array(
+				'verdict' => 'record',
+				'status'  => null,
+				'rule'    => $recorded,
+				'message' => __( 'A record rule matched. This request would be served normally — that is the point — and the client would be refused from its next one.', 'basic-firewall' ),
+				'log'     => $this->format_log( $capture ),
+				'error'   => null,
+			);
+		}
+
+		if ( null !== $observed ) {
+			return array(
+				'verdict' => 'observe',
+				'status'  => null,
+				'rule'    => $observed,
+				'message' => __( 'A rule matched while set to observe only. This request would be served — the rule acts on nothing — and the match would be logged for you to count.', 'basic-firewall' ),
+				'log'     => $this->format_log( $capture ),
+				'error'   => null,
+			);
+		}
+
+		if ( null !== $marked ) {
+			return array(
+				'verdict' => 'mark',
+				'status'  => null,
+				'rule'    => $marked,
+				'message' => null === $mark
+					? __( 'A mark rule matched. This request would be served normally, with a signal left on it for this site\'s own code to read.', 'basic-firewall' )
+					: sprintf(
+						/* translators: %s: the mark name. */
+						__( 'A mark rule matched. This request would be served normally, carrying the mark "%s" for this site\'s own code to read.', 'basic-firewall' ),
+						$mark
+					),
+				'log'     => $this->format_log( $capture ),
+				'error'   => null,
+			);
+		}
+
+		return null;
 	}
 
 	/**
@@ -114,15 +241,25 @@ final class Request_Tester {
 	 * @return array<string, mixed>
 	 */
 	private function overrides( TestHandler $capture ): array {
-		return array(
+		$overrides = array(
 			// Throw rather than respond-and-exit, which would end the admin page.
-			'[global][mode]'    => 'exception',
+			'[global][mode]'       => 'exception',
+			// Or the line above is undone by whatever an armed panic file says.
+			'[global][panic_file]' => '',
 			// Nothing the test does outlives the request.
-			'[storage][type]'   => Library_Map::STORAGE['memory'],
-			'[storage][config]' => array(),
+			'[storage][type]'      => Library_Map::STORAGE['memory'],
+			'[storage][config]'    => array(),
 			// The run's records go to the screen.
-			'[logger]'          => array( array( 'class' => $capture ) ),
+			'[logger]'             => array( array( 'class' => $capture ) ),
 		);
+
+		/*
+		 * And the caches, aimed wherever the site chose. Without this a test
+		 * falls back to the library's filesystem pool and writes a second copy
+		 * of the agent corpus to disk, on a site that moved its caches off disk
+		 * precisely to avoid that.
+		 */
+		return $overrides + Cache_Backend::overrides();
 	}
 
 	/**

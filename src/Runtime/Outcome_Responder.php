@@ -13,6 +13,8 @@ use Kanopi\BasicFirewall\Plugin;
 use Kanopi\Firewall\Exception\ChallengeRequiredException;
 use Kanopi\Firewall\Exception\ChallengeSolvedException;
 use Kanopi\Firewall\Exception\FirewallBlockedException;
+use Kanopi\Firewall\Exception\FirewallLockdownException;
+use Kanopi\Firewall\Exception\FirewallRedirectException;
 
 /**
  * Sends the response for a rejected or challenged request.
@@ -47,6 +49,20 @@ final class Outcome_Responder {
 			return false;
 		}
 
+		/*
+		 * Before the refusal, although the two cannot be confused: a redirect
+		 * extends FirewallException, not FirewallBlockedException. It is here
+		 * because until it was, a redirect fell through to "anything else" below
+		 * and was treated as a firewall failure -- so in `exception` mode a rule
+		 * chosen to send the visitor somewhere served them the page instead, and
+		 * the log recorded a broken firewall on every request it matched.
+		 */
+		if ( $outcome instanceof FirewallRedirectException ) {
+			$this->send_redirect( $outcome );
+
+			return false;
+		}
+
 		if ( $outcome instanceof FirewallBlockedException ) {
 			$this->send_blocked( $outcome );
 
@@ -75,6 +91,16 @@ final class Outcome_Responder {
 		$this->send_headers( $status );
 
 		/*
+		 * A lockdown refusal is temporary and says so. The library sends this
+		 * header itself when it delivers the refusal; in `exception` mode it
+		 * hands the refusal here instead, and dropping the header would turn a
+		 * deliberate, short-lived 503 into one a CDN has no reason to retry.
+		 */
+		if ( $outcome instanceof FirewallLockdownException && $outcome->getRetryAfter() > 0 && ! headers_sent() ) {
+			header( 'Retry-After: ' . $outcome->getRetryAfter() );
+		}
+
+		/*
 		 * The message is administrator-authored and may contain a reference
 		 * token, so it is escaped rather than trusted -- an export imported from
 		 * elsewhere is a path by which somebody else's text reaches this page.
@@ -85,6 +111,67 @@ final class Outcome_Responder {
 		echo $this->document( __( 'Request blocked', 'basic-firewall' ), $message );
 
 		$this->finish();
+	}
+
+	/**
+	 * Send the visitor where a redirect rule said to.
+	 *
+	 * Reached only in `exception` mode. In every other mode the library writes
+	 * the `Location` header itself and exits, so this is the same answer given
+	 * by hand -- and it should be the same answer, not a refusal: a redirect is
+	 * the response somebody chose precisely because a bare 403 leaves the
+	 * visitor nowhere to go.
+	 *
+	 * The destination is followed as the rule states it, unlike the challenge
+	 * redirect below. It came from the rule's own configuration and never from
+	 * the request, and the rule screen and the compiler have both already
+	 * refused one that is not a site path or an http(s) URL.
+	 *
+	 * @param FirewallRedirectException $outcome The redirect.
+	 */
+	private function send_redirect( FirewallRedirectException $outcome ): void {
+		$target = self::redirect_target( $outcome );
+
+		if ( ! headers_sent() ) {
+			$this->status_header( $target['status'] );
+
+			/*
+			 * `no-store` for the reason every firewall response carries it: a
+			 * page cache that kept this redirect keyed on the URL would send
+			 * every visitor to the notice page, not just the one the rule
+			 * caught.
+			 */
+			header( 'Location: ' . $target['location'], true, $target['status'] );
+			header( 'Cache-Control: no-store, no-cache, must-revalidate, max-age=0' );
+			header( 'X-Robots-Tag: noindex, nofollow' );
+		}
+
+		$this->finish();
+	}
+
+	/**
+	 * Where a redirect outcome sends the visitor, and with which status.
+	 *
+	 * Separate from sending it so the decision can be tested; sending ends the
+	 * request.
+	 *
+	 * A status outside the four the library honours is answered with 302, the
+	 * library's own default. The library never builds one -- it reads the
+	 * rule's status through the same four -- but this exception is a public
+	 * class that anything can construct, and a 200 with a `Location` header is
+	 * a page, not a redirect.
+	 *
+	 * @param FirewallRedirectException $outcome The redirect.
+	 *
+	 * @return array{location: string, status: int}
+	 */
+	public static function redirect_target( FirewallRedirectException $outcome ): array {
+		$status = $outcome->getStatusCode();
+
+		return array(
+			'location' => $outcome->getLocation(),
+			'status'   => in_array( $status, array( 301, 302, 307, 308 ), true ) ? $status : 302,
+		);
 	}
 
 	/**

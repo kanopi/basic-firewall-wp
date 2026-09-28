@@ -152,7 +152,8 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 			$firewall = call_user_func(
 				array( $class, 'create' ),
 				array( $compiled ),
-				basic_firewall_build_overrides( $options )
+				basic_firewall_build_overrides( $options ),
+				basic_firewall_decision_dispatcher( $options )
 			);
 
 			/*
@@ -184,11 +185,13 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 			return $allowed;
 		} catch ( \Throwable $e ) {
 			/*
-			 * Includes the blocking exception in `exception` mode. On this path
-			 * there is no responder to hand it to -- the plugin's own is not
-			 * loadable without its autoloader having been registered, and the
-			 * library exits by itself in every other mode -- so anything
-			 * reaching here allows the request. Fail open.
+			 * Includes every outcome `exception` mode throws -- a block, a
+			 * challenge, a redirect. On this path there is no responder to hand
+			 * them to -- the plugin's own is not loadable without its
+			 * autoloader having been registered, and the library exits by
+			 * itself in every other mode -- so anything reaching here allows
+			 * the request. Fail open. The normal path answers all of them;
+			 * `exception` mode is for testing, and this is one more reason.
 			 */
 			return true;
 		}
@@ -351,6 +354,15 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 
 		if ( defined( 'BASIC_FIREWALL_MODE' ) && is_string( BASIC_FIREWALL_MODE ) ) {
 			$overrides['[global][mode]'] = BASIC_FIREWALL_MODE;
+
+			/*
+			 * And the panic file is disarmed, so the constant keeps winning.
+			 * The library applies a panic file over whatever mode the
+			 * configuration arrived at, overrides included, so without this an
+			 * environment that pins its mode in wp-config.php would have it
+			 * changed by a file. The runner does the same on the other path.
+			 */
+			$overrides['[global][panic_file]'] = '';
 		}
 
 		$credentials = basic_firewall_connection_parameters( $options );
@@ -406,6 +418,44 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 		}
 
 		return $paths;
+	}
+
+	/**
+	 * The dispatcher the library announces its decisions on.
+	 *
+	 * There are no WordPress actions yet, so this path cannot announce
+	 * anything. It hands the library the same dispatcher the normal path uses,
+	 * which holds each decision until WordPress has loaded and plugins have had
+	 * the chance to listen, and announces it then -- the way a mark waits.
+	 *
+	 * Loaded by hand for the reason Database_Credentials is: the release
+	 * build's autoloader carries the vendored tree and not this plugin's own
+	 * `src/`. A dispatcher that cannot be loaded means no announcements, never
+	 * a request that fails.
+	 *
+	 * @param array<string, mixed> $options Bootstrap options.
+	 *
+	 * @return object|null
+	 */
+	function basic_firewall_decision_dispatcher( array $options ) {
+		$class = 'Kanopi\\BasicFirewall\\Runtime\\Decision_Dispatcher';
+
+		if ( ! class_exists( $class, false ) ) {
+			$file = rtrim( (string) $options['plugin_path'], '/' ) . '/src/Runtime/Decision_Dispatcher.php';
+
+			if ( ! is_readable( $file ) ) {
+				return null;
+			}
+
+			try {
+				require_once $file;
+			} catch ( \Throwable $e ) {
+				// The PSR interface it implements is missing from this vendor tree.
+				return null;
+			}
+		}
+
+		return class_exists( $class, false ) ? new $class() : null;
 	}
 
 	/**
@@ -535,10 +585,24 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 		$options = basic_firewall_options( $options );
 
 		if ( ! defined( 'KANOPI_FIREWALL_CACHE_DIR' ) ) {
-			$private = basic_firewall_private_path( $options );
+			/*
+			 * BASIC_FIREWALL_CACHE_DIR first. It moves the two caches that can
+			 * only ever be files -- the parsed configuration and imported list
+			 * bodies -- off storage that is slow for many small reads, and it is
+			 * a constant precisely so that this path and the mu-plugin path read
+			 * the same answer. Paths::library_cache_dir() is the other half and
+			 * must agree with this.
+			 */
+			$configured = defined( 'BASIC_FIREWALL_CACHE_DIR' ) ? BASIC_FIREWALL_CACHE_DIR : null;
 
-			if ( null !== $private ) {
-				define( 'KANOPI_FIREWALL_CACHE_DIR', $private . '/cache' );
+			if ( is_string( $configured ) && '' !== trim( $configured ) ) {
+				define( 'KANOPI_FIREWALL_CACHE_DIR', rtrim( trim( $configured ), '/' ) );
+			} else {
+				$private = basic_firewall_private_path( $options );
+
+				if ( null !== $private ) {
+					define( 'KANOPI_FIREWALL_CACHE_DIR', $private . '/cache' );
+				}
 			}
 		}
 

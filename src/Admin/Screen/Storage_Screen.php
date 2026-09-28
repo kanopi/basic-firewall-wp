@@ -11,8 +11,14 @@ namespace Kanopi\BasicFirewall\Admin\Screen;
 
 use Kanopi\BasicFirewall\Admin\Notices;
 use Kanopi\BasicFirewall\Admin\Screen;
+use Kanopi\BasicFirewall\Cache\Cache_Backend;
+use Kanopi\BasicFirewall\Cache\Cache_Clearer;
+use Kanopi\BasicFirewall\Cache\Cache_Warmer;
 use Kanopi\BasicFirewall\Database_Credentials;
+use Kanopi\BasicFirewall\Library_Capabilities;
+use Kanopi\BasicFirewall\Plugin;
 use Kanopi\BasicFirewall\Settings;
+use Kanopi\BasicFirewall\Support\Paths;
 
 /**
  * Where the block list lives.
@@ -50,10 +56,34 @@ final class Storage_Screen extends Screen {
 			return;
 		}
 
+		if ( 'clear_cache' === $this->posted( 'storage_action' ) ) {
+			$this->clear_cache();
+		}
+
+		if ( 'warm_cache' === $this->posted( 'storage_action' ) ) {
+			$this->warm_cache();
+		}
+
 		$settings = $this->plugin()->settings();
 		$all      = $settings->all();
 
-		$all['storage']['backend'] = $this->posted( 'backend', 'file' );
+		$previous = (string) ( $all['storage']['backend'] ?? 'file' );
+		$backend  = $this->posted( 'backend', 'file' );
+
+		/*
+		 * Redis is only offered where it can work, so choosing it here without
+		 * it is a stale form or a hand-built request. Refused rather than
+		 * stored: the block list would keep nothing. A site already on Redis
+		 * keeps it -- it did not choose anything just now, and flipping it to
+		 * file would move the block list without asking.
+		 */
+		if ( 'redis' === $backend && 'redis' !== $previous && ! ( new Library_Capabilities() )->has_redis_storage() ) {
+			Notices::add( esc_html( $this->redis_unavailable_reason() ), 'error' );
+
+			$backend = $previous;
+		}
+
+		$all['storage']['backend'] = $backend;
 
 		$all['storage']['file']['storage_file'] = $this->posted( 'storage_file' );
 		$all['storage']['file']['offense_file'] = $this->posted( 'offense_file' );
@@ -65,6 +95,9 @@ final class Storage_Screen extends Screen {
 		foreach ( array( 'cookies', 'headers', 'query', 'body' ) as $bucket ) {
 			$all['storage']['record_request'][ $bucket ] = $this->posted_textarea( 'record_' . $bucket );
 		}
+
+		$this->take_redis( $all );
+		$this->take_cache( $all );
 
 		$dsn = $this->posted( 'dsn' );
 
@@ -87,6 +120,10 @@ final class Storage_Screen extends Screen {
 			Notices::add( __( 'Storage settings saved, and the firewall recompiled.', 'basic-firewall' ) );
 		}
 
+		if ( 'redis' === $backend && ! ( new Library_Capabilities() )->has_redis_storage() ) {
+			Notices::add( esc_html( $this->redis_unavailable_reason() ), 'error' );
+		}
+
 		$this->redirect( $this->slug() );
 	}
 
@@ -94,9 +131,43 @@ final class Storage_Screen extends Screen {
 	 * {@inheritDoc}
 	 */
 	public function render(): void {
-		$settings    = $this->plugin()->settings();
-		$credentials = new Database_Credentials();
-		$backend     = (string) $settings->get( 'storage.backend', 'file' );
+		$settings     = $this->plugin()->settings();
+		$credentials  = new Database_Credentials();
+		$backend      = (string) $settings->get( 'storage.backend', 'file' );
+		$redis_usable = ( new Library_Capabilities() )->has_redis_storage();
+
+		$options = array(
+			'file'     => __( 'File — single web node, no database needed', 'basic-firewall' ),
+			'database' => __( 'Database — shared between web nodes, flat lookup cost', 'basic-firewall' ),
+		);
+
+		/*
+		 * Offered where it can work, and shown where it is already chosen even
+		 * though it cannot. Dropping the option outright for a site already on
+		 * it would leave the select on its first entry, and the next save --
+		 * of anything on this screen -- would move the block list to file
+		 * storage without anybody deciding to.
+		 */
+		if ( $redis_usable ) {
+			$options['redis'] = __( 'Redis — shared between web nodes, and expiry costs nothing', 'basic-firewall' );
+		} elseif ( 'redis' === $backend ) {
+			$options['redis'] = __( 'Redis — not usable on this server; change it', 'basic-firewall' );
+		}
+
+		$backend_note = __( '<strong>File</strong> is faster on a quiet site (0.007 ms against 0.07 ms), but its lookup cost grows with the size of the block list — about 0.75 ms at 2,000 clients — so it gets slower exactly when the firewall is busiest. <strong>Database</strong> stays flat. File is the default because most sites never block at volume; switch once yours does. Both work on the wp-config.php evaluation path, provided the bootstrap is required below the DB_ constants — the Dashboard shows the snippet and the placement.', 'basic-firewall' );
+
+		if ( $redis_usable ) {
+			$backend_note .= '<br><br>' . __( '<strong>Redis</strong> also works on the wp-config.php path, because it needs no WordPress credentials — everything it connects with is in the compiled file.', 'basic-firewall' );
+		} elseif ( 'redis' !== $backend ) {
+			$backend_note .= '<br><br>' . esc_html( $this->redis_unavailable_reason() );
+		}
+
+		if ( 'redis' === $backend && ! $redis_usable ) {
+			printf(
+				'<div class="notice notice-error inline"><p>%s</p></div>',
+				esc_html( $this->redis_unavailable_reason() . ' ' . __( 'The firewall is still evaluating every rule, but on this server it keeps no block list at all: no client is recorded, repeat offenders are never recognised, and escalation never happens.', 'basic-firewall' ) )
+			);
+		}
 
 		$this->open_form();
 
@@ -104,20 +175,15 @@ final class Storage_Screen extends Screen {
 
 		$this->row(
 			__( 'Backend', 'basic-firewall' ),
-			self::select(
-				'backend',
-				array(
-					'file'     => __( 'File — single web node, no database needed', 'basic-firewall' ),
-					'database' => __( 'Database — shared between web nodes, flat lookup cost', 'basic-firewall' ),
-				),
-				$backend
-			),
-			wp_kses_post(
-				__( '<strong>File</strong> is faster on a quiet site (0.007 ms against 0.07 ms), but its lookup cost grows with the size of the block list — about 0.75 ms at 2,000 clients — so it gets slower exactly when the firewall is busiest. <strong>Database</strong> stays flat. File is the default because most sites never block at volume; switch once yours does. Both work on the wp-config.php evaluation path, provided the bootstrap is required below the DB_ constants — the Dashboard shows the snippet and the placement.', 'basic-firewall' )
-			)
+			self::select( 'backend', $options, $backend ),
+			wp_kses_post( $backend_note )
 		);
 
 		echo '</tbody></table>';
+
+		if ( isset( $options['redis'] ) ) {
+			$this->render_redis( $settings );
+		}
 
 		$this->open_section( __( 'File storage', 'basic-firewall' ), 'backend:file' );
 
@@ -195,7 +261,356 @@ final class Storage_Screen extends Screen {
 
 		$this->render_record_request( $settings );
 
+		$this->render_cache( $settings );
+
 		$this->close_form();
+
+		$this->render_cache_actions();
+	}
+
+	/**
+	 * Copy the posted cache backend into the document.
+	 *
+	 * A backend that cannot work here is refused when newly chosen and kept
+	 * when already chosen, for the reason Redis is: refusing protects a site
+	 * from a choice that does nothing, and keeping stops an unrelated save from
+	 * changing a setting nobody touched.
+	 *
+	 * @param array<string, mixed> $all The settings document, by reference.
+	 */
+	private function take_cache( array &$all ): void {
+		// phpcs:ignore WordPress.Security.NonceVerification.Missing -- verify() is called by handle().
+		if ( ! isset( $_POST['cache_backend'] ) ) {
+			return;
+		}
+
+		$previous = (string) ( $all['cache']['backend'] ?? 'filesystem' );
+		$backend  = $this->posted( 'cache_backend', 'filesystem' );
+		$refusal  = $backend === $previous ? null : $this->cache_backend_refusal( $backend );
+
+		if ( null !== $refusal ) {
+			Notices::add( esc_html( $refusal ), 'error' );
+
+			$backend = $previous;
+		}
+
+		$all['cache']['backend']   = $backend;
+		$all['cache']['directory'] = $this->posted( 'cache_directory' );
+		$all['cache']['apcu_ttl']  = $this->posted( 'cache_apcu_ttl', '86400' );
+	}
+
+	/**
+	 * Why a cache backend cannot be chosen on this server, or null.
+	 *
+	 * @param string $backend The backend.
+	 */
+	private function cache_backend_refusal( string $backend ): ?string {
+		if ( 'object_cache' === $backend && ! Cache_Backend::has_persistent_object_cache() ) {
+			return __( 'The object cache was not chosen: this site has no persistent object cache, so it forgets everything when the request ends. The firewall would rebuild its agent detection corpus — the better part of a second — on every request. Install an object-cache.php drop-in for Redis or Memcached first.', 'basic-firewall' );
+		}
+
+		if ( 'apcu' === $backend && ! Cache_Backend::has_apcu() ) {
+			return __( 'APCu was not chosen: it is not enabled in this server\'s PHP. Agent detection would run uncached — roughly 600 ms a request — rather than falling back to files.', 'basic-firewall' );
+		}
+
+		return null;
+	}
+
+	/**
+	 * Discard the cached data on every backend, then return to the screen.
+	 *
+	 * Unsaved changes on the form are deliberately not applied first: this
+	 * clears what is cached now, under the settings actually in force, which
+	 * is what somebody reaching for it is asking for.
+	 */
+	private function clear_cache(): void {
+		$cleared = ( new Cache_Clearer() )->clear();
+
+		Notices::add(
+			array() === $cleared
+				? __( 'There was no cached data to clear.', 'basic-firewall' )
+				: __( 'The firewall\'s cached data was cleared. It is built again as requests need it.', 'basic-firewall' )
+		);
+
+		$this->redirect( $this->slug() );
+	}
+
+	/**
+	 * Build the agent corpus now, then return to the screen.
+	 *
+	 * In a web request, which is the one place a warm reaches APCu: its memory
+	 * belongs to the process pool that filled it.
+	 */
+	private function warm_cache(): void {
+		$report = ( new Cache_Warmer() )->warm();
+
+		Notices::add(
+			0 === $report['rules']
+				? __( 'There are no user agent rules that cache, so there is no agent detection data to build.', 'basic-firewall' )
+				: sprintf(
+					/* translators: 1: number of rules, 2: milliseconds. */
+					_n(
+						'Built the agent detection data for %1$d rule, in %2$d ms. The next visitor will not pay for it.',
+						'Built the agent detection data for %1$d rules, in %2$d ms. The next visitor will not pay for it.',
+						$report['rules'],
+						'basic-firewall'
+					),
+					$report['rules'],
+					$report['ms']
+				)
+		);
+
+		$this->redirect( $this->slug() );
+	}
+
+	/**
+	 * Where the firewall caches what it works out.
+	 *
+	 * @param Settings $settings Current settings.
+	 */
+	private function render_cache( Settings $settings ): void {
+		$backend    = (string) $settings->get( 'cache.backend', 'filesystem' );
+		$persistent = Cache_Backend::has_persistent_object_cache();
+		$apcu       = Cache_Backend::has_apcu();
+		$constant   = Paths::cache_dir_constant();
+
+		$this->open_section(
+			__( 'Where the firewall caches what it works out', 'basic-firewall' ),
+			'',
+			wp_kses_post(
+				__( 'Separate from the block list above, and holding different things: parsed user agents and verified crawler names. All of it can be worked out again — losing it costs a rebuild, never a client going unblocked. Where uploads is a network mount, which it is on most managed hosting, this is usually where the firewall spends its time: not one slow read but many small ones through the request.', 'basic-firewall' )
+			)
+		);
+
+		$options = array(
+			'filesystem' => __( 'Files — the default', 'basic-firewall' ),
+		);
+
+		/*
+		 * Each offered where it can work, and shown where already chosen even
+		 * though it cannot, so the select does not quietly land on files and
+		 * the next save switch it without anybody deciding to.
+		 */
+		if ( $persistent ) {
+			$options['object_cache'] = __( 'The WordPress object cache — whatever the object-cache.php drop-in connects to', 'basic-firewall' );
+		} elseif ( 'object_cache' === $backend ) {
+			$options['object_cache'] = __( 'The WordPress object cache — not persistent on this site; files are used instead', 'basic-firewall' );
+		}
+
+		if ( $apcu ) {
+			$options['apcu'] = __( 'APCu — memory on each web node, not shared between them', 'basic-firewall' );
+		} elseif ( 'apcu' === $backend ) {
+			$options['apcu'] = __( 'APCu — not enabled on this server', 'basic-firewall' );
+		}
+
+		$note = __( 'Files and APCu are written into the compiled configuration, so the wp-config.php evaluation path honours them too. The object cache cannot be: it is handed over as an object while WordPress is loading, and that path runs before WordPress exists — it keeps using files there, and only there.', 'basic-firewall' );
+
+		if ( ! $persistent && 'object_cache' !== $backend ) {
+			$note .= '<br><br>' . __( 'The object cache is not offered: this site has no persistent object cache, and WordPress\'s default one forgets everything when the request ends.', 'basic-firewall' );
+		}
+
+		if ( ! $apcu && 'apcu' !== $backend ) {
+			$note .= '<br><br>' . __( 'APCu is not offered: it is not enabled in this server\'s PHP.', 'basic-firewall' );
+		}
+
+		echo '<table class="form-table" role="presentation"><tbody>';
+
+		$this->row( __( 'Cache backend', 'basic-firewall' ), self::select( 'cache_backend', $options, $backend ), wp_kses_post( $note ) );
+
+		$this->row(
+			__( 'Cache directory', 'basic-firewall' ),
+			self::text( 'cache_directory', (string) $settings->get( 'cache.directory', '' ), 'text', 'placeholder="/tmp/basic-firewall"' ),
+			sprintf(
+				/* translators: %s: the directory used when the field is left empty. */
+				__( 'Left empty, the firewall caches in <code>%s</code>. Somewhere local such as <code>/tmp/basic-firewall</code> keeps these off a network mount, and losing them costs a rebuild and nothing else. A relative path resolves inside the firewall\'s private directory.', 'basic-firewall' ),
+				esc_html( Plugin::instance()->paths()->library_cache_dir() )
+			),
+			'cache_backend:filesystem'
+		);
+
+		$this->row(
+			__( 'How long an entry lives', 'basic-firewall' ),
+			self::text( 'cache_apcu_ttl', (string) $settings->get( 'cache.apcu_ttl', 86400 ), 'number', 'min="60"' ) . ' ' . esc_html__( 'seconds', 'basic-firewall' ),
+			__( 'APCu is memory on this web node and is not shared with any other, so each node warms its own copy, and all of them lose it when PHP restarts. That costs a rebuild and nothing else.', 'basic-firewall' ),
+			'cache_backend:apcu'
+		);
+
+		$this->row(
+			__( 'What stays on files', 'basic-firewall' ),
+			'',
+			null === $constant
+				? sprintf(
+					/* translators: 1: the constant, as PHP. 2: the directory in use. */
+					__( 'Two caches are files whatever is chosen above, because the wp-config.php path reads them before WordPress exists: the parsed configuration and the bodies of imported rule lists, in <code>%2$s</code>. Move them with a constant in wp-config.php, which both evaluation paths read: <code>%1$s</code>. A setting here could not reach the early path, and the two paths disagreeing would leave imported lists matching nothing there.', 'basic-firewall' ),
+					esc_html( "define( 'BASIC_FIREWALL_CACHE_DIR', '/tmp/basic-firewall' );" ),
+					esc_html( Plugin::instance()->paths()->library_cache_dir() )
+				)
+				: sprintf(
+					/* translators: %s: directory path. */
+					__( 'BASIC_FIREWALL_CACHE_DIR is set, so the parsed configuration and the bodies of imported rule lists are kept in <code>%s</code>, on both evaluation paths.', 'basic-firewall' ),
+					esc_html( $constant )
+				)
+		);
+
+		echo '</tbody></table>';
+
+		$this->close_section();
+	}
+
+	/**
+	 * The controls that act on the cache rather than configure it.
+	 *
+	 * A form of its own, below the settings, so pressing one never saves a
+	 * half-edited settings form -- and so saving the settings never clears
+	 * anything.
+	 */
+	private function render_cache_actions(): void {
+		$this->open_form();
+
+		echo '<h2>' . esc_html__( 'Cached data', 'basic-firewall' ) . '</h2>';
+
+		printf(
+			'<p class="description" style="max-width:48rem">%s</p>',
+			wp_kses_post(
+				__( '<strong>Build</strong> compiles the agent detection data now — about 600 ms, and a rebuild schedules it on cron anyway — so the first visitor to reach a user agent rule does not wait for it. Only that can be built ahead: everything else the firewall caches is keyed on a visitor\'s address, and there is nothing to work out for one that has not arrived. <strong>Clear</strong> discards what the firewall has cached, on every backend rather than only the current one. The parsed configuration and imported list bodies are kept: losing either would weaken the firewall until they came back.', 'basic-firewall' )
+				. '<br><br>' . __( 'APCu belongs to the web server\'s processes, so these buttons — which run in a web request — are the only place a warm or a clear of it can reach. <code>wp basic-firewall warm-cache</code> and <code>clear-cache</code> do the rest.', 'basic-firewall' )
+			)
+		);
+
+		/*
+		 * Two buttons, not one "clear and rebuild". Clearing and filling have
+		 * different reasons to reach for them, and joining them would make
+		 * the cheap one cost the expensive one every time.
+		 */
+		printf(
+			'<p><button type="submit" name="storage_action" value="warm_cache" class="button">%s</button> <button type="submit" name="storage_action" value="clear_cache" class="button">%s</button></p>',
+			esc_html__( 'Build cached data now', 'basic-firewall' ),
+			esc_html__( 'Clear cached data', 'basic-firewall' )
+		);
+
+		echo '</form>';
+	}
+
+	/**
+	 * Why Redis is not offered here, naming whichever half is missing.
+	 *
+	 * The two are different fixes made by different people -- a library update
+	 * against the host's PHP build -- so saying only "unavailable" would send
+	 * somebody to the wrong one.
+	 */
+	private function redis_unavailable_reason(): string {
+		if ( ! ( new Library_Capabilities() )->has_redis_storage_class() ) {
+			return __( 'Redis block list storage is not offered: the installed firewall library does not provide it. It needs kanopi/firewall 2.22.0 or later.', 'basic-firewall' );
+		}
+
+		return __( 'Redis block list storage is not offered: this server\'s PHP does not have the redis extension loaded. The library lists it as a suggestion rather than a requirement, so it can be present without it — ask your host to enable ext-redis.', 'basic-firewall' );
+	}
+
+	/**
+	 * Copy the posted Redis fields into the document.
+	 *
+	 * Only when the section was rendered. On a server where Redis is neither
+	 * usable nor chosen the fields are absent, and reading them as empty would
+	 * blank a stored configuration every time anything else on this screen was
+	 * saved.
+	 *
+	 * @param array<string, mixed> $all The settings document, by reference.
+	 */
+	private function take_redis( array &$all ): void {
+		// phpcs:ignore WordPress.Security.NonceVerification.Missing -- verify() is called by handle().
+		if ( ! isset( $_POST['redis_host'] ) ) {
+			return;
+		}
+
+		$all['storage']['redis']['host']     = $this->posted( 'redis_host', '127.0.0.1' );
+		$all['storage']['redis']['port']     = $this->posted( 'redis_port', '6379' );
+		$all['storage']['redis']['prefix']   = $this->posted( 'redis_prefix' );
+		$all['storage']['redis']['username'] = $this->posted( 'redis_username' );
+
+		if ( '' !== $this->posted( 'redis_password_clear' ) ) {
+			$all['storage']['redis']['password'] = '';
+
+			return;
+		}
+
+		/*
+		 * Read as typed rather than through sanitize_text_field(), which trims
+		 * and strips: a password is whatever was issued, and quietly altering
+		 * it produces an authentication failure nobody can see on this screen.
+		 * It is never echoed back into the page, so nothing here reaches HTML.
+		 *
+		 * Empty means "keep the stored one" -- the field is never pre-filled,
+		 * so the stored password does not travel to the browser on every visit.
+		 */
+		// phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- verified in handle(); a password is kept byte for byte.
+		$password = isset( $_POST['redis_password'] ) && is_string( $_POST['redis_password'] ) ? wp_unslash( $_POST['redis_password'] ) : '';
+
+		if ( '' !== $password ) {
+			$all['storage']['redis']['password'] = $password;
+		}
+	}
+
+	/**
+	 * The Redis connection.
+	 *
+	 * @param Settings $settings Current settings.
+	 */
+	private function render_redis( Settings $settings ): void {
+		$this->open_section(
+			__( 'Redis storage', 'basic-firewall' ),
+			'backend:redis',
+			wp_kses_post(
+				__( 'File and database storage both sweep expired blocks as they go. Redis does not need to: a block is stored with a TTL and Redis evicts it itself, so the sweep has nothing to do at all. That matters most during an attack, which is when the block list is largest and when you least want a lapsed batch landing on one unlucky visitor. If the server cannot be reached the firewall carries on enforcing every rule and Site Health names the backend it is running without.', 'basic-firewall' )
+			)
+		);
+
+		echo '<table class="form-table" role="presentation"><tbody>';
+
+		$this->row(
+			__( 'Host', 'basic-firewall' ),
+			self::text( 'redis_host', (string) $settings->get( 'storage.redis.host', '127.0.0.1' ) ),
+			wp_kses_post( __( 'A hostname or address. A Unix socket path such as <code>/var/run/redis/redis.sock</code> also works.', 'basic-firewall' ) )
+		);
+
+		$this->row(
+			__( 'Port', 'basic-firewall' ),
+			self::text( 'redis_port', (string) $settings->get( 'storage.redis.port', 6379 ), 'number', 'min="1" max="65535"' )
+		);
+
+		$credentials = new Database_Credentials();
+
+		$this->row(
+			__( 'Key prefix', 'basic-firewall' ),
+			self::text( 'redis_prefix', (string) $settings->get( 'storage.redis.prefix', '' ), 'text', 'placeholder="' . esc_attr( $credentials->block_list_key_prefix() ) . '"' ),
+			sprintf(
+				/* translators: %s: the prefix used when the field is left empty. */
+				__( 'Every key this site writes starts with it. Left empty, it is <code>%s</code>, which on a network includes this site\'s table prefix — so sites sharing one Redis do not share one block list. Anything typed here is used exactly, so give each site its own.', 'basic-firewall' ),
+				esc_html( $credentials->block_list_key_prefix() )
+			)
+		);
+
+		$this->row(
+			__( 'Username', 'basic-firewall' ),
+			self::text( 'redis_username', (string) $settings->get( 'storage.redis.username', '' ), 'text', 'autocomplete="off"' ),
+			wp_kses_post( __( 'Only for a server using ACL authentication. Leave empty for the ordinary <code>requirepass</code> case, where a password alone is enough.', 'basic-firewall' ) )
+		);
+
+		$stored = (string) $settings->get( 'storage.redis.password', '' );
+
+		$this->row(
+			__( 'Password', 'basic-firewall' ),
+			self::text( 'redis_password', '', 'password', 'autocomplete="new-password"' )
+				. ( '' !== $stored ? '<br>' . self::checkbox( 'redis_password_clear', false, __( 'Remove the stored password', 'basic-firewall' ) ) : '' ),
+			wp_kses_post(
+				( '' !== $stored ? __( 'A password is stored. Leave blank to keep it. ', 'basic-firewall' ) : '' )
+				/* translators: the %env()% below is a literal token the firewall reads, not a placeholder. */
+				. __( 'Stored in the settings as typed and written into the compiled file, and stripped from an export. Type <code>%env(YOUR_VARIABLE)%</code> to read it from the environment instead: that is not a credential, survives an export, and never reaches the database.', 'basic-firewall' )
+			)
+		);
+
+		echo '</tbody></table>';
+
+		$this->close_section();
 	}
 
 	/**

@@ -9,6 +9,7 @@ declare( strict_types = 1 );
 
 namespace Kanopi\BasicFirewall\Runtime;
 
+use Kanopi\BasicFirewall\Cache\Cache_Backend;
 use Kanopi\BasicFirewall\Database_Credentials;
 use Kanopi\BasicFirewall\Library_Loader;
 use Kanopi\BasicFirewall\Plugin;
@@ -97,7 +98,12 @@ final class Runner {
 		Trusted_Proxies::apply();
 
 		try {
-			$firewall = Firewall::create( array( $compiled ), $this->overrides() );
+			/*
+			 * The dispatcher is what makes a decision reachable from WordPress
+			 * at all -- see Decision_Dispatcher for why it announces later than
+			 * it is told.
+			 */
+			$firewall = Firewall::create( array( $compiled ), $this->overrides(), new Decision_Dispatcher() );
 		} catch ( \Throwable $e ) {
 			/*
 			 * With require_config on, the library refuses to start rather than
@@ -238,6 +244,18 @@ final class Runner {
 		$overrides = array();
 
 		/*
+		 * A mode pinned in wp-config.php stays pinned, panic file or not. The
+		 * compiler already writes the constant's mode into the file, but the
+		 * library applies a panic file over whatever mode the configuration
+		 * arrived at -- so an environment that pins its mode would otherwise
+		 * have it changed by a file nobody deployed. The bootstrap does the
+		 * same on the other path.
+		 */
+		if ( defined( 'BASIC_FIREWALL_MODE' ) ) {
+			$overrides['[global][panic_file]'] = '';
+		}
+
+		/*
 		 * Live database credentials, injected at the paths the compiler
 		 * recorded. They are never written into the compiled file -- see
 		 * Database_Credentials for why a baked snapshot goes stale silently on a
@@ -254,6 +272,13 @@ final class Runner {
 				}
 			}
 		}
+
+		/*
+		 * The object cache, if that is where the site caches. Handed over
+		 * live because YAML cannot carry an object; the other backends are in
+		 * the compiled file already and add nothing here.
+		 */
+		$overrides += Cache_Backend::overrides();
 
 		/**
 		 * Filters the runtime overrides applied over the compiled configuration.
@@ -278,7 +303,7 @@ final class Runner {
 	 */
 	private function define_cache_constants(): void {
 		if ( ! defined( 'KANOPI_FIREWALL_CACHE_DIR' ) ) {
-			define( 'KANOPI_FIREWALL_CACHE_DIR', Plugin::instance()->paths()->base() . '/cache' );
+			define( 'KANOPI_FIREWALL_CACHE_DIR', Plugin::instance()->paths()->library_cache_dir() );
 		}
 
 		if ( ! defined( 'KANOPI_FIREWALL_SOURCES_OFFLINE' ) ) {
@@ -298,11 +323,6 @@ final class Runner {
 	/**
 	 * Backends that built but could not reach what they were configured with.
 	 *
-	 * Asked of a firewall built for the purpose rather than of the one that
-	 * evaluated this request, because on an admin screen there was no such
-	 * request: the early path answered it before WordPress existed, or this is
-	 * WP-CLI. Building one costs a parse the library has already cached.
-	 *
 	 * Never throws. A firewall that cannot be built at all is a different
 	 * problem, reported by a different check, and this one returning nothing is
 	 * the right answer to "what degraded" when the answer is "everything".
@@ -314,25 +334,126 @@ final class Runner {
 	 * @return list<array<string, mixed>>
 	 */
 	public function degraded_backends(): array {
-		if ( ! Library_Loader::is_usable() ) {
+		$firewall = $this->build_for_reporting();
+
+		if ( null === $firewall ) {
 			return array();
+		}
+
+		return array_values( $firewall->getDegradedBackends() );
+	}
+
+	/**
+	 * An armed panic switch, as the library sees it.
+	 *
+	 * A panic file is not in the compiled configuration -- it is a path the
+	 * library stats on each request -- so asking a firewall is the only way to
+	 * know whether one is in force. Reading the mode out of settings, or out
+	 * of the compiled file, cannot see it at all, which is exactly how a site
+	 * comes to be reported as blocking three weeks after somebody wrote `log`
+	 * into a file during an incident and went to bed.
+	 *
+	 * @return array{active: bool, path: string|null, problem: string|null, configured: string, effective: string}|null
+	 *         Null when nothing is armed, or it is armed with no file present.
+	 */
+	public function panic_switch(): ?array {
+		$firewall = $this->build_for_reporting();
+
+		if ( null === $firewall ) {
+			return null;
+		}
+
+		$switch  = $firewall->getPanicSwitch();
+		$active  = (bool) ( $switch['active'] ?? false );
+		$problem = $switch['problem'] ?? null;
+
+		/*
+		 * A path with nothing at it is the ordinary state of an armed switch,
+		 * and reporting it would make the signal worthless. A file that exists
+		 * and cannot be used is worth reporting: somebody wrote it expecting it
+		 * to do something.
+		 */
+		if ( ! $active && ( ! is_string( $problem ) || '' === $problem ) ) {
+			return null;
+		}
+
+		return array(
+			'active'     => $active,
+			'path'       => is_string( $switch['path'] ?? null ) ? $switch['path'] : null,
+			'problem'    => is_string( $problem ) && '' !== $problem ? $problem : null,
+
+			// Both, so a report can say what changed and what comes back when
+			// the file goes, rather than leaving an operator to work it out.
+			'configured' => $firewall->getConfiguredMode()->value,
+			'effective'  => $this->effective_mode( $firewall, $switch['mode'] ?? null ),
+		);
+	}
+
+	/**
+	 * The mode a panic file put the firewall in, as somebody would name it.
+	 *
+	 * `lockdown` in the file is shorthand the library unpacks into lockdown
+	 * delivered the way `block` delivers, so the firewall itself reports
+	 * `block`. Repeating that back -- "a panic file is forcing block mode, the
+	 * configured mode is block" -- would describe a site that is refusing
+	 * every visitor as though nothing had changed.
+	 *
+	 * @param Firewall $firewall  The firewall that read the file.
+	 * @param mixed    $requested What the file asked for.
+	 */
+	private function effective_mode( Firewall $firewall, $requested ): string {
+		if ( $requested instanceof \BackedEnum && 'lockdown' === $requested->value ) {
+			return 'lockdown';
+		}
+
+		return $firewall->getMode()->value;
+	}
+
+	/**
+	 * Whether the firewall is refusing everyone but the lockdown allowlist.
+	 *
+	 * Asked of the library rather than read from settings, because there are
+	 * three ways in and only one is the setting: `global.lockdown`, `mode:
+	 * lockdown` in the Advanced YAML, and a panic file naming `lockdown`. A
+	 * status page reading settings alone would miss the two most likely to be
+	 * in force during an incident.
+	 */
+	public function is_locked_down(): bool {
+		$firewall = $this->build_for_reporting();
+
+		return null !== $firewall && $firewall->isLockedDown();
+	}
+
+	/**
+	 * A firewall built to be asked questions, never to evaluate.
+	 *
+	 * Asked of a firewall built for the purpose rather than of the one that
+	 * evaluated this request, because on an admin screen there was no such
+	 * request: the early path answered it before WordPress existed, or this is
+	 * WP-CLI. Building one costs a parse the library has already cached.
+	 *
+	 * Never throws. A configuration the library refuses outright is reported
+	 * by the compiled-configuration check, so a failure here is null rather
+	 * than a second report of the same thing.
+	 */
+	private function build_for_reporting(): ?Firewall {
+		if ( ! Library_Loader::is_usable() ) {
+			return null;
 		}
 
 		$compiled = Plugin::instance()->paths()->compiled_file();
 
 		if ( ! is_readable( $compiled ) ) {
-			return array();
+			return null;
 		}
 
 		$this->define_cache_constants();
 
 		try {
-			$degraded = Firewall::create( array( $compiled ), $this->overrides() )->getDegradedBackends();
+			return Firewall::create( array( $compiled ), $this->overrides() );
 		} catch ( \Throwable $e ) {
-			return array();
+			return null;
 		}
-
-		return array_values( $degraded );
 	}
 
 	/**

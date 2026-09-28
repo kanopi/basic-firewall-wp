@@ -66,6 +66,8 @@ final class Dashboard_Screen extends Screen {
 		$mode    = (string) $settings->get( 'global.mode', 'log' );
 		$enabled = $plugin->runner()->is_enabled();
 
+		$this->render_overrides();
+
 		echo '<div class="bfw-cards">';
 
 		$this->card(
@@ -111,6 +113,60 @@ final class Dashboard_Screen extends Screen {
 		$this->render_health();
 		$this->render_evaluation_point();
 		$this->render_shortcuts();
+	}
+
+	/**
+	 * Anything forcing the firewall away from what is configured.
+	 *
+	 * Printed before everything else on the page, because every card below
+	 * describes stored configuration and would otherwise agree with itself
+	 * while the firewall does something different. The Status card reading
+	 * "Blocking" on a site a panic file has put into log mode is precisely the
+	 * failure the panic switch has to guard against: not somebody flipping it,
+	 * but nobody noticing it is still flipped.
+	 */
+	private function render_overrides(): void {
+		/*
+		 * Lockdown ahead of the panic file, because it overrides more: while it
+		 * is on, the rules are not consulted at all.
+		 */
+		if ( $this->plugin()->runner()->is_locked_down() ) {
+			printf(
+				'<div class="bfw-danger"><p>%s</p></div>',
+				wp_kses_post( __( 'The site is in <strong>lockdown</strong>: every client except the allowlist is being refused, and none of them is being recorded. Your rules are not being consulted while this is on.', 'basic-firewall' ) )
+			);
+		}
+
+		$panic = $this->plugin()->runner()->panic_switch();
+
+		if ( null === $panic ) {
+			return;
+		}
+
+		if ( $panic['active'] ) {
+			printf(
+				'<div class="bfw-danger"><p>%s</p></div>',
+				sprintf(
+					/* translators: 1: forced mode, 2: configured mode, 3: file path. */
+					esc_html__( 'A panic file is forcing the firewall into %1$s mode. The configured mode is %2$s, and it returns as soon as the file is removed: %3$s', 'basic-firewall' ),
+					'<strong>' . esc_html( $panic['effective'] ) . '</strong>',
+					'<strong>' . esc_html( $panic['configured'] ) . '</strong>',
+					'<code>' . esc_html( (string) $panic['path'] ) . '</code>'
+				)
+			);
+
+			return;
+		}
+
+		printf(
+			'<div class="bfw-warning"><p>%s</p></div>',
+			sprintf(
+				/* translators: 1: file path, 2: what is wrong with it. */
+				esc_html__( 'The panic file %1$s %2$s, so it is being ignored. A panic file has to name one of block, log, exception, disabled or lockdown.', 'basic-firewall' ),
+				'<code>' . esc_html( (string) $panic['path'] ) . '</code>',
+				esc_html( (string) $panic['problem'] )
+			)
+		);
 	}
 
 	/**

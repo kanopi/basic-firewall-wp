@@ -14,9 +14,11 @@ use Kanopi\BasicFirewall\Admin\Notices;
 use Kanopi\BasicFirewall\Admin\Screen;
 use Kanopi\BasicFirewall\Compiler\Library_Map;
 use Kanopi\BasicFirewall\RuleType\Condition_Rule_Type_Base;
+use Kanopi\BasicFirewall\RuleType\Response_Settings;
 use Kanopi\BasicFirewall\RuleType\Rule_Type;
 use Kanopi\BasicFirewall\RuleType\Rule_Type_Base;
 use Kanopi\BasicFirewall\RuleType\Types\Ip_Address;
+use Kanopi\BasicFirewall\RuleType\Types\Rate_Limit;
 use Kanopi\Firewall\Utility\Schedule;
 use Symfony\Component\Yaml\Yaml;
 
@@ -80,6 +82,7 @@ final class Rule_Edit_Screen extends Screen {
 			'type'               => $type->id(),
 			'label'              => '',
 			'enabled'            => true,
+			'observe'            => false,
 			'response'           => 'block',
 			'weight'             => $type->weight(),
 			'status_code'        => 0,
@@ -150,6 +153,17 @@ final class Rule_Edit_Screen extends Screen {
 		);
 
 		/*
+		 * Where the window is not offered, the stored one is kept rather than
+		 * read as blank. Clearing it on an unrelated edit would turn an
+		 * after-hours rule into an all-hours one without anybody choosing that.
+		 */
+		$windows = ( new \Kanopi\BasicFirewall\Library_Capabilities() )->has_rule_schedule();
+
+		if ( ! $windows ) {
+			$schedule = (array) ( $existing['schedule'] ?? array() );
+		}
+
+		/*
 		 * Validated by the library rather than here.
 		 *
 		 * `Schedule::fromMetadata()` is what will read this at runtime, and it
@@ -160,7 +174,7 @@ final class Rule_Edit_Screen extends Screen {
 		 */
 		$declaration = Rule_Type_Base::schedule_declaration( $schedule );
 
-		if ( array() !== $declaration ) {
+		if ( $windows && array() !== $declaration ) {
 			try {
 				Schedule::fromMetadata( $declaration );
 			} catch ( \Throwable $e ) {
@@ -172,21 +186,68 @@ final class Rule_Edit_Screen extends Screen {
 			}
 		}
 
+		/*
+		 * Stored only for the response that reads them. Every row is now on the
+		 * page whatever the response, so without this a rule switched from
+		 * redirect to block would keep a destination nothing acts on -- and
+		 * would still be refused over a blank one.
+		 */
+		$redirect_to = 'redirect' === $response ? trim( $this->posted( 'redirect_to' ) ) : '';
+		$mark_as     = 'mark' === $response ? trim( $this->posted( 'mark_as' ) ) : '';
+		$mark_header = 'mark' === $response ? trim( $this->posted( 'mark_header' ) ) : '';
+
+		if ( 'redirect' === $response ) {
+			$problem = $this->redirect_problem( $redirect_to );
+
+			if ( null !== $problem ) {
+				$errors['redirect_to'] = $problem;
+			}
+		}
+
+		if ( 'mark' === $response && ! Response_Settings::is_mark_name( $mark_as ) ) {
+			$errors['mark_as'] = __( 'Use letters, numbers, hyphens and underscores only. The name becomes part of the request attribute "firewall.mark.NAME", which your code has to be able to address.', 'basic-firewall' );
+		}
+
+		if ( 'mark' === $response && ! Response_Settings::is_header_name( $mark_header ) ) {
+			$errors['mark_header'] = __( 'A header name can contain letters, numbers and hyphens only.', 'basic-firewall' );
+		}
+
+		/*
+		 * A redirect answers with a status of its own and a mark never answers
+		 * at all, so for both of them -- as for allow -- the shared status code
+		 * can only ever be a value that does nothing.
+		 */
+		$status_code = in_array( $response, array( 'allow', 'redirect', 'mark' ), true )
+			? 0
+			: (int) $this->posted( 'status_code', '0' );
+
+		/*
+		 * Not conditioned on the response: observing is orthogonal to what the
+		 * rule would otherwise do. Where the box is not offered, the stored
+		 * value is kept rather than read as unticked -- an edit on a library
+		 * without observe mode must not quietly turn a watching rule into an
+		 * enforcing one.
+		 */
+		$observe = ( new \Kanopi\BasicFirewall\Library_Capabilities() )->has_observe_mode()
+			? '' !== $this->posted( 'observe' )
+			: ! empty( $existing['observe'] );
+
 		$rule = array(
 			'id'                 => $id,
 			'type'               => $type->id(),
 			'label'              => $this->posted( 'label' ),
 			'enabled'            => '' !== $this->posted( 'enabled' ),
+			'observe'            => $observe,
 			'response'           => $response,
 			'weight'             => (int) $this->posted( 'weight', '0' ),
-			'status_code'        => (int) $this->posted( 'status_code', '0' ),
-			'challenge_provider' => $this->posted( 'challenge_provider' ),
+			'status_code'        => $status_code,
+			'challenge_provider' => 'challenge' === $response ? $this->posted( 'challenge_provider' ) : '',
 			'record'             => $this->posted( 'record', 'default' ),
 			'schedule'           => $schedule,
-			'redirect_to'        => $this->posted( 'redirect_to' ),
-			'redirect_status'    => (int) $this->posted( 'redirect_status', '302' ),
-			'mark_as'            => $this->posted( 'mark_as' ),
-			'mark_header'        => $this->posted( 'mark_header' ),
+			'redirect_to'        => $redirect_to,
+			'redirect_status'    => 'redirect' === $response ? (int) $this->posted( 'redirect_status', '302' ) : 302,
+			'mark_as'            => $mark_as,
+			'mark_header'        => $mark_header,
 			'expiration'         => $expiration,
 			'description'        => $this->posted_textarea( 'description' ),
 			'settings'           => $settings,
@@ -239,6 +300,26 @@ final class Rule_Edit_Screen extends Screen {
 			);
 		}
 
+		/*
+		 * A warning rather than a refusal: only the obvious shapes are checked,
+		 * and a rule can redirect somewhere it also matches when an allow rule
+		 * lets that request through first.
+		 */
+		if ( 'redirect' === $response && 'url' === $type->id() && Response_Settings::redirect_loops( $redirect_to, (array) ( $settings['conditions'] ?? array() ) ) ) {
+			Notices::add(
+				sprintf(
+					/* translators: %s: the redirect destination. */
+					__( 'This rule may match the page it redirects to, which would send the visitor round in a loop. Check that %s is not matched by this rule\'s own conditions.', 'basic-firewall' ),
+					'<code>' . esc_html( $redirect_to ) . '</code>'
+				),
+				'warning'
+			);
+		}
+
+		if ( 'rate_limit' === $type->id() ) {
+			$this->warn_about_rate_limit_keys( $rule );
+		}
+
 		foreach ( $type->check_requirements( $settings ) as $problem ) {
 			Notices::add( esc_html( $problem ), 'warning' );
 		}
@@ -246,6 +327,72 @@ final class Rule_Edit_Screen extends Screen {
 		Notices::add( __( 'Rule saved, and the firewall recompiled.', 'basic-firewall' ) );
 
 		$this->redirect( 'basic-firewall-rules' );
+	}
+
+	/**
+	 * Say what an identity-keyed rate limit does not do, at the moment it is saved.
+	 *
+	 * As well as in Site Health, because this is the moment the choice is made
+	 * and an identity-keyed limit reads as a tightening while being half of
+	 * one. It catches a botnet against one account and misses one client
+	 * walking a list of accounts, and it records no offense -- so on its own it
+	 * leaves brute force unprotected and the block list empty.
+	 *
+	 * A warning, not a refusal: an address limit can legitimately live in
+	 * front of WordPress entirely, where nothing here can see it.
+	 *
+	 * @param array<string, mixed> $rule The rule just saved.
+	 */
+	private function warn_about_rate_limit_keys( array $rule ): void {
+		$unpaired = Rate_Limit::unpaired_identity_limits( (array) $this->plugin()->settings()->get( 'rules', array() ) );
+		$patterns = $unpaired[ (string) $rule['id'] ] ?? array();
+
+		if ( array() !== $patterns ) {
+			Notices::add(
+				sprintf(
+					/* translators: %s: comma-separated patterns. */
+					__( 'The limit on %s counts something other than the client address, and no other rate limit rule counts the address on that pattern. It will refuse requests but never ban anyone, and it misses one client working through a list of accounts — each name gets a fresh allowance. Add a separate rate limit rule on the same pattern that counts the address, usually with a looser allowance.', 'basic-firewall' ),
+					'<code>' . esc_html( implode( ', ', $patterns ) ) . '</code>'
+				),
+				'warning'
+			);
+		}
+
+		/*
+		 * Recording an identity-keyed limit hands the ban to whichever address
+		 * happened to trip it -- which, once an attacker has spent an account's
+		 * budget, is the account owner's own next login. The library withholds
+		 * that by default for exactly this reason; `record: true` overrides it.
+		 */
+		$identity = array_filter(
+			Rate_Limit::limits( (array) $rule['settings'] ),
+			static fn ( array $limit ): bool => Rate_Limit::counts_an_identity( $limit['key'] )
+		);
+
+		if ( 'yes' === ( $rule['record'] ?? 'default' ) && array() !== $identity ) {
+			Notices::add(
+				__( 'This rule records the client, and some of its limits count an account rather than the address. An attacker can spend a victim\'s allowance from their own machines, and the victim\'s next attempt would then put the <strong>victim\'s</strong> address on the block list — for everything, lengthening each time if escalation is on. Leave Record the client on Default unless the account and the address really are the same thing.', 'basic-firewall' ),
+				'warning'
+			);
+		}
+	}
+
+	/**
+	 * Why a redirect destination cannot be saved, in words, or null.
+	 *
+	 * The destination is not optional in the way an empty field usually is:
+	 * see Response_Settings::redirect_problem() for what the library does with
+	 * a redirect rule naming nowhere.
+	 *
+	 * @param string $location The destination as typed.
+	 */
+	private function redirect_problem( string $location ): ?string {
+		return match ( Response_Settings::redirect_problem( $location ) ) {
+			Response_Settings::REDIRECT_EMPTY       => __( 'A redirect rule needs somewhere to send the visitor. Without it, every request the rule matches becomes a firewall error instead of a redirect — and is then served as though the rule did not exist.', 'basic-firewall' ),
+			Response_Settings::REDIRECT_OFF_SITE    => __( 'A destination starting with "//" sends the visitor to another site. Write a path beginning with a single "/", or a full URL including "https://".', 'basic-firewall' ),
+			Response_Settings::REDIRECT_UNSUPPORTED => __( 'Write a path beginning with "/", or a full URL beginning with "http://" or "https://".', 'basic-firewall' ),
+			default                                 => null,
+		};
 	}
 
 	/**
@@ -353,6 +500,19 @@ final class Rule_Edit_Screen extends Screen {
 			self::checkbox( 'enabled', (bool) $rule['enabled'], __( 'Evaluate this rule', 'basic-firewall' ) )
 		);
 
+		/*
+		 * Offered only where the library honours it. A box that said "observe"
+		 * over a library ignoring the key would enforce on live traffic while
+		 * claiming to watch, which is the one way this must never be wrong.
+		 */
+		if ( ( new \Kanopi\BasicFirewall\Library_Capabilities() )->has_observe_mode() ) {
+			$this->row(
+				__( 'Observe only', 'basic-firewall' ),
+				self::checkbox( 'observe', ! empty( $rule['observe'] ), __( 'Match and log, but do not act', 'basic-firewall' ) ),
+				__( 'The rule is evaluated and every match is logged at warning level, then treated as no match — evaluation carries on and every other rule enforces as normal. This is how you find out what a rule <em>would</em> have done before letting it do it: add it, leave it a week, count its matches on the <strong>Log</strong> screen with <em>Observed only</em>, then clear this box.', 'basic-firewall' )
+			);
+		}
+
 		$responses = array();
 
 		foreach ( $type->allowed_responses() as $response ) {
@@ -369,7 +529,7 @@ final class Rule_Edit_Screen extends Screen {
 		$this->row(
 			__( 'Response', 'basic-firewall' ),
 			self::select( 'response', $responses, (string) $rule['response'] ),
-			__( 'Allow rules are evaluated first, then challenges, then blocks. A match ends evaluation, which is what makes a low-weight allow rule a reliable safety net.', 'basic-firewall' )
+			__( 'Evaluated in this order: allow, mark, record, challenge, redirect, block. An allow match ends evaluation immediately, which is what makes a low-weight allow rule a reliable safety net. Mark and record do not end it — they run even on a request something below is about to refuse.', 'basic-firewall' )
 		);
 
 		$this->row(
@@ -382,7 +542,10 @@ final class Rule_Edit_Screen extends Screen {
 			$this->row(
 				__( 'Status code', 'basic-firewall' ),
 				self::text( 'status_code', (string) $rule['status_code'], 'number', 'min="0" max="599"' ),
-				__( '0 uses the site-wide code from the General screen.', 'basic-firewall' )
+				__( '0 uses the site-wide code from the General screen.', 'basic-firewall' ),
+				// A redirect carries its own status, and a mark never answers
+				// the request at all, so neither has any use for this one.
+				'response:!redirect|mark'
 			);
 		}
 
@@ -396,19 +559,18 @@ final class Rule_Edit_Screen extends Screen {
 				: __( 'Seconds. <strong>0 means permanently</strong> — matching clients stay blocked until somebody clears them by hand, which is not the same as "no limit".', 'basic-firewall' )
 		);
 
-		if ( 'challenge' === $rule['response'] ) {
-			$providers = array( '' => __( 'Use the site default', 'basic-firewall' ) );
+		$providers = array( '' => __( 'Use the site default', 'basic-firewall' ) );
 
-			foreach ( Library_Map::CHALLENGE_PROVIDERS as $key => $label ) {
-				$providers[ $key ] = $label;
-			}
-
-			$this->row(
-				__( 'Challenge provider', 'basic-firewall' ),
-				self::select( 'challenge_provider', $providers, (string) $rule['challenge_provider'] ),
-				__( 'Overrides the provider chosen on the Challenge screen, for this rule only.', 'basic-firewall' )
-			);
+		foreach ( Library_Map::CHALLENGE_PROVIDERS as $key => $label ) {
+			$providers[ $key ] = $label;
 		}
+
+		$this->row(
+			__( 'Challenge provider', 'basic-firewall' ),
+			self::select( 'challenge_provider', $providers, (string) $rule['challenge_provider'] ),
+			__( 'Overrides the provider chosen on the Challenge screen, for this rule only.', 'basic-firewall' ),
+			'response:challenge'
+		);
 
 		$this->render_response_rows( $rule );
 
@@ -428,7 +590,10 @@ final class Rule_Edit_Screen extends Screen {
 			printf( '<div class="bfw-warning"><p>%s</p></div>', esc_html( $problem ) );
 		}
 
-		$this->render_schedule( (array) ( $rule['schedule'] ?? array() ) );
+		// Offered only where the library keeps it; see has_rule_schedule().
+		if ( ( new \Kanopi\BasicFirewall\Library_Capabilities() )->has_rule_schedule() ) {
+			$this->render_schedule( (array) ( $rule['schedule'] ?? array() ) );
+		}
 
 		submit_button( __( 'Save rule', 'basic-firewall' ) );
 
@@ -444,81 +609,90 @@ final class Rule_Edit_Screen extends Screen {
 	/**
 	 * Rows that belong to a redirect, a mark, or the record choice.
 	 *
+	 * Every row is rendered whatever the stored response, and the admin script
+	 * shows the ones the selected response reads. These used to be rendered
+	 * only for the response already saved, so choosing Redirect on a new rule
+	 * offered nowhere to type the destination until after a first save -- and
+	 * that first save stored a redirect rule naming nowhere. With JavaScript
+	 * off every row stays visible, and the handler stores only the ones the
+	 * chosen response reads.
+	 *
 	 * @param array<string, mixed> $rule The rule being edited.
 	 */
 	private function render_response_rows( array $rule ): void {
-		$response = (string) $rule['response'];
-
 		if ( ! ( new \Kanopi\BasicFirewall\Library_Capabilities() )->has_record_control() ) {
 			return;
 		}
 
-		if ( 'redirect' === $response ) {
-			$this->row(
-				__( 'Send the visitor to', 'basic-firewall' ),
-				self::text( 'redirect_to', (string) $rule['redirect_to'], 'text', 'placeholder="/why-was-i-redirected"' ),
-				__( 'A path on this site, or a full URL. A redirect is the gentler answer when you are fairly sure but not certain — the visitor gets somewhere to read rather than a refusal with no explanation.', 'basic-firewall' )
-			);
+		$this->row(
+			__( 'Send the visitor to', 'basic-firewall' ),
+			self::text( 'redirect_to', (string) $rule['redirect_to'], 'text', 'placeholder="/why-was-i-redirected"' ),
+			__( 'A path on this site such as <code>/too-many-requests</code>, or a full URL. <strong>Required</strong>: a redirect rule naming nowhere turns every request it matches into a firewall error. A redirect is the gentler answer when you are fairly sure but not certain — the visitor gets somewhere to read rather than a refusal with no explanation.', 'basic-firewall' ),
+			'response:redirect'
+		);
 
-			$this->row(
-				__( 'Redirect status', 'basic-firewall' ),
-				self::select(
-					'redirect_status',
-					array(
-						'302' => __( '302 — temporary (recommended)', 'basic-firewall' ),
-						'307' => __( '307 — temporary, keeps the method', 'basic-firewall' ),
-						'301' => __( '301 — permanent', 'basic-firewall' ),
-						'308' => __( '308 — permanent, keeps the method', 'basic-firewall' ),
-					),
-					(string) $rule['redirect_status']
+		$this->row(
+			__( 'Redirect status', 'basic-firewall' ),
+			self::select(
+				'redirect_status',
+				array(
+					'302' => __( '302 — temporary (recommended)', 'basic-firewall' ),
+					'307' => __( '307 — temporary, keeps the method', 'basic-firewall' ),
+					'301' => __( '301 — permanent', 'basic-firewall' ),
+					'308' => __( '308 — permanent, keeps the method', 'basic-firewall' ),
 				),
-				__( 'Keep this temporary unless you are certain. A rule\'s verdict changes with the next edit, and a <strong>301 is cached by browsers and intermediaries more or less forever</strong> — somebody caught by a rule you later tune would keep being sent to the notice page long after the rule stopped matching them.', 'basic-firewall' )
-			);
-		}
+				(string) $rule['redirect_status']
+			),
+			__( 'Keep this temporary unless you are certain. A rule\'s verdict changes with the next edit, and a <strong>301 is cached by browsers and intermediaries more or less forever</strong> — somebody caught by a rule you later tune would keep being sent to the notice page long after the rule stopped matching them.', 'basic-firewall' ),
+			'response:redirect'
+		);
 
-		if ( 'mark' === $response ) {
-			$this->row(
-				__( 'Mark the request as', 'basic-firewall' ),
-				self::text( 'mark_as', (string) $rule['mark_as'], 'text', 'placeholder="' . esc_attr( (string) $rule['id'] ) . '"' ),
-				__( 'Left blank, the rule\'s own identifier is used. A marked request is <strong>allowed through</strong> and flagged, which is what a honeypot wants: you find out who tripped it without telling them they did.', 'basic-firewall' )
-			);
+		$this->row(
+			__( 'Mark the request as', 'basic-firewall' ),
+			self::text( 'mark_as', (string) $rule['mark_as'], 'text', 'placeholder="' . esc_attr( (string) $rule['id'] ) . '"' ),
+			__( 'Left blank, the rule\'s own identifier is used. Letters, numbers, hyphens and underscores, because the name is what your code looks for. A marked request is <strong>allowed through</strong> and flagged, which is what a honeypot wants: you find out who tripped it without telling them they did.', 'basic-firewall' ),
+			'response:mark'
+		);
 
-			$this->row(
-				__( 'Also set this header', 'basic-firewall' ),
-				self::text( 'mark_header', (string) $rule['mark_header'], 'text', 'placeholder="X-Firewall-Flagged"' ),
-				__( 'Optional. Useful when something downstream — your application, a CDN, a log pipeline — is what acts on the mark.', 'basic-firewall' )
-			);
-		}
+		$this->row(
+			__( 'Also set this header', 'basic-firewall' ),
+			self::text( 'mark_header', (string) $rule['mark_header'], 'text', 'placeholder="X-Firewall-Flagged"' ),
+			__( 'Optional. Useful when something downstream — your application, a CDN, a log pipeline — is what acts on the mark.', 'basic-firewall' ),
+			'response:mark'
+		);
 
-		if ( 'record' === $response ) {
-			printf(
-				'<tr><th scope="row">%s</th><td><p class="description">%s</p></td></tr>',
-				esc_html__( 'What this does', 'basic-firewall' ),
-				wp_kses_post(
-					__( 'The client is added to the block list and <strong>this request is still served</strong>. That is what a honeypot needs: a rule catching a scanner on a bait URL wants it blocked <em>next</em> time, not to refuse the fetch it is already answering — refusing tells the scanner exactly which URL is wired, which is the one thing a honeypot must not do.', 'basic-firewall' )
-				)
-			);
-		}
+		printf(
+			'<tr data-bfw-show-when="response:record"><th scope="row">%s</th><td><p class="description">%s</p></td></tr>',
+			esc_html__( 'What this does', 'basic-firewall' ),
+			wp_kses_post(
+				__( 'The client is added to the block list and <strong>this request is still served</strong>. That is what a honeypot needs: a rule catching a scanner on a bait URL wants it blocked <em>next</em> time, not to refuse the fetch it is already answering — refusing tells the scanner exactly which URL is wired, which is the one thing a honeypot must not do.', 'basic-firewall' )
+			)
+		);
 
-		if ( in_array( $response, array( 'block', 'redirect', 'mark' ), true ) ) {
-			$this->row(
-				__( 'Record the client', 'basic-firewall' ),
+		/*
+		 * Written out rather than through row(), because what "default" means
+		 * depends on the response and the response can change without a
+		 * reload. The option says both; the explanation beneath follows the
+		 * select.
+		 */
+		printf(
+			'<tr data-bfw-show-when="response:block|redirect|mark"><th scope="row">%s</th><td>%s<p class="description" data-bfw-show-when="response:block">%s</p><p class="description" data-bfw-show-when="response:redirect|mark">%s</p></td></tr>',
+			esc_html__( 'Record the client', 'basic-firewall' ),
+			wp_kses(
 				self::select(
 					'record',
 					array(
-						'default' => 'block' === $response
-							? __( 'Default — record the client, as a block normally does', 'basic-firewall' )
-							: __( 'Default — do not record the client', 'basic-firewall' ),
+						'default' => __( 'Default — a block records the client, a redirect or mark does not', 'basic-firewall' ),
 						'yes'     => __( 'Yes — add the client to the block list', 'basic-firewall' ),
 						'no'      => __( 'No — act on this request, and record nothing', 'basic-firewall' ),
 					),
 					(string) $rule['record']
 				),
-				'block' === $response
-					? __( 'Recording adds the client to the durable block list, so later requests are refused without re-evaluating. <strong>Set this to No for a temporary lockdown</strong> — a rule that refuses everybody and records them leaves a block list full of customers once it is lifted, each on an escalating ban nobody asked for.', 'basic-firewall' )
-					: __( 'This response does not record by default, which is usually right — a honeypot that banned everyone who tripped it would stop being a honeypot. Set it to Yes if tripping this rule should also earn a block.', 'basic-firewall' )
-			);
-		}
+				self::allowed_control_html()
+			),
+			wp_kses_post( __( 'Recording adds the client to the durable block list, so later requests are refused without re-evaluating. <strong>Set this to No for a temporary lockdown</strong> — a rule that refuses everybody and records them leaves a block list full of customers once it is lifted, each on an escalating ban nobody asked for. Lockdown on the General screen is that, already built: everyone but an allowlist refused, nobody recorded.', 'basic-firewall' ) ),
+			wp_kses_post( __( 'This response does not record by default, which is usually right — a honeypot that banned everyone who tripped it would stop being a honeypot. Set it to Yes if tripping this rule should also earn a block.', 'basic-firewall' ) )
+		);
 	}
 
 	/**
@@ -530,6 +704,23 @@ final class Rule_Edit_Screen extends Screen {
 	private function render_settings( Rule_Type $type, array $settings ): void {
 		if ( $type instanceof Condition_Rule_Type_Base ) {
 			$this->render_conditions( $type, $settings );
+
+			/*
+			 * A condition type's own settings beyond its conditions, where it
+			 * describes them. Only the described ones: an undescribed nested
+			 * map has no generic control, and a textarea of "Array" would be
+			 * worse than nothing. A described one -- the geolocation reader --
+			 * lists its fields, and each is rendered on its own.
+			 *
+			 * Without this the user agent rule's cache and bot-source settings
+			 * were never on the page -- so every save through it posted neither,
+			 * and turned the detection cache off.
+			 */
+			$extras = array_keys( array_diff_key( $type->settings_help(), array_flip( array( 'match_type', 'conditions', 'sources' ) ) ) );
+
+			if ( array() !== $extras ) {
+				$this->render_generic_settings( $type, $settings, $extras );
+			}
 		} else {
 			$this->render_generic_settings( $type, $settings );
 		}
@@ -591,7 +782,7 @@ final class Rule_Edit_Screen extends Screen {
 		$this->row(
 			__( 'Hours', 'basic-firewall' ),
 			self::text( 'schedule_hours', (string) ( $schedule['hours'] ?? '' ), 'text', 'placeholder="18:00-06:00"' ),
-			esc_html__( 'A range on the 24-hour clock. One that ends earlier than it starts runs overnight, so 18:00-06:00 is the evening through to the morning rather than an empty window.', 'basic-firewall' )
+			esc_html__( 'A range on the 24-hour clock, or several separated by commas, such as 09:00-12:00, 13:00-17:00. One that ends earlier than it starts runs overnight, so 18:00-06:00 is the evening through to the morning rather than an empty window.', 'basic-firewall' )
 		);
 
 		$this->row(
@@ -1090,8 +1281,9 @@ final class Rule_Edit_Screen extends Screen {
 	 *
 	 * @param Rule_Type            $type     The rule type.
 	 * @param array<string, mixed> $settings Current settings.
+	 * @param list<string>|null    $only     Render only these keys, or all when null.
 	 */
-	private function render_generic_settings( Rule_Type $type, array $settings ): void {
+	private function render_generic_settings( Rule_Type $type, array $settings, ?array $only = null ): void {
 		$help = $type->settings_help();
 
 		echo '<table class="form-table" role="presentation"><tbody>';
@@ -1102,64 +1294,135 @@ final class Rule_Edit_Screen extends Screen {
 				continue;
 			}
 
-			$value  = $settings[ $key ] ?? $default;
-			$name   = sprintf( 'settings[%s]', $key );
-			$secret = in_array( (string) $key, $type->secret_settings(), true );
-			$field  = (array) ( $help[ $key ] ?? array() );
-			$label  = (string) ( $field['label'] ?? $this->humanize( (string) $key ) );
+			if ( null !== $only && ! in_array( (string) $key, $only, true ) ) {
+				continue;
+			}
 
-			if ( is_bool( $default ) ) {
-				$this->row(
-					$label,
-					self::checkbox( $name, (bool) $value, __( 'Enabled', 'basic-firewall' ) ),
-					wp_kses_post( (string) ( $field['description'] ?? '' ) )
-				);
+			$field = (array) ( $help[ $key ] ?? array() );
+			$value = $settings[ $key ] ?? $default;
+
+			/*
+			 * A nested map the type has described field by field -- the
+			 * geolocation reader, whose source, database path and CDN live
+			 * under one key. Each described field is its own row, named
+			 * `settings[reader][source]`, so it posts back into the same shape
+			 * it was read from.
+			 *
+			 * Before this the reader was never on the page, so a save through
+			 * this screen posted none of it: the type's validator saw an empty
+			 * reader, and a rule reading from a database was refused for having
+			 * no path, or one reading from the CDN was quietly put back on a
+			 * database it did not have.
+			 */
+			if ( is_array( $default ) && is_array( $field['fields'] ?? null ) ) {
+				$value = is_array( $value ) ? $value : array();
+
+				foreach ( (array) $field['fields'] as $child => $child_field ) {
+					if ( ! array_key_exists( $child, $default ) ) {
+						continue;
+					}
+
+					$this->render_setting_row(
+						$type,
+						sprintf( 'settings[%s][%s]', $key, $child ),
+						$key . '.' . $child,
+						$default[ $child ],
+						$value[ $child ] ?? $default[ $child ],
+						(array) $child_field
+					);
+				}
 
 				continue;
 			}
 
-			if ( is_array( $default ) ) {
-				$this->row(
-					$label,
-					self::textarea( $name, is_array( $value ) ? implode( "\n", array_map( 'strval', $value ) ) : (string) $value ),
-					wp_kses_post( (string) ( $field['description'] ?? __( 'One per line.', 'basic-firewall' ) ) )
-				);
+			$this->render_setting_row( $type, sprintf( 'settings[%s]', $key ), (string) $key, $default, $value, $field );
+		}
 
-				continue;
-			}
+		echo '</tbody></table>';
+	}
 
-			// A fixed set of answers is a select, not a text field somebody has
-			// to guess the spelling of.
-			if ( is_array( $field['choices'] ?? null ) && array() !== $field['choices'] ) {
-				$this->row(
-					$label,
-					self::select( $name, $field['choices'], (string) $value ),
-					wp_kses_post( (string) ( $field['description'] ?? '' ) )
-				);
+	/**
+	 * One settings row, with a control chosen from the default value.
+	 *
+	 * @param Rule_Type            $type    The rule type.
+	 * @param string               $name    The control's name attribute.
+	 * @param string               $path    The setting's dotted path, as secret_settings() names it.
+	 * @param mixed                $initial The default value, which decides the control.
+	 * @param mixed                $value   The current value.
+	 * @param array<string, mixed> $field   The type's description of the setting.
+	 */
+	private function render_setting_row( Rule_Type $type, string $name, string $path, $initial, $value, array $field ): void {
+		$secret = in_array( $path, $type->secret_settings(), true );
+		$label  = (string) ( $field['label'] ?? $this->humanize( (string) substr( (string) strrchr( '.' . $path, '.' ), 1 ) ) );
 
-				continue;
-			}
+		// Shown only while another control holds a value, as `field:value`.
+		$show_when = (string) ( $field['show_when'] ?? '' );
 
-			$description = wp_kses_post( (string) ( $field['description'] ?? '' ) );
+		if ( is_bool( $initial ) ) {
+			$this->row(
+				$label,
+				self::checkbox( $name, (bool) $value, (string) ( $field['checkbox'] ?? __( 'Enabled', 'basic-firewall' ) ) ),
+				wp_kses_post( (string) ( $field['description'] ?? '' ) ),
+				$show_when
+			);
 
-			if ( $secret ) {
-				/*
-				 * Warned at the point the key is typed, not in a readme. A
-				 * literal key here is stored in the options table and travels in
-				 * a database export; a token names a variable instead.
-				 */
-				/* translators: %s: the value described in the sentence. */
-				$description = __( 'This is a credential. Prefer a token — <code>%env(MY_VARIABLE)%</code> — over the value itself: a token is exported and backed up safely, and a rotated value is picked up without a rebuild. Exports strip a literal value and say so.', 'basic-firewall' );
+			return;
+		}
+
+		if ( is_array( $initial ) ) {
+			$lines = array();
+
+			/*
+			 * A map is written a pair to a line, as `key: value`, which is the
+			 * shape its validator reads back -- the reader's header mapping is
+			 * one. Imploding the values alone would drop the keys and post back
+			 * something the validator refuses.
+			 */
+			foreach ( is_array( $value ) ? $value : array( $value ) as $item_key => $item ) {
+				$lines[] = is_string( $item_key ) ? $item_key . ': ' . (string) $item : (string) $item;
 			}
 
 			$this->row(
 				$label,
-				self::text( $name, (string) $value, is_int( $default ) ? 'number' : 'text' ),
-				$description
+				self::textarea( $name, implode( "\n", $lines ) ),
+				wp_kses_post( (string) ( $field['description'] ?? __( 'One per line.', 'basic-firewall' ) ) ),
+				$show_when
 			);
+
+			return;
 		}
 
-		echo '</tbody></table>';
+		// A fixed set of answers is a select, not a text field somebody has
+		// to guess the spelling of.
+		if ( is_array( $field['choices'] ?? null ) && array() !== $field['choices'] ) {
+			$this->row(
+				$label,
+				self::select( $name, $field['choices'], (string) $value ),
+				wp_kses_post( (string) ( $field['description'] ?? '' ) ),
+				$show_when
+			);
+
+			return;
+		}
+
+		$description = wp_kses_post( (string) ( $field['description'] ?? '' ) );
+
+		if ( $secret ) {
+			/*
+			 * Warned at the point the key is typed, not in a readme. A literal
+			 * key here is stored in the options table and travels in a database
+			 * export; a token names a variable instead.
+			 */
+			/* translators: %s: the value described in the sentence. */
+			$description = trim( $description . ' ' . __( 'This is a credential. Prefer a token — <code>%env(MY_VARIABLE)%</code> — over the value itself: a token is exported and backed up safely, and a rotated value is picked up without a rebuild. Exports strip a literal value and say so.', 'basic-firewall' ) );
+		}
+
+		$this->row(
+			$label,
+			self::text( $name, (string) $value, is_int( $initial ) ? 'number' : 'text' ),
+			$description,
+			$show_when
+		);
 	}
 
 	/**

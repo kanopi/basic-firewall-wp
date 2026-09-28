@@ -95,6 +95,7 @@ if ( ! function_exists( 'basic_firewall_uninstall_site' ) ) {
 
 		wp_clear_scheduled_hook( 'basic_firewall_refresh_sources' );
 		wp_clear_scheduled_hook( 'basic_firewall_prune_logs' );
+		wp_clear_scheduled_hook( 'basic_firewall_warm_cache' );
 
 		/*
 		 * The plugin's own tables. Named with the site's prefix, which is what keeps

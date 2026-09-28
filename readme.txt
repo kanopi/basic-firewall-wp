@@ -22,12 +22,13 @@ It is the WordPress port of the Drupal module `basic_firewall`, built on the
 `kanopi/firewall` library, and it keeps that module's habit of writing down what
 does not work as well as what does.
 
-**Nine rule types**
+**Ten rule types**
 
 * IP address — single addresses, CIDR blocks, ranges, IPv4 and IPv6
 * Request / URL — method, host, path, query, body, headers, cookies
 * User agent — parsed, not string-matched
-* Rate limit — requests per address, per pattern, per window
+* Rate limit — requests per address or per account, per pattern, per window
+* Edge signal — the TLS fingerprint or bot score your CDN computed
 * ASN — turn away a whole hosting provider or VPN
 * Geolocation — from a MaxMind database or your CDN's headers
 * Vulnerability score — signals that are only suspicious in combination
@@ -90,11 +91,13 @@ snippet.
 
 = Why is my rule not matching anything? =
 
-Two causes account for almost all of it. A regular expression without delimiters
-— write `#^/wp-admin#`, not `^/wp-admin` — which the library silently rejects.
-Or a user agent rule using `bot` rather than `automated`: `bot` is a curated
-crawler database that does not classify sqlmap, nikto, curl or python-requests.
-Use the Test screen; it shows exactly what was compared against what.
+Two causes account for almost all of it. A geolocation or edge signal rule
+reading your CDN's headers on a site that has not declared its trusted proxies:
+the headers are ignored, and the rule warns. Or a user agent rule using `bot`
+rather than `automated`: `bot` is a curated crawler database that does not
+classify sqlmap, nikto, curl or python-requests. Use the Test screen; it shows
+exactly what was compared against what. A rule with an activity window matches
+nothing while it is asleep, and the rule list says when that is.
 
 = Why did the firewall block me? =
 
@@ -117,6 +120,16 @@ proxy too.
 4. Blocked clients, with an address lookup that works on every backend.
 
 == Changelog ==
+
+= Unreleased =
+* Requires kanopi/firewall 2.33, and bundles 2.33.0.
+* New responses: redirect, mark and record, with recording separate from refusing.
+* Observe only, per rule; activity windows; lockdown; a panic file.
+* The edge signal rule type; reverse-DNS crawler verification; account-keyed rate limits.
+* Redis for the block list, and a cache backend other than files, with WP-CLI commands to build and clear it.
+* Every decision announced as a WordPress action.
+* Geolocation and ASN rules read the variables and reader settings the library actually uses.
+* Full list in CHANGELOG.md.
 
 = 1.0.0 =
 * First release. WordPress port of the Drupal basic_firewall module.

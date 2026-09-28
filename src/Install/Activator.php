@@ -86,6 +86,7 @@ final class Activator {
 
 		wp_clear_scheduled_hook( 'basic_firewall_refresh_sources' );
 		wp_clear_scheduled_hook( 'basic_firewall_prune_logs' );
+		wp_clear_scheduled_hook( 'basic_firewall_warm_cache' );
 
 		// The compiled file is a cache of settings that are no longer being
 		// enforced. Leaving it would let the early wp-config.php path go on
