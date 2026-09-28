@@ -9,6 +9,8 @@ declare( strict_types = 1 );
 
 namespace Kanopi\BasicFirewall;
 
+use Kanopi\Firewall\Firewall;
+
 /**
  * Decides which copy of kanopi/firewall this request is going to run against.
  *
@@ -129,9 +131,25 @@ final class Library_Loader {
 			return;
 		}
 
-		if ( ! self::entry_class_exists() ) {
-			$autoload = BASIC_FIREWALL_DIR . 'vendor/autoload.php';
+		/*
+		 * A scoped build registers its own autoloader unconditionally.
+		 *
+		 * This used to happen only when neither name was loadable yet, which
+		 * is right for an unscoped copy -- registering a second Composer
+		 * autoloader over a library somebody else already loaded is how
+		 * duplicate function declarations happen -- and wrong for a scoped
+		 * one. Every class this plugin's scoped source names lives under the
+		 * prefix, and only this plugin's autoloader can find those. With
+		 * another plugin's unscoped kanopi/firewall loaded first, the scoped
+		 * autoloader was never registered: the version check read the other
+		 * copy, and the first scoped class the runner touched was not found
+		 * -- caught, and failed open on, with every screen reporting a
+		 * firewall that was not running. Nothing a scoped build registers can
+		 * collide with anything, which is the point of scoping it.
+		 */
+		$autoload = BASIC_FIREWALL_DIR . 'vendor/autoload.php';
 
+		if ( self::is_scoped_build() || ! self::entry_class_exists() ) {
 			if ( ! is_readable( $autoload ) ) {
 				self::$mode    = 'missing';
 				self::$failure = 'no-vendor';
@@ -173,8 +191,15 @@ final class Library_Loader {
 	 * which is the only thing the caller actually wants to know.
 	 */
 	private static function resolve_mode(): string {
-		$scoped = ! class_exists( self::unscoped_entry(), false ) && class_exists( self::scoped_entry(), false );
-		$class  = $scoped ? self::scoped_entry() : self::unscoped_entry();
+		/*
+		 * The class this plugin's own code will construct, not whichever name
+		 * happens to be loaded. This used to prefer the unscoped name whenever
+		 * it existed, so a scoped build on a site where another plugin had
+		 * loaded kanopi/firewall reported that plugin's copy -- its version,
+		 * its location -- as the one it was running.
+		 */
+		$scoped = self::is_scoped_build();
+		$class  = self::library_entry();
 
 		try {
 			$file = ( new \ReflectionClass( $class ) )->getFileName();
@@ -214,17 +239,28 @@ final class Library_Loader {
 	 * @phpstan-impure
 	 */
 	private static function entry_class_exists(): bool {
-		return class_exists( self::unscoped_entry() ) || class_exists( self::scoped_entry() );
+		return class_exists( self::library_entry() );
 	}
 
 	/**
-	 * The prefixed entry class name used by a scoped build.
+	 * The library entry class as this plugin's own source names it.
 	 *
-	 * Assembled rather than written literally so that php-scoper does not
-	 * rewrite it into a doubly-prefixed name when it processes this file.
+	 * `Firewall::class` is resolved at compile time and never autoloads, and
+	 * PHP-Scoper rewrites it along with every other reference in `src/` -- so
+	 * in a release build it is the prefixed name and in a working copy the
+	 * plain one. That rewrite is the one ENTRY_FRAGMENTS exists to avoid;
+	 * here it is exactly the answer wanted, because this is the class every
+	 * other file in `src/` will construct.
 	 */
-	private static function scoped_entry(): string {
-		return self::vendor_prefix() . '\\' . self::unscoped_entry();
+	private static function library_entry(): string {
+		return ltrim( Firewall::class, '\\' );
+	}
+
+	/**
+	 * Whether this copy of the plugin was scoped at build time.
+	 */
+	public static function is_scoped_build(): bool {
+		return self::library_entry() !== self::unscoped_entry();
 	}
 
 	/**

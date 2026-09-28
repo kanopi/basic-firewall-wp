@@ -136,8 +136,9 @@ does not work as well as what does.
   settings. A failure is reported in Site Health, never fatal.
 - **A release zip** that vendors the library namespace-scoped, so it cannot
   collide with another plugin bundling `kanopi/firewall`, and needs no Composer
-  on the server. The build proves the scoped classes resolve before zipping,
-  and CI installs the zip on a clean WordPress and makes it refuse a request
+  on the server. Both evaluation paths run the scoped copy even when another
+  copy of the library was loaded first. The build proves the scoped classes
+  resolve, and boots the zip beside an unscoped copy, before zipping, and CI installs the zip on a clean WordPress and makes it refuse a request
   before publishing it to GitHub Releases on a version tag. It installs with
   one WP-CLI command from `releases/latest/download/basic-firewall.zip`, a URL
   that always means the current release. Composer installation works too,

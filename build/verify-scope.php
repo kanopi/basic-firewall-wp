@@ -385,6 +385,73 @@ if ( method_exists( $prefix . '\\Kanopi\\Firewall\\Plugins\\RateLimit', 'keyComp
 }
 
 // ---------------------------------------------------------------------------
+// 1c. A scoped build beside another, unscoped copy of the library.
+// ---------------------------------------------------------------------------
+
+echo "verify-scope: beside an unscoped copy of the library\n";
+
+/*
+ * The situation scoping exists for, run rather than reasoned about: another
+ * plugin, or a site-level Composer install, has already loaded an unscoped
+ * kanopi/firewall when this plugin arrives. Both the mu-plugin path's
+ * Library_Loader and the wp-config.php bootstrap used to prefer the unscoped
+ * name whenever it existed -- so the scoped autoloader was never registered,
+ * and the firewall was built from the other copy against a compiled file
+ * naming this one's classes. A fatal, or a silent fail-open.
+ *
+ * In a child process, because this one has already loaded the scoped tree.
+ * The working copy's own vendor tree stands in for the other copy.
+ */
+$other = dirname( __DIR__ ) . '/vendor/autoload.php';
+
+if ( ! is_readable( $other ) || ! is_dir( dirname( __DIR__ ) . '/vendor/kanopi/firewall' ) ) {
+	echo "  - skipped: no unscoped copy of the library to load first\n";
+} else {
+	$probe = tempnam( sys_get_temp_dir(), 'bfw-scope' );
+
+	file_put_contents(
+		$probe,
+		'<?php
+		define( "ABSPATH", sys_get_temp_dir() . "/" );
+		define( "BASIC_FIREWALL_DIR", rtrim( $argv[1], "/" ) . "/" );
+		require $argv[3];
+		if ( ! class_exists( "Kanopi\\\\Firewall\\\\Firewall" ) ) { echo "no-other-copy"; exit; }
+		require $argv[1] . "/bootstrap.php";
+		require $argv[1] . "/vendor/autoload.php";
+		$prefix = basic_firewall_library_prefix();
+		require $argv[1] . "/src/Library_Loader.php";
+		Kanopi\\BasicFirewall\\Library_Loader::boot();
+		echo json_encode( array(
+			"bootstrap" => $prefix,
+			"mode"      => Kanopi\\BasicFirewall\\Library_Loader::mode(),
+			"usable"    => Kanopi\\BasicFirewall\\Library_Loader::is_usable(),
+		) );'
+	);
+
+	$output = (string) shell_exec( escapeshellarg( PHP_BINARY ) . ' ' . escapeshellarg( $probe ) . ' ' . escapeshellarg( $plugin_dir ) . ' ' . escapeshellarg( $prefix ) . ' ' . escapeshellarg( $other ) . ' 2>&1' );
+
+	unlink( $probe );
+
+	$result = json_decode( $output, true );
+
+	if ( ! is_array( $result ) ) {
+		bfw_fail( 'the scoped build could not boot beside an unscoped copy of the library: ' . trim( $output ) );
+	} else {
+		if ( $prefix . '\\' === $result['bootstrap'] ) {
+			bfw_pass( 'the wp-config.php bootstrap chooses the scoped copy' );
+		} else {
+			bfw_fail( sprintf( 'the wp-config.php bootstrap chose "%s" rather than the scoped copy', (string) $result['bootstrap'] ) );
+		}
+
+		if ( 'bundled-scoped' === $result['mode'] && true === $result['usable'] ) {
+			bfw_pass( 'Library_Loader registers and reports the scoped copy' );
+		} else {
+			bfw_fail( sprintf( 'Library_Loader resolved "%s" (usable: %s) rather than the scoped copy', (string) $result['mode'], var_export( $result['usable'], true ) ) );
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
 // 2a. Constants named as strings must not have been renamed.
 // ---------------------------------------------------------------------------
 

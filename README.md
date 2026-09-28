@@ -169,6 +169,13 @@ namespace-scoped**, which makes it immune to a collision with any other plugin
 that bundles `kanopi/firewall`. `wp basic-firewall status` reports
 `Collision safe: yes (scoped)`.
 
+Immune because both evaluation paths always run the scoped copy. When another
+copy is already loaded — a Bedrock site's own Composer autoloader, required from
+`wp-config.php`, or another plugin — the plugin still registers its own
+autoloader and builds the firewall, its `Request` and its trusted proxies from
+the prefixed classes. The build proves this on every release by booting the
+scoped zip with an unscoped copy loaded first.
+
 ### With Composer
 
 ```bash

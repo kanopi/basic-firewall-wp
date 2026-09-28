@@ -180,8 +180,9 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 
 		require_once $autoload;
 
-		if ( ! class_exists( 'Kanopi\\Firewall\\Firewall' )
-			&& ! class_exists( 'Kanopi\\BasicFirewall\\Vendor\\Kanopi\\Firewall\\Firewall' ) ) {
+		$prefix = basic_firewall_library_prefix();
+
+		if ( null === $prefix ) {
 			$GLOBALS['basic_firewall_early']['reason'] = 'library-missing';
 
 			return true;
@@ -201,9 +202,7 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 
 		$GLOBALS['basic_firewall_early']['evaluated'] = true;
 
-		$class = class_exists( 'Kanopi\\Firewall\\Firewall' )
-			? 'Kanopi\\Firewall\\Firewall'
-			: 'Kanopi\\BasicFirewall\\Vendor\\Kanopi\\Firewall\\Firewall';
+		$class = $prefix . 'Kanopi\\Firewall\\Firewall';
 
 		$request = null;
 
@@ -227,9 +226,7 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 			 * there is something listening. Without this, a mark applied on the
 			 * early path is invisible to the entire site.
 			 */
-			$request_class = 'Kanopi\\Firewall\\Firewall' === $class
-				? 'Symfony\\Component\\HttpFoundation\\Request'
-				: 'Kanopi\\BasicFirewall\\Vendor\\Symfony\\Component\\HttpFoundation\\Request';
+			$request_class = $prefix . 'Symfony\\Component\\HttpFoundation\\Request';
 
 			$request = call_user_func( array( $request_class, 'createFromGlobals' ) );
 
@@ -410,6 +407,34 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 		}
 
 		return class_exists( $class, false ) ? new $class() : null;
+	}
+
+	/**
+	 * The namespace prefix of the library copy this path runs, or null for none.
+	 *
+	 * **The scoped copy first.** A release build carries the library under the
+	 * plugin's own prefix, and the compiled file it writes names the prefixed
+	 * classes. This used to reach for the unscoped name whenever it existed --
+	 * which it does on any site whose wp-config.php loads a site-level
+	 * Composer autoloader carrying kanopi/firewall for some other reason. The
+	 * firewall was then built from the other copy, trusted proxies were set on
+	 * the other copy's Request, and the request was handed to a firewall that
+	 * could not read its own configuration: a fatal, or a fail-open nobody saw.
+	 *
+	 * One answer, asked once and used for every class this file names, so the
+	 * firewall, the Request and the helpers always come from the same copy.
+	 *
+	 * @return string|null `Kanopi\BasicFirewall\Vendor\` for a scoped build,
+	 *                     an empty string for an unscoped one.
+	 */
+	function basic_firewall_library_prefix() {
+		foreach ( array( 'Kanopi\\BasicFirewall\\Vendor\\', '' ) as $prefix ) {
+			if ( class_exists( $prefix . 'Kanopi\\Firewall\\Firewall' ) ) {
+				return $prefix;
+			}
+		}
+
+		return null;
 	}
 
 	/**
@@ -803,7 +828,15 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 			return;
 		}
 
-		foreach ( array( 'Symfony\\Component\\HttpFoundation\\Request', 'Kanopi\\BasicFirewall\\Vendor\\Symfony\\Component\\HttpFoundation\\Request' ) as $request_class ) {
+		/*
+		 * The Request of the copy the firewall is built from, and only that
+		 * one. Setting it on the other copy's class leaves the firewall's own
+		 * Request trusting nobody, so every visitor behind the proxy shares one
+		 * address.
+		 */
+		$prefix = basic_firewall_library_prefix();
+
+		foreach ( null === $prefix ? array() : array( $prefix . 'Symfony\\Component\\HttpFoundation\\Request' ) as $request_class ) {
 			if ( ! class_exists( $request_class ) ) {
 				continue;
 			}
@@ -923,13 +956,14 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 
 		/*
 		 * Assembled rather than written out, so that neither PHP-Scoper nor a
-		 * static analyser resolves it to one particular class: on a scoped build
-		 * only the second name exists, on an unscoped one only the first.
+		 * static analyser resolves it to one particular class: the prefix in
+		 * front of it is decided at runtime.
 		 */
 		$token_class = implode( '\\', array( 'Kanopi', 'Firewall', 'Utility', 'TokenSubstitute' ) );
-		$vendor      = implode( '\\', array( 'Kanopi', 'BasicFirewall', 'Vendor' ) );
+		$prefix      = basic_firewall_library_prefix();
 
-		foreach ( array( $token_class, $vendor . '\\' . $token_class ) as $class ) {
+		// The copy the firewall is built from; see basic_firewall_library_prefix().
+		foreach ( null === $prefix ? array() : array( $prefix . $token_class ) as $class ) {
 			if ( ! class_exists( $class ) || ! method_exists( $class, 'enableUnsafeProcessors' ) ) {
 				continue;
 			}
