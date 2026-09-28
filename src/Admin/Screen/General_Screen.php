@@ -177,8 +177,8 @@ final class General_Screen extends Screen {
 
 		$this->row(
 			__( 'Seconds added when a blocked client returns', 'basic-firewall' ),
-			self::text( 'add_to_expire', (string) $settings->get( 'global.add_to_expire', 3600 ), 'number', 'min="0"' ),
-			__( 'Each request from an already-blocked client extends its block by this much.', 'basic-firewall' )
+			self::text( 'add_to_expire', (string) $settings->get( 'global.add_to_expire', 3600 ), 'number', 'min="1"' ),
+			__( 'Each request from an already-blocked client extends its block by this much. The smallest is 1 second: the firewall library cannot be told to add nothing, and reads 0 as its default of 3600.', 'basic-firewall' )
 		);
 
 		echo '</tbody></table>';

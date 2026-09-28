@@ -15,6 +15,7 @@ use Kanopi\BasicFirewall\Library_Capabilities;
 use Kanopi\BasicFirewall\Install\Challenge_Secret;
 use Kanopi\BasicFirewall\Plugin;
 use Kanopi\BasicFirewall\RuleType\Condition_Rule_Type_Base;
+use Kanopi\BasicFirewall\RuleType\Registry;
 use Kanopi\BasicFirewall\RuleType\Response_Settings;
 use Kanopi\BasicFirewall\RuleType\Rule_Type_Base;
 use Kanopi\BasicFirewall\RuleType\Types\Edge_Signal;
@@ -89,7 +90,10 @@ final class Config_Compiler {
 		$plugin   = Plugin::instance();
 		$settings = $plugin->settings();
 
+		$challenge = (array) $settings->get( 'challenge', array() );
+
 		$rules = $this->compile_rules( (array) $settings->get( 'rules', array() ) );
+		$rules = $this->drop_unbuildable_challenges( $rules, $challenge );
 
 		$compiled = array();
 
@@ -150,7 +154,7 @@ final class Config_Compiler {
 		 * presets count: one of them ships `response: challenge`.
 		 */
 		if ( $this->needs_challenge( $rules, (array) $settings->get( 'presets', array() ) ) ) {
-			$compiled['challenge'] = $this->compile_challenge( (array) $settings->get( 'challenge', array() ) );
+			$compiled['challenge'] = $this->compile_challenge( $challenge, $rules );
 		}
 
 		return $this->apply_advanced_yaml( $compiled, (string) $settings->get( 'advanced_yaml', '' ) );
@@ -292,10 +296,20 @@ final class Config_Compiler {
 			$compiled['repeat_offender_status'] = $repeat;
 		}
 
-		$add_to_expire = (int) ( $section['add_to_expire'] ?? 0 );
+		/*
+		 * Positive or nothing, because nothing else can be said. The library
+		 * array_filter()s its global section before reading it, so a zero is
+		 * gone before it is seen, and an absent key means 3600. There is no way
+		 * to ask for "extend by nothing", which is why the General screen's
+		 * minimum is one second. A zero stored by an earlier build or an import
+		 * is reported rather than passed on as though it meant something.
+		 */
+		$add_to_expire = (int) ( $section['add_to_expire'] ?? 3600 );
 
 		if ( $add_to_expire > 0 ) {
 			$compiled['add_to_expire'] = $add_to_expire;
+		} else {
+			$this->problems[] = __( 'Seconds added when a blocked client returns is 0, which the firewall library cannot honour: it reads 0 as unset and adds 3600 seconds instead. Set it to the number of seconds you want added; the smallest is 1.', 'basic-firewall' );
 		}
 
 		$escalation = $this->compile_escalation( (array) ( $section['blocking_escalation'] ?? array() ) );
@@ -332,7 +346,7 @@ final class Config_Compiler {
 		foreach ( $allow['invalid'] as $entry ) {
 			$this->problems[] = sprintf(
 				/* translators: %s: the rejected allowlist entry. */
-				__( 'The lockdown allowlist entry "%s" is not an address or a CIDR block, so it was left out. The library does not match start-end ranges on this list.', 'basic-firewall' ),
+				__( 'The lockdown allowlist entry "%s" is not an address, a CIDR block or a start-end range, so it was left out.', 'basic-firewall' ),
 				$entry
 			);
 		}
@@ -746,6 +760,20 @@ final class Config_Compiler {
 				continue;
 			}
 
+			/*
+			 * Before the lookup, so a withdrawn type is named for what it is
+			 * rather than as a type nobody has heard of. See Registry::WITHDRAWN.
+			 */
+			if ( Registry::is_withdrawn( (string) ( $rule['type'] ?? '' ) ) ) {
+				$this->problems[] = sprintf(
+					/* translators: %s: rule identifier. */
+					__( 'Rule "%s" is a vulnerability score rule. That rule type is withdrawn in this release: the firewall library scores requests with its own model and never read the threshold or weights this plugin saved, so the rule matched nothing. It was skipped and is kept as it is; delete it, or replace it with a Core Rule Set or rate limit rule.', 'basic-firewall' ),
+					(string) ( $rule['id'] ?? '?' )
+				);
+
+				continue;
+			}
+
 			$type = $registry->get( (string) ( $rule['type'] ?? '' ) );
 
 			if ( null === $type ) {
@@ -957,6 +985,75 @@ final class Config_Compiler {
 	}
 
 	/**
+	 * Skip challenge rules that name a provider the library cannot build.
+	 *
+	 * The library constructs every provider a challenge rule names while it
+	 * starts, so one rule sending visitors to Turnstile without Turnstile's
+	 * keys -- easy to reach by importing a rule from another site -- stops the
+	 * firewall starting, and this plugin fails open on that. Skipping the one
+	 * rule, loudly, keeps every other rule enforcing.
+	 *
+	 * Here rather than in compile_rules() because it has to run before the
+	 * loops that record each rule's final index for runtime overrides.
+	 *
+	 * @param list<array<string, mixed>> $rules     Compiled rules.
+	 * @param array<string, mixed>       $challenge Stored challenge settings.
+	 *
+	 * @return list<array<string, mixed>>
+	 */
+	private function drop_unbuildable_challenges( array $rules, array $challenge ): array {
+		foreach ( $rules as $delta => $rule ) {
+			$provider = (string) ( $rule['metadata']['challenge_provider'] ?? '' );
+
+			if ( 'challenge' !== ( $rule['response'] ?? '' ) || '' === $provider ) {
+				continue;
+			}
+
+			$problem = self::challenge_provider_problem( $provider, $challenge );
+
+			if ( null === $problem ) {
+				continue;
+			}
+
+			$this->problems[] = sprintf(
+				/* translators: 1: rule identifier, 2: provider name, 3: what is wrong with it. */
+				__( 'Rule "%1$s" challenges with %2$s, %3$s It was skipped: the firewall refuses to start with a challenge provider it cannot build, and every other rule would stop being enforced.', 'basic-firewall' ),
+				(string) ( $rule['metadata']['name'] ?? '?' ),
+				$provider,
+				$problem
+			);
+
+			unset( $rules[ $delta ] );
+		}
+
+		return array_values( $rules );
+	}
+
+	/**
+	 * Why the library could not build a challenge provider, or null.
+	 *
+	 * @param string               $provider  Provider name.
+	 * @param array<string, mixed> $challenge Stored challenge settings.
+	 */
+	private static function challenge_provider_problem( string $provider, array $challenge ): ?string {
+		if ( ! isset( Library_Map::CHALLENGE_PROVIDERS[ $provider ] ) ) {
+			return __( 'which is not a provider the firewall library has.', 'basic-firewall' );
+		}
+
+		if ( ! in_array( $provider, Library_Map::REMOTE_CHALLENGE_PROVIDERS, true ) ) {
+			return null;
+		}
+
+		$options = (array) ( $challenge['provider_options'][ $provider ] ?? array() );
+
+		if ( '' === trim( (string) ( $options['site_key'] ?? '' ) ) || '' === trim( (string) ( $options['secret_key'] ?? '' ) ) ) {
+			return __( 'which needs a site key and a secret key and does not have both.', 'basic-firewall' );
+		}
+
+		return null;
+	}
+
+	/**
 	 * Whether a challenge section has to be emitted.
 	 *
 	 * @param list<array<string, mixed>> $rules   Compiled rules.
@@ -975,12 +1072,34 @@ final class Config_Compiler {
 	/**
 	 * Compile the challenge section.
 	 *
-	 * @param array<string, mixed> $challenge Stored challenge settings.
+	 * @param array<string, mixed>       $challenge Stored challenge settings.
+	 * @param list<array<string, mixed>> $rules     Compiled rules, for the providers they name.
 	 *
 	 * @return array<string, mixed>
 	 */
-	private function compile_challenge( array $challenge ): array {
+	private function compile_challenge( array $challenge, array $rules ): array {
 		$provider = (string) ( $challenge['provider'] ?? 'math' );
+
+		/*
+		 * The same refusal as drop_unbuildable_challenges(), for the default.
+		 * The Challenge screen will not save a remote provider without its
+		 * keys, but an import or WP-CLI can. Every challenge rule that names no
+		 * provider of its own uses this one, so the choice is between the
+		 * firewall not starting at all and challenging with arithmetic until
+		 * somebody adds the keys -- and it says so.
+		 */
+		$problem = self::challenge_provider_problem( $provider, $challenge );
+
+		if ( null !== $problem ) {
+			$this->problems[] = sprintf(
+				/* translators: 1: provider name, 2: what is wrong with it. */
+				__( 'The challenge provider is %1$s, %2$s The arithmetic challenge is used instead, because the firewall refuses to start with a provider it cannot build.', 'basic-firewall' ),
+				$provider,
+				$problem
+			);
+
+			$provider = 'math';
+		}
 
 		$compiled = array(
 			'provider'    => $provider,
@@ -1020,16 +1139,85 @@ final class Config_Compiler {
 			$compiled['audience'] = $audience;
 		}
 
-		$options = (array) ( $challenge['provider_options'][ $provider ] ?? array() );
+		/*
+		 * Keyed by provider, under `provider_options`, which is where the
+		 * library reads them. This used to write a flat `options` key the
+		 * library has never read, so no provider received anything: Turnstile
+		 * and reCAPTCHA refused to construct without their keys, the library
+		 * refused to start, and the plugin failed open -- nothing enforced,
+		 * every screen saying configured. ALTCHA's widget settings were
+		 * dropped the same way, only quietly.
+		 *
+		 * Nested rather than flat, and for every provider in play: the default
+		 * and each one a rule overrides to. The library hands a flat block to
+		 * the default provider only, so a rule sending visitors to reCAPTCHA
+		 * while Turnstile is the default would get no keys at all. Providers
+		 * nothing uses are left out, so a credential nothing reads is not
+		 * written into the compiled file.
+		 */
+		$providers = array( $provider );
 
-		if ( array() !== $options ) {
-			$compiled['options'] = array_filter(
-				$options,
-				static fn ( $value ): bool => '' !== $value && null !== $value
-			);
+		foreach ( $rules as $rule ) {
+			if ( 'challenge' === ( $rule['response'] ?? '' ) && '' !== (string) ( $rule['metadata']['challenge_provider'] ?? '' ) ) {
+				$providers[] = (string) $rule['metadata']['challenge_provider'];
+			}
+		}
+
+		$provider_options = array();
+
+		foreach ( array_unique( $providers ) as $name ) {
+			$options = self::provider_options( (array) ( $challenge['provider_options'][ $name ] ?? array() ) );
+
+			if ( array() !== $options ) {
+				$provider_options[ $name ] = $options;
+			}
+		}
+
+		if ( array() !== $provider_options ) {
+			$compiled['provider_options'] = $provider_options;
 		}
 
 		return $compiled;
+	}
+
+	/**
+	 * One provider's options, in the library's vocabulary.
+	 *
+	 * Public and static because it is the whole of the translation between
+	 * what the Challenge screen stores and what a provider reads, and a unit
+	 * test can pin it without a site.
+	 *
+	 * @param array<string, mixed> $options Stored options for one provider.
+	 *
+	 * @return array<string, mixed>
+	 */
+	public static function provider_options( array $options ): array {
+		$options = array_filter(
+			$options,
+			static fn ( $value ): bool => '' !== $value && null !== $value
+		);
+
+		/*
+		 * The screen stores `fail` and `pass`; Turnstile and reCAPTCHA read
+		 * `block` and `allow`, and treat anything else as `block`. So "let the
+		 * visitor through" was silently "reject them". Translated here rather
+		 * than rewritten in storage, so a value saved by any build keeps
+		 * working, and the library's own spelling passes through unchanged.
+		 */
+		if ( isset( $options['on_error'] ) ) {
+			$options['on_error'] = in_array( $options['on_error'], array( 'pass', 'allow' ), true ) ? 'allow' : 'block';
+		}
+
+		/*
+		 * The providers clamp this to Library_Map::CHALLENGE_TIMEOUT_MAX. The
+		 * screen caps it there too; a larger value from an older build or an
+		 * import is written as what will actually happen.
+		 */
+		if ( isset( $options['timeout'] ) ) {
+			$options['timeout'] = max( 1, min( Library_Map::CHALLENGE_TIMEOUT_MAX, (int) $options['timeout'] ) );
+		}
+
+		return $options;
 	}
 
 	/**
@@ -1113,6 +1301,20 @@ final class Config_Compiler {
 							: '[logger][%d][args][0][connection]',
 						count( $compiled )
 					);
+				} elseif ( 'parameters' === ( $handler['connection_source'] ?? '' ) ) {
+					/*
+					 * Compiled like the block list's. This branch used not to
+					 * exist, so a handler set to individual parameters was
+					 * written with no connection at all and disabled itself on
+					 * its first record.
+					 */
+					$parameters = $this->compile_connection_parameters( (array) ( $handler['parameters'] ?? array() ) );
+
+					if ( array() !== $parameters ) {
+						$entry['args'][0]['connection'] = $parameters;
+					} else {
+						$this->problems[] = __( 'A database log handler is set to connect with individual parameters but has no driver and database name, so it cannot connect and records nothing.', 'basic-firewall' );
+					}
 				} elseif ( '' !== trim( (string) ( $handler['dsn'] ?? '' ) ) ) {
 					$entry['args'][0]['connection'] = array( 'dsn' => trim( (string) $handler['dsn'] ) );
 				}
