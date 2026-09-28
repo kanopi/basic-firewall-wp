@@ -1030,14 +1030,17 @@ There is no network-wide settings screen. Configuring 200 sites means
 
 ## Continuous integration
 
-CircleCI, in `.circleci/config.yml`. Nine jobs, and none of them advisory:
+CircleCI, in `.circleci/config.yml`. Eleven jobs, and none of them advisory:
 
 | Job | Runs |
 |---|---|
 | `static` | `check-platform-reqs --no-dev`, PHPCS, PHPStan — on 8.1, the declared floor |
-| `unit-php-*` | The unit suite on 8.1, 8.2, 8.3 and 8.4 |
-| `integration-*` | Integration, end-to-end over real HTTP, and the WP-CLI suite, against WP 6.4/PHP 8.1, WP latest/PHP 8.3 and WP nightly/PHP 8.4 |
+| `unit-php-*` | The unit suite on 8.1, 8.2, 8.3, 8.4 and 8.5 |
+| `integration-*` | Integration, end-to-end over real HTTP, and the WP-CLI suite, against WP 6.4/PHP 8.1, WP latest/PHP 8.3, and WP nightly on both PHP 8.4 and 8.5 |
 | `package` | Builds the zip and installs it on a clean WordPress with the Composer binary removed from `PATH` |
+
+The two nightly rows differ only in PHP, which is the point: a failure on 8.5
+that passes on 8.4 says "PHP 8.5" rather than "WordPress trunk moved".
 
 `static` runs on the floor deliberately: the lock is resolved for PHP 8.1 by
 `config.platform`, and `check-platform-reqs` there is what stops a dependency
