@@ -2,7 +2,7 @@
 Contributors: kanopistudios
 Tags: security, firewall, rate limiting, bot protection, waf
 Requires at least: 6.4
-Tested up to: 6.9
+Tested up to: 7.1
 Requires PHP: 8.1
 Stable tag: 1.0.0
 License: GPLv2 or later
@@ -47,10 +47,10 @@ people usually measure it wrong.
 
 No PHP firewall can touch a host edge cache. On Pantheon, WP Engine, Kinsta or
 anything behind a CDN, requests served by the platform's cache never reach PHP
-and are never evaluated. Database-backed block storage cannot be used on the
-optional wp-config.php evaluation path, because that path runs before WordPress
-exists and has nothing to read credentials from — a site combining the two fails
-open while reporting itself as blocking, and Site Health says so.
+and are never evaluated. Database-backed block storage on the optional
+wp-config.php evaluation path needs the snippet below the `DB_` constants, where
+the credentials already exist; placed above them, the site fails open while
+reporting itself as blocking, and Site Health says so.
 
 **Safe by default**
 
@@ -63,17 +63,31 @@ wp-config.php takes effect on the next request and needs no database access.
 
 == Installation ==
 
-1. Upload the zip through Plugins → Add New → Upload Plugin.
-2. Activate it.
-3. Visit Firewall → Dashboard and read the checks.
+With WP-CLI, which always installs the current release:
+
+`wp plugin install https://github.com/kanopi/basic-firewall-wp/releases/latest/download/basic-firewall.zip --activate`
+
+Run it again with `--force` to upgrade. The plugin is not on wordpress.org, so
+`wp plugin update` has nowhere to look for a newer version.
+
+Or through the admin:
+
+1. Download `basic-firewall.zip` from the GitHub Releases page,
+   https://github.com/kanopi/basic-firewall-wp/releases
+2. Upload it through Plugins → Add New → Upload Plugin, and activate it.
+
+Either way, then visit Firewall → Status and read the checks.
 
 The zip ships with the firewall library vendored and namespace-scoped, so no
 Composer, shell access or build step is needed on the server, and it cannot
 collide with another plugin bundling the same library.
 
-Composer installation also works:
+Composer installation also works. The package is not on Packagist yet, so
+point Composer at the repository first:
 
-`composer require kanopi/basic-firewall-wp`
+`composer config repositories.basic-firewall vcs https://github.com/kanopi/basic-firewall-wp`
+
+`composer require kanopi/basic-firewall-wp:^1.0`
 
 In that mode the library is resolved normally and is not scoped.
 
@@ -114,22 +128,19 @@ proxy too.
 
 == Screenshots ==
 
-1. The dashboard, with the Site Health checks inline.
+1. The Status screen, with the Site Health checks inline.
 2. The rule list, in evaluation order.
 3. Testing a request without recording anything.
 4. Blocked clients, with an address lookup that works on every backend.
 
 == Changelog ==
 
-= Unreleased =
-* Requires kanopi/firewall 2.33, and bundles 2.33.0.
-* New responses: redirect, mark and record, with recording separate from refusing.
-* Observe only, per rule; activity windows; lockdown; a panic file.
-* The edge signal rule type; reverse-DNS crawler verification; account-keyed rate limits.
-* Redis for the block list, and a cache backend other than files, with WP-CLI commands to build and clear it.
-* Every decision announced as a WordPress action.
-* Geolocation and ASN rules read the variables and reader settings the library actually uses.
-* Full list in CHANGELOG.md.
-
 = 1.0.0 =
-* First release. WordPress port of the Drupal basic_firewall module.
+* First release. The WordPress port of the Drupal basic_firewall module, built on kanopi/firewall ^2.33; the zip bundles 2.33.0, scoped.
+* Ten rule types, six responses (allow, mark, record, challenge, redirect, block), observe-only rules and activity windows.
+* Two evaluation paths: an mu-plugin installed on activation, and an optional wp-config.php bootstrap that runs before a page cache.
+* Block list in files, the database or Redis; a cache backend in files, the object cache or APCu.
+* Fifteen admin screens, fifteen WP-CLI subcommands and seventeen Site Health tests.
+* Lockdown and a panic file for incidents; every decision announced as a WordPress action.
+* Export and import with credentials stripped; an uninstall that removes what the plugin wrote.
+* Upgrading from a pre-release build: stored settings are rewritten automatically; see CHANGELOG.md for the two things to check by hand.
