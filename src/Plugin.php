@@ -10,6 +10,7 @@ declare( strict_types = 1 );
 namespace Kanopi\BasicFirewall;
 
 use Kanopi\BasicFirewall\Install\Capabilities;
+use Kanopi\BasicFirewall\Install\Mu_Loader;
 use Kanopi\BasicFirewall\Install\Upgrader;
 use Kanopi\BasicFirewall\Admin\Admin;
 use Kanopi\BasicFirewall\Cache\Cache_Warmer;
@@ -89,6 +90,13 @@ final class Plugin {
 		 * rather than after something has already misread it.
 		 */
 		add_action( 'plugins_loaded', array( Upgrader::class, 'maybe_upgrade' ), 1 );
+
+		/*
+		 * The installed mu-plugin loader is a copy, so a release that changes
+		 * the shipped one has to replace it. See Mu_Loader for when, and why
+		 * that is never on a visitor's request.
+		 */
+		Mu_Loader::register();
 
 		add_action( 'init', array( $this, 'load_textdomain' ) );
 

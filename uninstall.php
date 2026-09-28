@@ -1245,6 +1245,28 @@ if ( is_readable( $basic_firewall_mu ) ) {
 }
 
 /*
+ * Network options -- on a network, the record of a loader refresh that could
+ * not write mu-plugins lives in sitemeta, beside the loader it describes.
+ * Removed by prefix for the same reason per-site options are: a list of names
+ * rots. On a single site these are ordinary options and went with the rest.
+ */
+if ( is_multisite() ) {
+	global $wpdb;
+
+	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- uninstall, once.
+	$basic_firewall_network_options = $wpdb->get_col(
+		$wpdb->prepare(
+			"SELECT DISTINCT meta_key FROM {$wpdb->sitemeta} WHERE meta_key LIKE %s",
+			$wpdb->esc_like( 'basic_firewall_' ) . '%'
+		)
+	);
+
+	foreach ( (array) $basic_firewall_network_options as $basic_firewall_network_option ) {
+		delete_site_option( (string) $basic_firewall_network_option );
+	}
+}
+
+/*
  * Capabilities are network-wide on a network install and role changes are not
  * per site, so this also happens once.
  */

@@ -48,7 +48,10 @@ does not work as well as what does.
   whether a scheduled rule is awake and until when, because a sleeping rule
   looks exactly like a broken one from outside.
 - **Two evaluation paths.** An mu-plugin, installed on activation and removed on
-  deactivation, runs at `muplugins_loaded` with no configuration. An optional
+  deactivation, runs at `muplugins_loaded` with no configuration. The installed
+  copy is replaced when a release ships a different one — on update, on the
+  first admin, cron or WP-CLI request after the loader's version changes, and
+  from Site Health — atomically, and never recreated once removed. An optional
   `wp-config.php` bootstrap runs before `advanced-cache.php`, so a page cache
   hit is evaluated too. The bootstrap calls no WordPress API; database block
   storage works there when the snippet sits below the `DB_` constants. In
@@ -185,10 +188,14 @@ this.
   - A geolocation or ASN rule saved from its own screen may have lost its reader:
     a CDN-backed rule could have been put back on a database, and a custom header
     mapping could have lost its field names.
-- **Deactivate and reactivate once** to refresh the mu-plugin loader, which is
-  copied only on activation. An older copy still works; on the `wp-config.php`
-  path it answers a solved challenge at `plugins_loaded` rather than
-  `muplugins_loaded`.
+- **The mu-plugin loader refreshes itself.** A pre-release copy states no
+  version, so the first admin, cron or WP-CLI request after the update replaces
+  it with 1.0.0's, as does updating through the WordPress updater or opening
+  Site Health. No deactivating and reactivating. Until then the older copy
+  still works; on the `wp-config.php` path it answers a solved challenge at
+  `plugins_loaded` rather than `muplugins_loaded`. If mu-plugins is not writable,
+  Site Health says the loader is out of date and why; copy
+  `mu-plugin/basic-firewall-loader.php` over it by hand.
 - **Uninstall only removes directories carrying `.basic-firewall-owner`**,
   which is written only by 1.0.0. A directory a pre-release build created
   outside uploads — a filtered private path, or `BASIC_FIREWALL_CACHE_DIR` — is

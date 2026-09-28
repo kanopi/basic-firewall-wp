@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Basic Firewall (loader)
  * Description: Runs Basic Firewall as early as a plugin can run. Installed and removed automatically by the Basic Firewall plugin; not intended to be edited.
- * Version:     1.0.0
+ * Version:     1.1.0
  * Author:      Kanopi Studios
  *
  * @package Kanopi\BasicFirewall
@@ -35,6 +35,19 @@
  */
 
 define( 'BASIC_FIREWALL_MU_LOADER', true );
+
+/*
+ * Which copy of this file is installed, readable without opening it.
+ *
+ * The plugin refreshes this copy when a release ships a different one, and it
+ * has to notice that cheaply: comparing this constant with the version the
+ * plugin carries costs nothing, where reading the file back would cost a disk
+ * read on every request. Keep it equal to the Version header above, and bump
+ * both whenever this file changes -- build/check-versions.sh holds them, and
+ * Mu_Loader::VERSION, to each other. A copy older than the constant does not
+ * define it at all, which reads as out of date.
+ */
+define( 'BASIC_FIREWALL_MU_LOADER_VERSION', '1.1.0' );
 
 add_action(
 	'muplugins_loaded',

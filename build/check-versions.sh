@@ -83,6 +83,25 @@ elif [ "$stable" != "$header" ]; then
 	fail "readme.txt Stable tag is $stable, the header says $header"
 fi
 
+# The mu-plugin loader carries a version of its own, independent of the
+# plugin's: the installed copy states it in a constant, and the plugin compares
+# that with Mu_Loader::VERSION on admin, cron and WP-CLI requests to decide
+# whether to replace it. So its three statements of it must agree, or a site
+# would refresh the loader on every such request, or never.
+loader="$ROOT/mu-plugin/basic-firewall-loader.php"
+loader_header=$(sed -n 's/^[[:space:]]*\*[[:space:]]*Version:[[:space:]]*\([^[:space:]]*\).*/\1/p' "$loader" | head -1)
+loader_constant=$(sed -n "s/.*define([[:space:]]*'BASIC_FIREWALL_MU_LOADER_VERSION',[[:space:]]*'\([^']*\)'.*/\1/p" "$loader" | head -1)
+loader_class=$(sed -n "s/.*const VERSION[[:space:]]*=[[:space:]]*'\([^']*\)'.*/\1/p" "$ROOT/src/Install/Mu_Loader.php" | head -1)
+
+printf '  mu-loader       header %s, constant %s, Mu_Loader::VERSION %s\n' \
+	"${loader_header:-<none>}" "${loader_constant:-<none>}" "${loader_class:-<none>}"
+
+if [ -z "$loader_header" ] || [ -z "$loader_constant" ] || [ -z "$loader_class" ]; then
+	fail "the mu-plugin loader's version is missing from its header, its BASIC_FIREWALL_MU_LOADER_VERSION constant or Mu_Loader::VERSION"
+elif [ "$loader_header" != "$loader_constant" ] || [ "$loader_header" != "$loader_class" ]; then
+	fail "the mu-plugin loader's header, constant and Mu_Loader::VERSION disagree; bump all three together"
+fi
+
 if [ "$release" = 1 ]; then
 	# The first `## [...]` heading that is not Unreleased, with any trailing
 	# date (`## [1.0.0] - 2026-10-01`) ignored.

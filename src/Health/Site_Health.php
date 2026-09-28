@@ -12,6 +12,7 @@ namespace Kanopi\BasicFirewall\Health;
 use Kanopi\BasicFirewall\Admin\Admin;
 use Kanopi\BasicFirewall\Cache\Cache_Backend;
 use Kanopi\BasicFirewall\Install\Activator;
+use Kanopi\BasicFirewall\Install\Mu_Loader;
 use Kanopi\BasicFirewall\Install\Upgrader;
 use Kanopi\BasicFirewall\Library_Capabilities;
 use Kanopi\BasicFirewall\Library_Loader;
@@ -877,6 +878,12 @@ final class Site_Health {
 				);
 			}
 
+			$stale = self::stale_mu_loader( $where );
+
+			if ( null !== $stale ) {
+				return $stale;
+			}
+
 			return self::ok(
 				__( 'The firewall evaluates before WordPress loads', 'basic-firewall' ),
 				$where . '<p>' . esc_html__( 'The mu-plugin loader is installed as well, so evaluation stays early even if the wp-config.php snippet is ever removed.', 'basic-firewall' ) . '</p>'
@@ -890,6 +897,12 @@ final class Site_Health {
 				. ( is_string( $mu_error ) && '' !== $mu_error ? '<p>' . esc_html( $mu_error ) . '</p>' : '' )
 				. '<p>' . esc_html__( 'Deactivating and reactivating the plugin will try again.', 'basic-firewall' ) . '</p>'
 			);
+		}
+
+		$stale = self::stale_mu_loader( '' );
+
+		if ( null !== $stale ) {
+			return $stale;
 		}
 
 		if ( null !== $cache ) {
@@ -915,6 +928,66 @@ final class Site_Health {
 			__( 'The firewall evaluates before plugins and the theme load', 'basic-firewall' ),
 			esc_html__( 'The mu-plugin loader is installed, so requests are evaluated as early as a plugin can act. No page cache was detected in front of it.', 'basic-firewall' )
 			. ' ' . esc_html__( 'If you later add one, this test will tell you to move the firewall earlier still.', 'basic-firewall' )
+		);
+	}
+
+	/**
+	 * A result for an installed loader that is out of date, or null.
+	 *
+	 * Out of date means the loader that ran this request states an older
+	 * version than the plugin ships, or the last attempt to refresh it failed.
+	 * Both are free to ask -- a constant and a network option -- which matters
+	 * because this runs behind the admin notice on every admin screen.
+	 *
+	 * Recommended rather than critical: an older loader still loads the
+	 * firewall at muplugins_loaded. What it lacks is whatever the release that
+	 * changed it fixed.
+	 *
+	 * @param string $where What the calling branch has already said about where evaluation happens.
+	 *
+	 * @return array{status: string, label: string, description: string, actions: string}|null
+	 */
+	private static function stale_mu_loader( string $where ): ?array {
+		$failure = Mu_Loader::refresh_failure();
+
+		if ( null === $failure && ! Mu_Loader::running_is_stale() ) {
+			return null;
+		}
+
+		$running = Mu_Loader::running_version();
+		$after   = ' ' . esc_html__( 'The plugin replaces it on its own when it is updated, when it is activated, and on the first admin, cron or WP-CLI request after the version changes, so this usually clears without anybody doing anything.', 'basic-firewall' );
+
+		if ( Mu_Loader::running_is_stale() ) {
+			$description = $where . '<p>' . sprintf(
+				/* translators: 1: installed loader version, or "an unversioned copy", 2: shipped loader version. */
+				esc_html__( 'The mu-plugin loader in the mu-plugins directory is %1$s, and this release of the plugin ships %2$s.', 'basic-firewall' ),
+				esc_html(
+					'' === (string) $running
+						? __( 'an unversioned copy', 'basic-firewall' )
+						/* translators: %s: version number. */
+						: sprintf( __( 'version %s', 'basic-firewall' ), $running )
+				),
+				/* translators: %s: version number. */
+				esc_html( sprintf( __( 'version %s', 'basic-firewall' ), Mu_Loader::VERSION ) )
+			) . $after . '</p>';
+		} else {
+			$description = $where . '<p>' . esc_html__( 'The mu-plugin loader in the mu-plugins directory differs from the copy this release of the plugin ships.', 'basic-firewall' ) . $after . '</p>';
+		}
+
+		if ( null !== $failure ) {
+			$description .= '<p>' . esc_html( $failure ) . '</p>'
+				. '<p>' . sprintf(
+					/* translators: %s: the mu-plugin file path. */
+					esc_html__( 'Make the mu-plugins directory writable by PHP and reload this page, or copy mu-plugin/basic-firewall-loader.php from the plugin over %s by hand.', 'basic-firewall' ),
+					'<code>' . esc_html( Mu_Loader::instance()->path() ) . '</code>'
+				) . '</p>';
+		} elseif ( Mu_Loader::refresh_disabled() ) {
+			$description .= '<p>' . esc_html__( 'BASIC_FIREWALL_MU_LOADER_REFRESH is false in wp-config.php, so the plugin will not replace it. Deploy the new copy of mu-plugin/basic-firewall-loader.php yourself.', 'basic-firewall' ) . '</p>';
+		}
+
+		return self::recommended(
+			__( 'The mu-plugin loader is out of date', 'basic-firewall' ),
+			$description
 		);
 	}
 
@@ -1496,6 +1569,18 @@ final class Site_Health {
 	 * @return array<string, mixed>
 	 */
 	private static function render( string $key ): array {
+		if ( 'evaluation' === $key ) {
+			/*
+			 * Opening Site Health is one of the occasions the loader is
+			 * compared with the shipped one byte for byte, and refreshed if it
+			 * differs. Here rather than in the check, because the check also
+			 * runs behind the admin notice on every admin screen, and reading
+			 * both files there would be a cost on every page for an answer
+			 * the constants already give.
+			 */
+			Mu_Loader::refresh_installed();
+		}
+
 		$result = self::check( $key );
 
 		return array(
