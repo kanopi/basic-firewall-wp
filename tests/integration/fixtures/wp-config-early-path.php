@@ -31,5 +31,7 @@ basic_firewall_evaluate(
 // What the bootstrap left for the runner, for a test to assert on.
 header( 'X-Early-Stashed: ' . ( empty( $GLOBALS['basic_firewall_outcome'] ) ? 'no' : 'yes' ) );
 header( 'X-Early-Outcome: ' . (string) ( $GLOBALS['basic_firewall_early']['outcome'] ?? 'none' ) );
+header( 'X-Early-Reason: ' . (string) ( $GLOBALS['basic_firewall_early']['reason'] ?? 'none' ) );
+header( 'X-Early-Evaluated: ' . ( empty( $GLOBALS['basic_firewall_early']['evaluated'] ) ? 'no' : 'yes' ) );
 
 echo 'SERVED BY WORDPRESS';

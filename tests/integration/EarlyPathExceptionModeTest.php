@@ -279,6 +279,29 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 	}
 
 	/**
+	 * "Enable the firewall" unticked stops this path too.
+	 *
+	 * The setting lives in an option, which this path cannot read, and it was
+	 * never compiled -- so a firewall switched off in the admin went on
+	 * refusing requests here while every screen said it was off.
+	 */
+	public function test_enable_unticked_stops_the_early_path(): void {
+		$this->given_rule( 'block', 'block', array(), array( 'enabled' => false ) );
+
+		$response = $this->request( '/bfw-early-match' );
+
+		$this->assertSame( 200, $response['status'], 'A firewall switched off in the admin refused a request on the early path.' );
+		$this->assertStringContainsString( self::SERVED, $response['body'] );
+		$this->assertSame( 'switched-off', $response['reason'] );
+		$this->assertSame( 'no', $response['evaluated'], 'The early path claimed a request it did not evaluate, so the runner would not look at it either.' );
+
+		// And switched back on, it refuses again: the sidecar goes with the setting.
+		$this->given_rule( 'block', 'block' );
+
+		$this->assertSame( 403, $this->request( '/bfw-early-match' )['status'] );
+	}
+
+	/**
 	 * Only verdicts are verdicts.
 	 *
 	 * Anything else the library throws is a failure of the firewall, which the
@@ -353,8 +376,9 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 	 * @param string               $response Rule response.
 	 * @param string               $mode     Operating mode.
 	 * @param array<string, mixed> $extra    Further global settings.
+	 * @param array<string, mixed> $document Further top-level settings.
 	 */
-	private function given_rule( string $response, string $mode, array $extra = array() ): void {
+	private function given_rule( string $response, string $mode, array $extra = array(), array $document = array() ): void {
 		if ( null === self::$server ) {
 			$this->markTestSkipped( 'PHP\'s built-in web server could not be started.' );
 		}
@@ -364,7 +388,7 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 		}
 
 		$this->given_settings(
-			array(
+			$document + array(
 				'global'    => array_merge(
 					array(
 						'mode'            => $mode,
@@ -436,16 +460,18 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 	/**
 	 * Make a request of the fixture.
 	 *
-	 * @param string $path Path to request.
+	 * @param string                $path    Path to request.
+	 * @param array<string, string> $headers Request headers.
 	 *
-	 * @return array{status: int, body: string, type: string, cache: string, location: string, retry: string, stashed: string, outcome: string}
+	 * @return array{status: int, body: string, type: string, cache: string, location: string, retry: string, stashed: string, outcome: string, reason: string, evaluated: string}
 	 */
-	private function request( string $path ): array {
+	private function request( string $path, array $headers = array() ): array {
 		$response = wp_remote_get(
 			self::$base . $path,
 			array(
 				'timeout'     => 15,
 				'redirection' => 0,
+				'headers'     => $headers,
 			)
 		);
 
@@ -454,14 +480,16 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 		}
 
 		return array(
-			'status'   => (int) wp_remote_retrieve_response_code( $response ),
-			'body'     => (string) wp_remote_retrieve_body( $response ),
-			'type'     => (string) wp_remote_retrieve_header( $response, 'content-type' ),
-			'cache'    => (string) wp_remote_retrieve_header( $response, 'cache-control' ),
-			'location' => (string) wp_remote_retrieve_header( $response, 'location' ),
-			'retry'    => (string) wp_remote_retrieve_header( $response, 'retry-after' ),
-			'stashed'  => (string) wp_remote_retrieve_header( $response, 'x-early-stashed' ),
-			'outcome'  => (string) wp_remote_retrieve_header( $response, 'x-early-outcome' ),
+			'status'    => (int) wp_remote_retrieve_response_code( $response ),
+			'body'      => (string) wp_remote_retrieve_body( $response ),
+			'type'      => (string) wp_remote_retrieve_header( $response, 'content-type' ),
+			'cache'     => (string) wp_remote_retrieve_header( $response, 'cache-control' ),
+			'location'  => (string) wp_remote_retrieve_header( $response, 'location' ),
+			'retry'     => (string) wp_remote_retrieve_header( $response, 'retry-after' ),
+			'stashed'   => (string) wp_remote_retrieve_header( $response, 'x-early-stashed' ),
+			'outcome'   => (string) wp_remote_retrieve_header( $response, 'x-early-outcome' ),
+			'reason'    => (string) wp_remote_retrieve_header( $response, 'x-early-reason' ),
+			'evaluated' => (string) wp_remote_retrieve_header( $response, 'x-early-evaluated' ),
 		);
 	}
 }

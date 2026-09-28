@@ -89,7 +89,10 @@ does not work as well as what does.
   CIDR blocks or `start-end` ranges), before any rule is consulted, and records none of them — so lifting it does not leave a
   block list full of customers. A panic file changes the operating mode on the
   next request, on both paths, without a deploy. `BASIC_FIREWALL_ENABLED` and
-  `BASIC_FIREWALL_MODE` in `wp-config.php` need no database at all.
+  `BASIC_FIREWALL_MODE` in `wp-config.php` need no database at all. Unticking
+  **Enable the firewall** stops both paths as well: it is compiled as
+  `mode: disabled` and mirrored into a `runtime.json` sidecar the
+  `wp-config.php` path reads, so a pinned mode cannot switch it back on.
 - **Fifteen WP-CLI subcommands** under `wp basic-firewall`: `status`, `rules`,
   `rebuild`, `sources`, `refresh-sources`, `check`, `block`, `unblock`,
   `blocked`, `clear-blocked`, `clear-cache`, `warm-cache`, `find-reference`,

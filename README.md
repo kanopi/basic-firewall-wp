@@ -333,6 +333,15 @@ mode. The one thing that goes unanswered then is a solved challenge, which
 grants nothing — the visitor is simply challenged again. Delete the compiled
 file, or the snippet, to stop it.
 
+**Unticking "Enable the firewall" switches this path off too.** The setting is
+an option like any other, so the compiler carries it to where the bootstrap can
+see it: the compiled file says `mode: disabled` with no panic file, and a small
+`runtime.json` beside it says `"enabled": false`, which the bootstrap reads
+before it builds a firewall at all. So a mode pinned with `BASIC_FIREWALL_MODE`
+chooses how a running firewall answers, and never switches back on one that was
+switched off. `runtime.json` is written only when something in it differs from
+the defaults, so most sites never have one.
+
 ## The private directory, and why WordPress makes this hard
 
 Drupal has a private file system: a directory outside the web root, served only

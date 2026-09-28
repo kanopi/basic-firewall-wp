@@ -154,6 +154,22 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 			return true;
 		}
 
+		$runtime = basic_firewall_runtime( $options );
+
+		/*
+		 * "Enable the firewall" unticked in the admin. The runner reads that
+		 * setting from an option; this path has no options, so the compiler
+		 * mirrors it into the runtime sidecar. Checked before anything is
+		 * loaded, and before BASIC_FIREWALL_MODE gets a say: a mode pinned in
+		 * wp-config.php chooses how the firewall answers, not whether a
+		 * firewall somebody switched off runs at all.
+		 */
+		if ( false === $runtime['enabled'] ) {
+			$GLOBALS['basic_firewall_early']['reason'] = 'switched-off';
+
+			return true;
+		}
+
 		$autoload = basic_firewall_autoloader( $options );
 
 		if ( null === $autoload ) {
@@ -445,6 +461,49 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 		 * evaluation rather than try to recover.
 		 */
 		return is_readable( $compiled ) ? $compiled : null;
+	}
+
+	/**
+	 * What the compiler left for this path in the runtime sidecar.
+	 *
+	 * The settings the library's configuration has no key for, which the
+	 * runner reads from options and this path cannot. An absent or unreadable
+	 * sidecar means every default -- the compiler writes one only when
+	 * something differs -- and so does anything in it of the wrong type, so a
+	 * damaged file never switches a feature on.
+	 *
+	 * @param array<string, mixed> $options Bootstrap options.
+	 *
+	 * @return array{enabled: bool}
+	 */
+	function basic_firewall_runtime( array $options ) {
+		$runtime = array(
+			'enabled' => true,
+		);
+
+		$compiled = basic_firewall_compiled_path( $options );
+
+		if ( null === $compiled ) {
+			return $runtime;
+		}
+
+		$sidecar = dirname( $compiled ) . '/runtime.json';
+
+		if ( ! is_readable( $sidecar ) ) {
+			return $runtime;
+		}
+
+		$decoded = json_decode( (string) file_get_contents( $sidecar ), true ); // phpcs:ignore WordPress.WP.AlternativeFunctions -- a local file, and WP_Filesystem does not exist on this path.
+
+		if ( ! is_array( $decoded ) ) {
+			return $runtime;
+		}
+
+		if ( false === ( $decoded['enabled'] ?? true ) ) {
+			$runtime['enabled'] = false;
+		}
+
+		return $runtime;
 	}
 
 	/**

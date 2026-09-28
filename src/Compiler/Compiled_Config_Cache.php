@@ -120,6 +120,7 @@ TXT;
 		}
 
 		$this->record_meta( $compiler->connection_paths(), true, $problems, $compiler );
+		$this->write_runtime( $compiler->runtime() );
 
 		/**
 		 * Fires after the compiled configuration has been written.
@@ -250,6 +251,38 @@ TXT;
 	}
 
 	/**
+	 * Mirror what the wp-config.php path needs into the runtime sidecar.
+	 *
+	 * Only after the compiled file itself was written, so the two always
+	 * describe the same configuration. Removed when everything in it is a
+	 * default, which is what the bootstrap assumes when the file is absent --
+	 * so most sites never have one and never pay to read it.
+	 *
+	 * A failure to write is not fatal, and not silent either: the compiled
+	 * file carries `mode: disabled` for a firewall switched off, so the part
+	 * that matters most still holds without this file.
+	 *
+	 * @param array<string, mixed> $runtime See Config_Compiler::runtime().
+	 */
+	private function write_runtime( array $runtime ): void {
+		$path = Plugin::instance()->paths()->runtime_file();
+
+		if ( Config_Compiler::RUNTIME_DEFAULTS === $runtime ) {
+			if ( file_exists( $path ) ) {
+				wp_delete_file( $path );
+			}
+
+			return;
+		}
+
+		$json = wp_json_encode( $runtime );
+
+		if ( is_string( $json ) ) {
+			$this->write_atomically( $path, $json );
+		}
+	}
+
+	/**
 	 * What the last compile recorded.
 	 *
 	 * @return array<string, mixed>
@@ -369,10 +402,10 @@ TXT;
 			wp_delete_file( $path );
 		}
 
-		$sidecar = Plugin::instance()->paths()->connection_paths_file();
-
-		if ( file_exists( $sidecar ) ) {
-			wp_delete_file( $sidecar );
+		foreach ( array( Plugin::instance()->paths()->connection_paths_file(), Plugin::instance()->paths()->runtime_file() ) as $sidecar ) {
+			if ( file_exists( $sidecar ) ) {
+				wp_delete_file( $sidecar );
+			}
 		}
 
 		delete_option( self::META_OPTION );

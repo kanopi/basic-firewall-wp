@@ -685,6 +685,19 @@ final class Paths {
 	}
 
 	/**
+	 * Path of the runtime sidecar.
+	 *
+	 * A small JSON document carrying what the wp-config.php path has to know
+	 * and the library's configuration has no key for -- whether the firewall
+	 * is switched on, for one. Written only when it says something other than
+	 * the defaults, so on most sites it does not exist. See
+	 * Config_Compiler::runtime().
+	 */
+	public function runtime_file(): string {
+		return $this->base() . '/runtime.json';
+	}
+
+	/**
 	 * Directory the library writes its parsed-configuration cache into.
 	 *
 	 * Persistent rather than the system temporary directory, because a temp

@@ -58,7 +58,7 @@ final class SiteSettingsHonouredTest extends Honoured_Settings {
 	 * @var array<string, string>
 	 */
 	private const COVERAGE = array(
-		'enabled'                                         => 'plugin: decides whether the runner calls the library at all; see LifecycleTest.',
+		'enabled'                                         => 'test_enabled',
 		'global.bypass_roles'                             => 'unapplied: stored, shown on the General screen and reported by Site Health, but no code path exempts a role.',
 		'global.mode'                                     => 'test_mode',
 		'global.panic_file'                               => 'test_panic_file',
@@ -193,6 +193,37 @@ final class SiteSettingsHonouredTest extends Honoured_Settings {
 
 			$this->assertTrue( method_exists( $this, $how ), "$setting names $how, which does not exist." );
 		}
+	}
+
+	/**
+	 * A firewall switched off evaluates nothing, whoever reads the file.
+	 *
+	 * The runner checks the setting before it calls the library; the
+	 * wp-config.php path cannot, so the compiled file and its runtime sidecar
+	 * have to carry it. EarlyPathExceptionModeTest drives that path.
+	 */
+	public function test_enabled(): void {
+		$sidecar = \Kanopi\BasicFirewall\Plugin::instance()->paths()->runtime_file();
+
+		$firewall = $this->build(
+			array(
+				'enabled' => false,
+				'global'  => array(
+					'mode'       => 'block',
+					'panic_file' => $this->scratch . '/panic',
+				),
+			)
+		);
+
+		$this->assertSame( 'disabled', $firewall->getConfiguredMode()->value, 'A firewall switched off compiled to a mode that evaluates.' );
+		$this->assertArrayNotHasKey( 'panic_file', $this->compiled['global'], 'A panic file could switch a disabled firewall back on.' );
+		$this->assertFileExists( $sidecar );
+		$this->assertSame( array( 'enabled' => false ), array_intersect_key( (array) json_decode( (string) file_get_contents( $sidecar ), true ), array( 'enabled' => true ) ) ); // phpcs:ignore WordPress.WP.AlternativeFunctions -- a local file.
+
+		$firewall = $this->build( array( 'global' => array( 'mode' => 'block' ) ) );
+
+		$this->assertSame( 'block', $firewall->getConfiguredMode()->value );
+		$this->assertFileDoesNotExist( $sidecar, 'A sidecar holding only defaults was left for the early path to read on every request.' );
 	}
 
 	/**

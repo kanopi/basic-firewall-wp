@@ -834,7 +834,7 @@ final class Site_Health {
 		$early        = self::early_path_active();
 		$cache        = self::detect_page_cache();
 
-		if ( $early && ! self::early_report()['evaluated'] && 'disabled' !== self::early_report()['reason'] ) {
+		if ( $early && ! self::early_report()['evaluated'] && ! in_array( self::early_report()['reason'], array( 'disabled', 'switched-off' ), true ) ) {
 			/*
 			 * The snippet is there and running, and this request still was not
 			 * evaluated by it. Reported rather than folded into the healthy
@@ -843,12 +843,13 @@ final class Site_Health {
 			 * request -- which is the exact configuration somebody added the
 			 * snippet to avoid, and a page cache defeats it entirely.
 			 *
-			 * `disabled` is excluded on purpose. BASIC_FIREWALL_ENABLED stops
-			 * both paths, so the sentence below -- that the mu-plugin is
+			 * `disabled` and `switched-off` are excluded on purpose.
+			 * BASIC_FIREWALL_ENABLED and the "Enable the firewall" setting both
+			 * stop both paths, so the sentence below -- that the mu-plugin is
 			 * covering for this one -- would be false, and the operating mode
-			 * test already reports that state and names the constant. Two
-			 * checks describing one cause, one of them wrongly, is worse than
-			 * the check that was missing.
+			 * test already reports that state. Two checks describing one
+			 * cause, one of them wrongly, is worse than the check that was
+			 * missing.
 			 */
 			return self::critical(
 				__( 'The wp-config.php snippet is present but is not evaluating requests', 'basic-firewall' ),
@@ -1084,6 +1085,8 @@ final class Site_Health {
 		switch ( $reason ) {
 			case 'disabled':
 				return __( 'BASIC_FIREWALL_ENABLED is defined as false in wp-config.php, which switches the firewall off on both paths.', 'basic-firewall' );
+			case 'switched-off':
+				return __( '"Enable the firewall" is unticked on the General screen, which switches the firewall off on both paths.', 'basic-firewall' );
 			case 'no-compiled-file':
 				return __( 'There is no compiled configuration at the path the snippet names. Either the private_path argument is wrong, or the firewall has never been built — the early path cannot build it, because that needs WordPress.', 'basic-firewall' );
 			case 'no-autoloader':
