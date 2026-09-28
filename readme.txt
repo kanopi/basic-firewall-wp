@@ -63,10 +63,20 @@ wp-config.php takes effect on the next request and needs no database access.
 
 == Installation ==
 
-1. Download `basic-firewall-<version>.zip` from the GitHub Releases page,
+With WP-CLI, which always installs the current release:
+
+`wp plugin install https://github.com/kanopi/basic-firewall-wp/releases/latest/download/basic-firewall.zip --activate`
+
+Run it again with `--force` to upgrade. The plugin is not on wordpress.org, so
+`wp plugin update` has nowhere to look for a newer version.
+
+Or through the admin:
+
+1. Download `basic-firewall.zip` from the GitHub Releases page,
    https://github.com/kanopi/basic-firewall-wp/releases
 2. Upload it through Plugins → Add New → Upload Plugin, and activate it.
-3. Visit Firewall → Status and read the checks.
+
+Either way, then visit Firewall → Status and read the checks.
 
 The zip ships with the firewall library vendored and namespace-scoped, so no
 Composer, shell access or build step is needed on the server, and it cannot
