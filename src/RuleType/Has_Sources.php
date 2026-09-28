@@ -11,6 +11,7 @@ namespace Kanopi\BasicFirewall\RuleType;
 
 use Kanopi\BasicFirewall\Plugin;
 use Kanopi\BasicFirewall\Support\Paths;
+use Kanopi\Firewall\Source\SourceDefinition;
 use Symfony\Component\Yaml\Yaml;
 
 /**
@@ -85,7 +86,15 @@ trait Has_Sources {
 	}
 
 	/**
-	 * Formats the library can decode. Blank means "work it out from the URL".
+	 * Formats the library accepts when one is declared. Blank means "work it
+	 * out from the URL".
+	 *
+	 * No XML. The library infers `xml` from a `.xml` URL but refuses it as a
+	 * declared format -- SourceDefinition::FORMATS does not list it -- so
+	 * choosing it here stopped the rule constructing at all, and a block rule
+	 * that does not construct is not running. A `.xml` list still works with
+	 * the format left to detection. A stored `xml` is dropped on the next
+	 * validation, and never compiled; see compile_sources().
 	 *
 	 * @return array<string, string>
 	 */
@@ -96,7 +105,6 @@ trait Has_Sources {
 			'json'   => __( 'JSON', 'basic-firewall' ),
 			'ndjson' => __( 'NDJSON — one JSON object per line', 'basic-firewall' ),
 			'yaml'   => __( 'YAML', 'basic-firewall' ),
-			'xml'    => __( 'XML', 'basic-firewall' ),
 			'csv'    => __( 'CSV', 'basic-firewall' ),
 			'tsv'    => __( 'TSV', 'basic-firewall' ),
 		);
@@ -426,6 +434,16 @@ trait Has_Sources {
 				if ( '' !== (string) $source[ $key ] ) {
 					$entry[ $key ] = (string) $source[ $key ];
 				}
+			}
+
+			/*
+			 * A declared format the library does not accept stops the rule
+			 * constructing, which is every rule's worth of enforcement lost to
+			 * one list. `xml` is the one a screen offered and may have stored;
+			 * left undeclared, the library infers it from the URL instead.
+			 */
+			if ( isset( $entry['format'] ) && ! in_array( $entry['format'], SourceDefinition::FORMATS, true ) ) {
+				unset( $entry['format'] );
 			}
 
 			$template = $this->source_template( $source );

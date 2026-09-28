@@ -171,16 +171,22 @@ final class Crs extends Rule_Type_Base {
 		$settings = $rule['settings'] ?? array();
 
 		$config = array(
-			'mode'              => (string) ( $settings['mode'] ?? 'monitor' ),
-			'paranoia'          => (int) ( $settings['paranoia'] ?? 1 ),
-			'anomaly_threshold' => array(
+			'mode'               => (string) ( $settings['mode'] ?? 'monitor' ),
+			'paranoia'           => (int) ( $settings['paranoia'] ?? 1 ),
 
-				/*
-				 * The `inbound` / `outbound` key names, not the old severity
-				 * names. Before library v2.9.0 only the severity names were
-				 * read, so these keys fell back to defaults silently and a tuned
-				 * threshold stopped applying with nothing reporting it.
-				 */
+			/*
+			 * `anomaly_thresholds`, plural, which is the key the plugin reads.
+			 * This wrote `anomaly_threshold`, which it has never read, so every
+			 * tuned threshold was the default 5 -- a site that raised it to
+			 * quieten false positives was still rejecting at 5, and one that
+			 * lowered it to be stricter was not.
+			 *
+			 * The `inbound` / `outbound` key names, not the old severity names.
+			 * Before library v2.9.0 only the severity names were read, so these
+			 * keys fell back to defaults silently and a tuned threshold stopped
+			 * applying with nothing reporting it.
+			 */
+			'anomaly_thresholds' => array(
 				'inbound'  => (int) ( $settings['inbound'] ?? 5 ),
 				'outbound' => (int) ( $settings['outbound'] ?? 4 ),
 			),

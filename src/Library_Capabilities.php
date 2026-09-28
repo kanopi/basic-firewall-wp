@@ -365,9 +365,9 @@ final class Library_Capabilities {
 			$plugin = new Crs(
 				array( 'name' => 'capability_probe' ),
 				array(
-					'mode'              => 'block',
-					'paranoia'          => 1,
-					'anomaly_threshold' => array(
+					'mode'               => 'block',
+					'paranoia'           => 1,
+					'anomaly_thresholds' => array(
 						'inbound'  => 5,
 						'outbound' => 4,
 					),

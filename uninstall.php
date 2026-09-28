@@ -837,11 +837,33 @@ if ( ! function_exists( 'basic_firewall_uninstall_site' ) ) {
 			}
 		}
 
+		$counted_in_wordpress = false;
+
 		foreach ( (array) ( $settings['rules'] ?? array() ) as $rule ) {
 			$storage = is_array( $rule ) && 'rate_limit' === ( $rule['type'] ?? '' ) ? ( $rule['settings']['storage'] ?? null ) : null;
 
 			if ( is_array( $storage ) && 'database' === ( $storage['backend'] ?? '' ) ) {
 				$tables[] = array( (string) ( $storage['table'] ?? 'basic_firewall_ratelimit' ), 'wordpress' !== ( $storage['connection_source'] ?? 'wordpress' ) );
+
+				$counted_in_wordpress = $counted_in_wordpress || 'wordpress' === ( $storage['connection_source'] ?? 'wordpress' );
+			}
+		}
+
+		/*
+		 * Named, never dropped. Before 1.0.0 the table name was compiled under
+		 * a key the library does not read, so a database-backed rate limit
+		 * counted into the library's own default table -- unprefixed, and in
+		 * WordPress's database. This plugin may have created it; so may any
+		 * other application using kanopi/firewall with the same database, and
+		 * nothing in it says which. Only reported when a rule here could have
+		 * been the one writing to it.
+		 */
+		if ( $counted_in_wordpress ) {
+			global $wpdb;
+
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery -- uninstall, one lookup.
+			if ( 'firewall_rate_limit_storage' === $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', 'firewall_rate_limit_storage' ) ) ) {
+				basic_firewall_uninstall_notes( __( 'Not dropped: the table firewall_rate_limit_storage. A build before 1.0.0 counted database-backed rate limits into it by mistake, but other software using the same firewall library writes to it too, so it is left in place for you to remove if nothing else uses it.', 'basic-firewall' ) );
 			}
 		}
 

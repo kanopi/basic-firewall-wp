@@ -23,7 +23,7 @@ use PHPUnit\Framework\TestCase;
  *
  * Three releases widened what a rule can say about itself. A rule can be given
  * a window; a rate limit can count something other than the address; a
- * referenced list can be XML. None of it changes an existing configuration —
+ * referenced list can be XML, detected from its URL. None of it changes an existing configuration —
  * every one of these is absent by default and absent means what it always
  * meant — which is exactly why each needs a test: a feature that changes
  * nothing when unused changes nothing when broken, either.
@@ -138,10 +138,33 @@ final class LibraryUpdatesTest extends TestCase {
 	}
 
 	/**
-	 * XML is offered as a referenced-list format.
+	 * An XML list is read by detection, never by declaring it.
+	 *
+	 * This used to assert the opposite. The library decodes XML when it infers
+	 * the format from a `.xml` URL, but refuses `format: xml` when it is
+	 * declared, and a refused source stops its rule constructing. So `xml` is
+	 * not offered, and one stored before it was withdrawn is not compiled.
 	 */
-	public function test_xml_is_an_offered_format(): void {
-		$this->assertArrayHasKey( 'xml', Url::formats() );
+	public function test_xml_is_detected_rather_than_declared(): void {
+		$this->assertArrayNotHasKey( 'xml', Url::formats() );
+
+		$rule = $this->rule();
+
+		$rule['settings']['sources'] = array(
+			array_merge(
+				Url::source_defaults(),
+				array(
+					'url'      => 'https://example.com/paths.xml',
+					'format'   => 'xml',
+					'variable' => 'path',
+				)
+			),
+		);
+
+		$entry = ( new Url() )->compile( $rule );
+
+		$this->assertSame( 'https://example.com/paths.xml', $entry['metadata']['sources'][0]['upstream'] ?? null );
+		$this->assertArrayNotHasKey( 'format', $entry['metadata']['sources'][0] );
 	}
 
 	/**
