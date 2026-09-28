@@ -84,6 +84,20 @@ final class Paths {
 	public const SUFFIX_OPTION = 'basic_firewall_private_suffix';
 
 	/**
+	 * File written into every directory this plugin itself created.
+	 *
+	 * Uninstall removes a directory only when it can tell the plugin made it,
+	 * and a guard file cannot tell it that: ensure() writes the guard files
+	 * into whatever directory the `basic_firewall_private_path` filter names,
+	 * including one somebody created by hand and keeps other things in. This
+	 * file is written only when ensure() made the directory, so its presence
+	 * is the one thing that says the whole directory is the plugin's to
+	 * delete. uninstall.php spells the name out itself, because it runs
+	 * without this class.
+	 */
+	public const OWNER_MARKER = '.basic-firewall-owner';
+
+	/**
 	 * Cached base directory.
 	 *
 	 * @var string|null
@@ -381,7 +395,9 @@ final class Paths {
 		$problems = array();
 		$base     = $this->base();
 
-		if ( ! is_dir( $base ) && ! wp_mkdir_p( $base ) ) {
+		$created = ! is_dir( $base );
+
+		if ( $created && ! wp_mkdir_p( $base ) ) {
 			return array(
 				sprintf(
 					/* translators: %s: directory path. */
@@ -389,6 +405,10 @@ final class Paths {
 					$base
 				),
 			);
+		}
+
+		if ( $created ) {
+			self::mark_owned( $base );
 		}
 
 		if ( ! wp_is_writable( $base ) ) {
@@ -421,8 +441,8 @@ final class Paths {
 		foreach ( array( 'logs', 'cache', 'cache/compiled', 'device-detector', 'abuseipdb' ) as $child ) {
 			$path = $base . '/' . $child;
 
-			if ( ! is_dir( $path ) ) {
-				wp_mkdir_p( $path );
+			if ( ! is_dir( $path ) && wp_mkdir_p( $path ) ) {
+				self::mark_owned( $path );
 			}
 
 			if ( is_dir( $path ) && ! is_readable( $path . '/index.php' ) ) {
@@ -430,7 +450,40 @@ final class Paths {
 			}
 		}
 
+		$this->ensure_cache_constant_dir();
+
 		return $problems;
+	}
+
+	/**
+	 * Create the BASIC_FIREWALL_CACHE_DIR directory, if it names one that is missing.
+	 *
+	 * Not required for the caches to work -- the library creates what it
+	 * writes into. It is here so that uninstall can later tell a directory the
+	 * plugin made, and may remove, from one an administrator pointed at that
+	 * also holds other things, such as `/tmp`. A directory that already
+	 * existed is left exactly as it was.
+	 */
+	private function ensure_cache_constant_dir(): void {
+		$dir = self::cache_dir_constant();
+
+		if ( null === $dir || is_dir( $dir ) ) {
+			return;
+		}
+
+		if ( wp_mkdir_p( $dir ) ) {
+			self::mark_owned( $dir );
+		}
+	}
+
+	/**
+	 * Record that the plugin created a directory. See OWNER_MARKER.
+	 *
+	 * @param string $dir Directory this plugin has just created.
+	 */
+	private static function mark_owned( string $dir ): void {
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- a local file, and WP_Filesystem is not initialised on every path that reaches this.
+		file_put_contents( $dir . '/' . self::OWNER_MARKER, "Created by the Basic Firewall plugin, which removes this directory when it is uninstalled.\n" );
 	}
 
 	/**
