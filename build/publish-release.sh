@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 #
-# Publishes a GitHub Release for a tag, with the zip attached.
+# Publishes a GitHub Release for a tag, with the zip attached twice: as
+# basic-firewall-<version>.zip, and as basic-firewall.zip for the stable
+# releases/latest/download URL that `wp plugin install` is pointed at.
 #
 #     GITHUB_TOKEN=... bash build/publish-release.sh v1.0.0 build/dist/basic-firewall-1.0.0.zip
 #
@@ -77,7 +79,17 @@ case "$(basename "$zip")" in
 esac
 
 notes=$(mktemp)
-trap 'rm -f "$notes"' EXIT
+stable_dir=$(mktemp -d)
+trap 'rm -rf "$notes" "$stable_dir"' EXIT
+
+# The same zip again under a name with no version in it. GitHub serves
+# releases/latest/download/<asset> from whichever release is marked Latest, so a
+# fixed name is what gives `wp plugin install <url>` one URL that always means
+# the current release -- on a site with no Composer, that URL is the whole
+# install. Pre-releases are never Latest, so an -rc tag cannot be picked up by
+# it. The versioned asset stays for anyone pinning a release.
+stable_zip="$stable_dir/basic-firewall.zip"
+cp "$zip" "$stable_zip"
 
 echo "==> Cutting release notes from CHANGELOG.md"
 bash "$ROOT/build/release-notes.sh" "$version" > "$notes"
@@ -91,14 +103,14 @@ title="Basic Firewall ${version}"
 
 if gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
 	echo "==> ${tag} already has a release on ${repo}; replacing its zip and notes"
-	gh release upload "$tag" "$zip" --repo "$repo" --clobber
+	gh release upload "$tag" "$zip" "$stable_zip" --repo "$repo" --clobber
 	gh release edit "$tag" --repo "$repo" --title "$title" --notes-file "$notes" --prerelease="$prerelease"
 else
 	echo "==> Creating the ${tag} release on ${repo}"
 	# --verify-tag: the tag must already exist on GitHub. Without it gh would
 	# create one from the default branch, which is exactly the release this
 	# pipeline exists to prevent.
-	gh release create "$tag" "$zip" \
+	gh release create "$tag" "$zip" "$stable_zip" \
 		--repo "$repo" \
 		--verify-tag \
 		--title "$title" \

@@ -131,20 +131,42 @@ thing standing between you and not noticing is that the failure is loud.
 
 ## Installation
 
-Either route works. They produce different builds, and the difference matters.
+Composer is optional. The release zip carries everything the plugin needs, so a
+site with no Composer anywhere installs it with WP-CLI or through the admin. The
+two builds differ, and the difference matters.
 
-### From a release zip (recommended)
+### With WP-CLI (recommended)
 
-Download `basic-firewall-<version>.zip` from the
+```bash
+wp plugin install https://github.com/kanopi/basic-firewall-wp/releases/latest/download/basic-firewall.zip --activate
+```
+
+That URL always resolves to the current stable release. To pin one, name it:
+
+```bash
+wp plugin install https://github.com/kanopi/basic-firewall-wp/releases/download/1.0.0/basic-firewall-1.0.0.zip --activate
+```
+
+To upgrade, run the same command with `--force`; WP-CLI replaces the plugin in
+place and keeps its settings. `wp plugin update` cannot do it, because the
+plugin is not listed on wordpress.org, so WordPress has nowhere to look for a
+newer version.
+
+### Through the admin
+
+Download `basic-firewall.zip` (or the versioned `basic-firewall-<version>.zip`,
+the same file) from the
 [GitHub Releases page](https://github.com/kanopi/basic-firewall-wp/releases) and
-install it through **Plugins → Add New → Upload Plugin**, or with
-`wp plugin install basic-firewall-<version>.zip --activate`. No Composer, no
-shell, no build step. That zip is the one CI installed on a clean WordPress and
-made to refuse a request before publishing it; see [Releasing](#releasing).
+upload it at **Plugins → Add New → Upload Plugin**.
 
-The zip ships with the library vendored **and namespace-scoped**, which makes it
-immune to a collision with any other plugin that bundles `kanopi/firewall`.
-`wp basic-firewall status` reports `Collision safe: yes (scoped)`.
+### What the zip is
+
+It is the one CI installed on a clean WordPress with no Composer on the machine,
+and made to refuse a request, before publishing it; see [Releasing](#releasing).
+No shell, no build step. It ships with the library vendored **and
+namespace-scoped**, which makes it immune to a collision with any other plugin
+that bundles `kanopi/firewall`. `wp basic-firewall status` reports
+`Collision safe: yes (scoped)`.
 
 ### With Composer
 
@@ -1856,9 +1878,12 @@ every one of them passed, `release`:
 - takes the zip `package` just built and exercised, byte for byte, rather than
   rebuilding it;
 - cuts the notes with `build/release-notes.sh`;
-- creates the GitHub Release with `gh`, attaching `basic-firewall-<version>.zip`.
+- creates the GitHub Release with `gh`, attaching the zip twice: as
+  `basic-firewall-<version>.zip`, and as `basic-firewall.zip` so the
+  `releases/latest/download/basic-firewall.zip` URL in
+  [With WP-CLI](#with-wp-cli-recommended) always means the current release.
   A version with a pre-release suffix (`1.1.0-rc.1`) is published as a GitHub
-  **pre-release**, so it is never shown as Latest. Re-running the job for a tag
+  **pre-release**, so it is never shown as Latest and that URL never serves it. Re-running the job for a tag
   that already has a release replaces the zip and the notes instead of failing.
 
 A branch build never publishes: the `release` job's filters ignore every branch,
