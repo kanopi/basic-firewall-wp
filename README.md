@@ -30,6 +30,7 @@ its habit of writing down what does not work.
 - [wp-config.php options](#wp-configphp-options)
 - [WP-CLI commands](#wp-cli-commands)
 - [Multisite](#multisite)
+- [Uninstalling](#uninstalling)
 - [Building a release](#building-a-release)
 - [Deliberately out of scope](#deliberately-out-of-scope)
 
@@ -1757,6 +1758,70 @@ shows the resulting table names.
 
 There is no network-wide settings screen. Configuring 200 sites means
 `wp site list --field=url` and a loop.
+
+## Uninstalling
+
+Deactivating is reversible: it removes the mu-plugin loader and the compiled
+file and keeps everything else. **Delete** is not. It removes, on every site of
+a network:
+
+- every `basic_firewall_*` option and transient, the scheduled events, and the
+  `basic_firewall_blocked`, `_offenses`, `_log` and `_ratelimit` tables;
+- the private directory — under uploads, the `WP_CONTENT_DIR` fallback, and
+  wherever the `basic_firewall_private_path` filter puts it;
+- the block list, offense history, rate limit counters and log files at every
+  path the settings name, with their `.lock` files and rotated copies;
+- the files cache backend's pools, and what the library wrote into
+  `BASIC_FIREWALL_CACHE_DIR`;
+- the Redis block list and Redis rate limit counters, by `SCAN` and `DEL` under
+  their prefix — never `KEYS`, never `FLUSHDB`;
+- the `basic_firewall` object cache group and the plugin's APCu entries;
+- the mu-plugin loader and the capabilities.
+
+### What it will not delete
+
+A stored path can point anywhere — `/var/log/syslog` is a valid log handler
+path — so uninstall only deletes inside a directory it can tell is the plugin's:
+
+- one the plugin **created**, which carries a `.basic-firewall-owner` file.
+  Only these are removed as directories;
+- one the plugin **guards**, which carries its `.htaccess` or `web.config`. The
+  plugin's own files come out; the directory, and anything else in it, stays;
+- the private directory itself, which its random suffix identifies.
+
+Symlinks are removed as links and never followed. Everything else is left in
+place, and WP-CLI prints a warning for each thing left:
+
+```
+wp plugin uninstall basic-firewall --deactivate
+```
+
+The Plugins screen deletes over Ajax and has nowhere to show those warnings, so
+these are the cases to check by hand:
+
+- **A stored file outside any directory the plugin created or guards** — an
+  absolute log or storage path you chose. Delete it yourself.
+- **A filtered private directory that existed before the plugin used it**, or
+  that an older release created: emptied of the plugin's files and left.
+- **`BASIC_FIREWALL_CACHE_DIR`**, unless the plugin created it or it is named for
+  the plugin (as `/tmp/basic-firewall` is). A directory such as `/tmp` is not
+  touched; remove its `compiled`, `sources`, `device-detector`,
+  `kanopi_firewall_rdns` and `abuseipdb` directories yourself.
+- **Redis, when the server is unreachable or ext-redis is missing** at uninstall
+  time. Block records expire with their ban; offense histories and permanent
+  bans do not. A Redis backend that is configured but no longer selected is not
+  contacted at all: on a single site its default prefix is the library's bare
+  `firewall:`, which another application on the same server could share.
+- **The object cache**, when the drop-in cannot flush a single group
+  (`wp_cache_supports( 'flush_group' )`, WordPress 6.1 or later and a drop-in
+  that implements it). Entries are left to expire.
+- **APCu, when uninstalling from WP-CLI.** APCu belongs to the process that
+  filled it; the web server's entries expire on their own, or restart PHP-FPM.
+- **A table renamed on the Storage screen, or kept in another database** through
+  a DSN. Only the four default names are dropped, because a `DROP` built from a
+  stored name is one an imported settings document could aim anywhere.
+- **Networks larger than 500 sites.** Uninstall visits the first 500; beyond
+  that, run `wp plugin uninstall` per site.
 
 ## Continuous integration
 

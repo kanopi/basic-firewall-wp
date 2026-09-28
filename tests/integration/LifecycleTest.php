@@ -35,12 +35,7 @@ use PHPUnit\Framework\TestCase;
  */
 final class LifecycleTest extends TestCase {
 
-	/**
-	 * Options this site had before the test.
-	 *
-	 * @var array<string, mixed>
-	 */
-	private array $snapshot = array();
+	use Uninstall_Harness;
 
 	/**
 	 * Snapshot everything the plugin owns.
@@ -48,66 +43,16 @@ final class LifecycleTest extends TestCase {
 	protected function setUp(): void {
 		parent::setUp();
 
-		foreach ( $this->plugin_option_names() as $name ) {
-			$this->snapshot[ $name ] = get_option( $name, null );
-		}
+		$this->snapshot_plugin_state();
 	}
 
 	/**
-	 * Put it all back, and leave the site activated.
-	 *
-	 * "Activated" includes the mu-plugin loader, and that was the one piece
-	 * this method used to leave behind. The uninstall tests run last in this
-	 * class and `uninstall.php` deletes the loader, so a suite run ended with
-	 * the site's earliest evaluation point quietly gone: the firewall dropped
-	 * from `muplugins_loaded` to `plugins_loaded`, which still works and looks
-	 * identical from the admin screens, so nothing said so. On a site also
-	 * running the wp-config.php path it was invisible, because that path
-	 * supersedes the loader and Site Health then reports the better answer.
-	 *
-	 * A test suite that disarms the firewall it is testing is worse than one
-	 * that fails, and this is the second form that took -- the first was the
-	 * compiled file, restored above for the same reason.
+	 * Put it all back, and leave the site activated. See Uninstall_Harness.
 	 */
 	protected function tearDown(): void {
-		foreach ( $this->snapshot as $name => $value ) {
-			if ( null === $value ) {
-				delete_option( (string) $name );
-			} else {
-				update_option( (string) $name, $value, false );
-			}
-		}
-
-		Plugin::instance()->settings()->flush();
-		Capabilities::grant();
-		Plugin::instance()->paths()->ensure();
-		Plugin::instance()->compiled()->rebuild();
-		$this->restore_mu_plugin();
+		$this->restore_plugin_state();
 
 		parent::tearDown();
-	}
-
-	/**
-	 * Reinstate the mu-plugin loader if a test removed it.
-	 *
-	 * Copied directly rather than by running `Activator::activate()`, which
-	 * would write the default settings back over the snapshot this method has
-	 * just restored.
-	 */
-	private function restore_mu_plugin(): void {
-		$target = WPMU_PLUGIN_DIR . '/basic-firewall-loader.php';
-
-		if ( file_exists( $target ) ) {
-			return;
-		}
-
-		$source = dirname( __DIR__, 2 ) . '/mu-plugin/basic-firewall-loader.php';
-
-		if ( ! is_readable( $source ) || ! wp_is_writable( WPMU_PLUGIN_DIR ) ) {
-			return;
-		}
-
-		copy( $source, $target ); // phpcs:ignore WordPress.WP.AlternativeFunctions -- WP_Filesystem is not initialised in the test bootstrap, and this is a local copy of a file the plugin ships.
 	}
 
 	/**
@@ -181,25 +126,6 @@ final class LifecycleTest extends TestCase {
 			'good' === $results['bootstrap']['status'],
 			'The check disagrees with whether the bootstrap actually ran, which is the only thing that proves the snippet is doing anything.'
 		);
-	}
-
-	/**
-	 * Every option currently named for this plugin.
-	 *
-	 * @return list<string>
-	 */
-	private function plugin_option_names(): array {
-		global $wpdb;
-
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-		$names = $wpdb->get_col(
-			$wpdb->prepare(
-				"SELECT option_name FROM {$wpdb->options} WHERE option_name LIKE %s",
-				$wpdb->esc_like( 'basic_firewall_' ) . '%'
-			)
-		);
-
-		return array_map( 'strval', (array) $names );
 	}
 
 	/**
@@ -368,30 +294,5 @@ final class LifecycleTest extends TestCase {
 
 		$this->assertSame( Schema::VERSION, (int) get_option( Schema::VERSION_OPTION ) );
 		$this->assertNull( Upgrader::failure() );
-	}
-
-	/**
-	 * Run the plugin's uninstall.
-	 *
-	 * `uninstall_plugin()` defines WP_UNINSTALL_PLUGIN and so can only be called
-	 * once in a process -- the second test using it dies with "Constant
-	 * WP_UNINSTALL_PLUGIN already defined" before reaching any assertion. So the
-	 * first call goes through WordPress, which is what proves the real path
-	 * works, and later ones include the file directly under the same constant.
-	 *
-	 * uninstall.php guards its function declarations for exactly this reason.
-	 */
-	private function run_uninstall(): void {
-		if ( ! function_exists( 'uninstall_plugin' ) ) {
-			require_once ABSPATH . 'wp-admin/includes/plugin.php';
-		}
-
-		if ( ! defined( 'WP_UNINSTALL_PLUGIN' ) ) {
-			uninstall_plugin( 'basic-firewall/basic-firewall.php' );
-
-			return;
-		}
-
-		include dirname( __DIR__, 2 ) . '/uninstall.php';
 	}
 }
