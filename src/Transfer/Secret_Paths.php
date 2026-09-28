@@ -42,6 +42,23 @@ final class Secret_Paths {
 	private const TOKEN_PATTERN = '/^%(env|file)\(.*\)%$/';
 
 	/**
+	 * What a credential is replaced with where it is shown rather than exported.
+	 */
+	public const REDACTED = '[redacted]';
+
+	/**
+	 * Keys in the compiled file whose value is a credential, whatever wrote them.
+	 *
+	 * The compiled file is shaped for the library rather than for the settings,
+	 * so the settings' secret paths do not address it. These are the library's
+	 * names: the challenge signing secret and provider secret keys, Redis
+	 * `auth`, a connection's `password` and `dsn`, AbuseIPDB's `api_key`, a
+	 * list's bearer `token`. Under a list's `upstream`, `headers` and an auth
+	 * block's `value` are credentials too.
+	 */
+	private const COMPILED_SECRET_KEYS = array( 'secret', 'secret_key', 'password', 'auth', 'token', 'api_key', 'dsn', 'license_key' );
+
+	/**
 	 * Whether a value is a reference rather than a secret.
 	 *
 	 * @param mixed $value Stored value.
@@ -184,6 +201,96 @@ final class Secret_Paths {
 		}
 
 		return SourceAuth::redactUrl( $url );
+	}
+
+	/**
+	 * A compiled configuration with every credential in it replaced.
+	 *
+	 * Belt and braces, deliberately. A value is replaced when its key is one
+	 * the library reads a credential from (COMPILED_SECRET_KEYS), when it is
+	 * anywhere under a list's `upstream.headers`, and when it is, or -- for a
+	 * value long enough that a match means something -- contains, a
+	 * credential the settings hold at one of the export's secret paths; the
+	 * last is what catches a password inside a DSN or a key a contributed rule
+	 * type compiles under a name of its own. A URL has its credential
+	 * replaced as the export does. Tokens are references and are left alone.
+	 *
+	 * @param array<mixed>         $compiled The compiled configuration.
+	 * @param array<string, mixed> $settings The settings it was compiled from.
+	 *
+	 * @return array<mixed>
+	 */
+	public static function redact_compiled( array $compiled, array $settings ): array {
+		$values = array();
+
+		foreach ( self::in( $settings ) as $path ) {
+			$value = self::get( $settings, $path );
+
+			foreach ( is_array( $value ) ? $value : array( $value ) as $leaf ) {
+				if ( is_string( $leaf ) && ! self::is_empty( $leaf ) && ! self::is_token( $leaf ) ) {
+					$values[] = $leaf;
+				}
+			}
+		}
+
+		return self::redact_node( $compiled, array_values( array_unique( $values ) ), false );
+	}
+
+	/**
+	 * Recursive worker for redact_compiled().
+	 *
+	 * @param array<mixed> $node     A branch of the compiled tree.
+	 * @param list<string> $values   Credentials the settings hold.
+	 * @param bool         $upstream Whether this branch is under a list's `upstream`.
+	 *
+	 * @return array<mixed>
+	 */
+	private static function redact_node( array $node, array $values, bool $upstream ): array {
+		foreach ( $node as $key => $child ) {
+			$name = is_string( $key ) ? strtolower( $key ) : '';
+
+			$secret = in_array( $name, self::COMPILED_SECRET_KEYS, true )
+				|| ( $upstream && in_array( $name, array( 'headers', 'value' ), true ) );
+
+			if ( $secret && ! self::is_token( $child ) && ! self::is_empty( $child ) && ( is_scalar( $child ) || is_array( $child ) ) ) {
+				$node[ $key ] = self::REDACTED;
+
+				continue;
+			}
+
+			if ( is_array( $child ) ) {
+				$node[ $key ] = self::redact_node( $child, $values, $upstream || 'upstream' === $name );
+
+				continue;
+			}
+
+			if ( is_string( $child ) && ! self::is_token( $child ) ) {
+				$node[ $key ] = self::redact_string( $child, $values );
+			}
+		}
+
+		return $node;
+	}
+
+	/**
+	 * Replace any credential the settings hold inside one compiled string.
+	 *
+	 * @param string       $value  The compiled value.
+	 * @param list<string> $values Credentials the settings hold.
+	 */
+	private static function redact_string( string $value, array $values ): string {
+		foreach ( $values as $secret ) {
+			if ( $value === $secret ) {
+				return self::REDACTED;
+			}
+
+			// Short values would match inside ordinary words; see CredentialHandlingTest.
+			if ( strlen( $secret ) >= 8 && false !== strpos( $value, $secret ) ) {
+				$value = str_replace( $secret, self::REDACTED, $value );
+			}
+		}
+
+		return 1 === preg_match( '#^https?://#i', $value ) ? self::redact_url( $value ) : $value;
 	}
 
 	/**

@@ -174,6 +174,8 @@ does not work as well as what does.
 - An import keeps a stored credential the document left out only while the
   host, port, account or URL it belongs with is unchanged; otherwise it is
   blanked and the preview says so. Credentials follow their rule by identifier.
+- The Compiled screen shows every credential in the compiled file as
+  `[redacted]`; the file itself keeps them for the library.
 - A user agent rule that asks to verify crawlers but is left with no domain to
   accept — an import or WP-CLI drops `*.googlebot.com` and keeps the verify flag
   — is skipped when the configuration is compiled and reported on the Status

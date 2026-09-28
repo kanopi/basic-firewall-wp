@@ -1164,6 +1164,12 @@ so it updates when the library does. `wp basic-firewall sources` lists what is
 available, and the Compiled screen is the only place that shows what a preset
 actually contributed.
 
+The Compiled screen shows every credential in the file as `[redacted]` —
+passwords, secret keys, tokens, API keys, a list's headers and the credential in
+a list URL — along with anything the settings hold at a secret path, wherever it
+was compiled. The file itself keeps them, because the library reads it. An
+`%env()%` token is shown as written.
+
 ### The `wordpress` preset is withheld
 
 The library ships a `wordpress` preset written for sites that do **not** run
@@ -1290,6 +1296,13 @@ keep the stored one, or tick *Remove the stored password*. It is written into th
 compiled file and stripped from an export, so `%env(YOUR_VARIABLE)%` is the
 better answer: that token is not a credential, survives an export, and never
 reaches the database.
+
+It is not injected at request time the way WordPress's database credentials
+are. Those come from constants that exist on both evaluation paths; this password
+lives in the settings option, which the wp-config.php path cannot read without
+WordPress. Getting it there would mean writing it to a file beside the compiled
+one — the same plaintext on the same disk, with one more file to protect. The
+token is the way to keep it off disk.
 
 Redis needs no WordPress credentials, so it works on the wp-config.php
 evaluation path exactly as it does on the mu-plugin path. If the server cannot be

@@ -11,6 +11,7 @@ namespace Kanopi\BasicFirewall\Admin\Screen;
 
 use Kanopi\BasicFirewall\Admin\Notices;
 use Kanopi\BasicFirewall\Admin\Screen;
+use Kanopi\BasicFirewall\Transfer\Secret_Paths;
 
 /**
  * Exactly what the firewall loaded.
@@ -151,7 +152,32 @@ final class Compiled_Screen extends Screen {
 			);
 		}
 
-		printf( '<pre class="bfw-code">%s</pre>', esc_html( $contents ) );
+		/*
+		 * Credentials replaced, not shown. The file has to hold them for the
+		 * library to read; this screen does not, and it is the one most likely
+		 * to end up in a screenshot. See Compiled_Config_Cache::redacted_contents().
+		 */
+		$shown = $compiled->redacted_contents();
+
+		if ( is_string( $shown ) ) {
+			printf(
+				'<p class="description">%s</p>',
+				esc_html(
+					sprintf(
+						/* translators: %s: the placeholder shown instead of a credential. */
+						__( 'Credentials — passwords, secret keys, tokens, API keys and list headers — are shown as %s. The file itself holds them, because the firewall reads it.', 'basic-firewall' ),
+						Secret_Paths::REDACTED
+					)
+				)
+			);
+
+			printf( '<pre class="bfw-code">%s</pre>', esc_html( $shown ) );
+		} else {
+			printf(
+				'<div class="bfw-danger"><p>%s</p></div>',
+				esc_html__( 'The compiled file could not be parsed, so it is not shown here: a file that cannot be read cannot have its credentials hidden either. Rebuild the firewall to rewrite it.', 'basic-firewall' )
+			);
+		}
 
 		printf( '<h2>%s</h2>', esc_html__( 'Rebuild', 'basic-firewall' ) );
 
