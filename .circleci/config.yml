@@ -14,6 +14,22 @@ PHP_TOOLS: &PHP_TOOLS "8.3"
 
 MYSQL_IMAGE: &MYSQL_IMAGE "cimg/mysql:8.0"
 
+# Release tags: 1.0.0, v1.0.0, and pre-releases such as 1.1.0-rc.1.
+#
+# CircleCI does not run a job for a tag unless that job carries a tag filter,
+# and a job whose requirement did not run does not run either. So EVERY job in
+# the workflow carries this, not just the release job -- otherwise a tag build
+# silently runs nothing and publishes nothing, and says so nowhere.
+RELEASE_TAGS: &RELEASE_TAGS
+  tags:
+    only: /^v?\d+\.\d+\.\d+.*/
+
+# gh, which neither cimg image carries. Pinned, and checked against the
+# checksum GitHub publishes for it, because this binary is handed a token that
+# can write releases.
+GH_VERSION: &GH_VERSION "2.101.0"
+GH_SHA256: &GH_SHA256 "9bca2d1c16825f109907a23307628a2f0698fbf99662b73a5cf0b020293072b8"
+
 version: 2.1
 
 commands:
@@ -183,6 +199,10 @@ jobs:
   package:
     docker:
       - image: cimg/php:<< parameters.php >>
+      - image: *MYSQL_IMAGE
+        environment:
+          MYSQL_ROOT_PASSWORD: << pipeline.parameters.db_password >>
+          MYSQL_DATABASE: wordpress_package
     parameters:
       php:
         type: string
@@ -195,22 +215,103 @@ jobs:
           command: bash build/build-zip.sh
 
       # The point of the whole exercise: a zip that works where there is no
-      # Composer at all. Installed onto a clean WordPress with the Composer
-      # binary removed from PATH, then actually evaluated against a request.
+      # Composer at all. A clean WordPress with nothing of this plugin on it,
+      # and the Composer binary removed from PATH before the zip goes near it.
       - run:
-          name: Install the zip on a clean WordPress with no Composer
+          name: Wait for MySQL
+          command: dockerize -wait tcp://127.0.0.1:3306 -timeout 2m
+      - run:
+          name: A clean WordPress, with no Composer
           command: |
             wp core download --path=/tmp/clean --allow-root
-            wp config create --path=/tmp/clean --dbname=wp --dbuser=root \
-              --dbpass=root --dbhost=127.0.0.1 --skip-check --allow-root
+            wp config create --path=/tmp/clean --dbname=wordpress_package --dbuser=root \
+              --dbpass='<< pipeline.parameters.db_password >>' --dbhost=127.0.0.1 --allow-root
+            wp core install --path=/tmp/clean --url=http://127.0.0.1:8081 \
+              --title=Package --admin_user=admin --admin_password=password \
+              --admin_email=ci@example.com --skip-email --allow-root
             sudo mv "$(command -v composer)" /usr/local/bin/composer.hidden
             ! command -v composer
-            unzip -q build/dist/*.zip -d /tmp/clean/wp-content/plugins/
-            test -d /tmp/clean/wp-content/plugins/basic-firewall/vendor
-            echo "vendor/ is present in the installed plugin."
+            echo "Composer is not on PATH."
+      - run:
+          name: Serve the clean site
+          command: php -S 127.0.0.1:8081 -t /tmp/clean
+          background: true
+      - run:
+          name: Wait for the clean site
+          command: dockerize -wait tcp://127.0.0.1:8081 -timeout 1m
+
+      # Then install the zip through `wp plugin install` -- the upload path --
+      # activate it, add a block rule, and prove over HTTP that the rule refuses
+      # the request it matches and allows one it does not. Deactivate and
+      # uninstall must both exit 0 and leave nothing behind. A zip that fatals
+      # on activation, loads unscoped, or loads and enforces nothing fails here.
+      # Runnable locally against any throwaway site; see the script's header.
+      - run:
+          name: Activate the zip and make it refuse a request
+          environment:
+            BFW_WP: wp --path=/tmp/clean --allow-root
+            BFW_SMOKE_URL: http://127.0.0.1:8081
+          command: bash tests/package/smoke.sh build/dist/basic-firewall-*.zip
       - store_artifacts:
           path: build/dist
           destination: zip
+
+      # Handed to the release job on a tag, so the zip published is byte for
+      # byte the one that was just installed and exercised, not a rebuild.
+      - persist_to_workspace:
+          root: build
+          paths:
+            - dist
+
+  # Cheap and first, on every branch as well as on tags: a version bump that
+  # missed one of the places the version is stated is caught when it is made,
+  # not on release day. On a tag the script also holds the tag and the newest
+  # CHANGELOG heading to the same version (it reads CIRCLE_TAG itself).
+  versions:
+    docker:
+      - image: cimg/base:current
+    steps:
+      - checkout
+      - run:
+          name: Every stated version agrees
+          command: bash build/check-versions.sh
+
+  # Tag builds only, and only once everything else has passed. See the filters
+  # on it in the workflow: it can never run for a branch.
+  release:
+    docker:
+      - image: cimg/base:current
+    steps:
+      - checkout
+      - attach_workspace:
+          at: build
+      - run:
+          name: Refuse anything that is not a tag build
+          command: |
+            if [ -z "${CIRCLE_TAG:-}" ]; then
+              echo "The release job only publishes from a tag build." >&2
+              exit 1
+            fi
+      - run:
+          name: Install gh
+          environment:
+            GH_VERSION: *GH_VERSION
+            GH_SHA256: *GH_SHA256
+          command: |
+            curl -fsSL -o /tmp/gh.tar.gz \
+              "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz"
+            echo "${GH_SHA256}  /tmp/gh.tar.gz" | sha256sum -c -
+            tar -xzf /tmp/gh.tar.gz -C /tmp
+            sudo mv "/tmp/gh_${GH_VERSION}_linux_amd64/bin/gh" /usr/local/bin/gh
+            gh --version
+
+      # GITHUB_TOKEN comes from the `basic-firewall-release` context. See
+      # README, "Releasing", for what it must be allowed to do.
+      - run:
+          name: Publish the GitHub Release
+          command: |
+            bash build/publish-release.sh "$CIRCLE_TAG" \
+              "build/dist/basic-firewall-${CIRCLE_TAG#v}.zip"
 
 parameters:
   db_password:
@@ -229,8 +330,13 @@ parameters:
 
 workflows:
   ci:
+    # Every job carries RELEASE_TAGS. See its definition: without it a job does
+    # not run for a tag, and the release job that requires it never runs either.
     jobs:
-      - static
+      - versions:
+          filters: *RELEASE_TAGS
+      - static:
+          filters: *RELEASE_TAGS
       - unit:
           matrix:
             parameters:
@@ -241,6 +347,7 @@ workflows:
               # rather than a subset of it.
               php: ["8.1", "8.2", "8.3", "8.4", "8.5"]
           name: unit-php-<< matrix.php >>
+          filters: *RELEASE_TAGS
       # The oldest WordPress the plugin header claims, on the oldest PHP.
       - integration:
           matrix:
@@ -248,6 +355,7 @@ workflows:
               php: ["8.1"]
               wordpress: ["6.4"]
           name: integration-wp6.4-php8.1
+          filters: *RELEASE_TAGS
 
       # Current WordPress on current PHP.
       - integration:
@@ -256,6 +364,7 @@ workflows:
               php: ["8.3"]
               wordpress: ["latest"]
           name: integration-wplatest-php8.3
+          filters: *RELEASE_TAGS
 
       # Next WordPress, so a break is found before a release rather than after.
       - integration:
@@ -264,6 +373,7 @@ workflows:
               php: ["8.4"]
               wordpress: ["nightly"]
           name: integration-wpnightly-php8.4
+          filters: *RELEASE_TAGS
 
       # Newest PHP, on the same WordPress as the job above it. The pair is the
       # point: these two differ only in PHP, so a failure here that passes there
@@ -276,4 +386,32 @@ workflows:
               php: ["8.5"]
               wordpress: ["nightly"]
           name: integration-wpnightly-php8.5
-      - package
+          filters: *RELEASE_TAGS
+      - package:
+          filters: *RELEASE_TAGS
+
+      # Publishes. Tags only -- `branches: ignore` is what guarantees a branch
+      # build never reaches it -- and only after the full matrix, the version
+      # check and the package smoke test have passed. A nightly WordPress
+      # failure therefore holds a release too, deliberately: re-run the
+      # workflow once trunk settles rather than releasing past a red job.
+      - release:
+          context: basic-firewall-release
+          requires:
+            - versions
+            - static
+            - unit-php-8.1
+            - unit-php-8.2
+            - unit-php-8.3
+            - unit-php-8.4
+            - unit-php-8.5
+            - integration-wp6.4-php8.1
+            - integration-wplatest-php8.3
+            - integration-wpnightly-php8.4
+            - integration-wpnightly-php8.5
+            - package
+          filters:
+            tags:
+              only: /^v?\d+\.\d+\.\d+.*/
+            branches:
+              ignore: /.*/
