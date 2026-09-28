@@ -1,0 +1,27 @@
+# The one rule the package smoke test enforces. A bare settings document, which
+# the importer accepts alongside the wrapped export format, merged into whatever
+# the freshly activated site already has -- so the challenge secret activation
+# generated is kept, and the compiler has everything it needs.
+#
+# See tests/package/smoke.sh.
+global:
+  mode: block
+  banning_message: Blocked by the package smoke test.
+rules:
+  - id: package_smoke_block_path
+    type: url
+    label: Package smoke test
+    enabled: true
+    response: block
+    weight: 0
+    record: default
+    redirect_to: ''
+    redirect_status: 302
+    mark_as: ''
+    mark_header: ''
+    settings:
+      match_type: any
+      conditions:
+        - variable: path
+          operator: equals
+          value: /bfw-package-smoke-blocked

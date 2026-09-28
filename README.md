@@ -31,6 +31,7 @@ its habit of writing down what does not work.
 - [WP-CLI commands](#wp-cli-commands)
 - [Multisite](#multisite)
 - [Building a release](#building-a-release)
+- [Releasing](#releasing)
 - [Deliberately out of scope](#deliberately-out-of-scope)
 
 ## What this costs per request
@@ -134,8 +135,12 @@ Either route works. They produce different builds, and the difference matters.
 
 ### From a release zip (recommended)
 
-Download `basic-firewall-<version>.zip` and install it through
-**Plugins → Add New → Upload Plugin**. No Composer, no shell, no build step.
+Download `basic-firewall-<version>.zip` from the
+[GitHub Releases page](https://github.com/kanopi/basic-firewall-wp/releases) and
+install it through **Plugins → Add New → Upload Plugin**, or with
+`wp plugin install basic-firewall-<version>.zip --activate`. No Composer, no
+shell, no build step. That zip is the one CI installed on a clean WordPress and
+made to refuse a request before publishing it; see [Releasing](#releasing).
 
 The zip ships with the library vendored **and namespace-scoped**, which makes it
 immune to a collision with any other plugin that bundles `kanopi/firewall`.
@@ -145,6 +150,15 @@ immune to a collision with any other plugin that bundles `kanopi/firewall`.
 
 ```bash
 composer require kanopi/basic-firewall-wp
+```
+
+The package is not on Packagist yet, so until it is, point Composer at the
+repository first. Composer reads versions straight from the repository's tags,
+so every release tag is also a Composer release:
+
+```bash
+composer config repositories.basic-firewall vcs https://github.com/kanopi/basic-firewall-wp
+composer require kanopi/basic-firewall-wp:^1.0
 ```
 
 Installs into `wp-content/plugins/` via `composer/installers`. In this mode the
@@ -1721,14 +1735,17 @@ There is no network-wide settings screen. Configuring 200 sites means
 
 ## Continuous integration
 
-CircleCI, in `.circleci/config.yml`. Eleven jobs, and none of them advisory:
+CircleCI, in `.circleci/config.yml`. Twelve jobs on every push, a thirteenth on
+a release tag, and none of them advisory:
 
 | Job | Runs |
 |---|---|
 | `static` | `check-platform-reqs --no-dev`, PHPCS, PHPStan — on 8.1, the declared floor |
 | `unit-php-*` | The unit suite on 8.1, 8.2, 8.3, 8.4 and 8.5 |
 | `integration-*` | Integration, end-to-end over real HTTP, and the WP-CLI suite, against WP 6.4/PHP 8.1, WP latest/PHP 8.3, and WP nightly on both PHP 8.4 and 8.5 |
-| `package` | Builds the zip and installs it on a clean WordPress with the Composer binary removed from `PATH` |
+| `versions` | `build/check-versions.sh`: the plugin header, `BASIC_FIREWALL_VERSION` and `readme.txt`'s `Stable tag` agree. On a tag, the tag and the newest CHANGELOG heading must agree too |
+| `package` | Builds the zip, then `tests/package/smoke.sh` on a clean WordPress with the Composer binary removed from `PATH`: installs and activates the zip, checks it loaded scoped, imports a block rule, asserts over HTTP that an unmatched request gets 200 and the matched one a 403 with the configured message, then deactivates and uninstalls and checks both exit 0 and leave nothing behind |
+| `release` | Tags only, after every job above has passed. Publishes the zip `package` tested to a GitHub Release; see [Releasing](#releasing) |
 
 The two nightly rows differ only in PHP, which is the point: a failure on 8.5
 that passes on 8.4 says "PHP 8.5" rather than "WordPress trunk moved".
@@ -1772,6 +1789,101 @@ that installed and activated perfectly; they are documented in the commit
 history and in `DECISIONS.md`.
 
 `BFW_SKIP_SCOPING=1` builds unscoped, for local testing only.
+
+The build proves the zip's classes resolve; it does not prove the zip works as
+a plugin. `tests/package/smoke.sh` does, and CI runs it on every push. To run it
+yourself you need a WordPress you can throw away, with no copy of this plugin,
+served over HTTP — the script installs the zip, changes the site's settings, and
+uninstalls at the end:
+
+```bash
+BFW_WP="wp --path=/tmp/clean" BFW_SMOKE_URL=http://127.0.0.1:8081 \
+  bash tests/package/smoke.sh build/dist/basic-firewall-1.0.0.zip
+```
+
+Not against the ddev site: it is the one you develop on, and the plugin is
+already on it.
+
+## Releasing
+
+Releases are published to
+[GitHub Releases](https://github.com/kanopi/basic-firewall-wp/releases), with
+the zip attached and the changelog entry as the notes, by CircleCI when a
+version tag is pushed. Composer users get the same release from the tag itself
+(see [With Composer](#with-composer)). Nothing is published to wordpress.org;
+see [Deliberately out of scope](#deliberately-out-of-scope).
+
+### Procedure
+
+1. **Bump every stated version, together**, on a branch, to the new version
+   (`1.1.0`, or `1.1.0-rc.1` for a pre-release):
+   - `Version:` in the header of `basic-firewall.php`
+   - `define( 'BASIC_FIREWALL_VERSION', ... )` in the same file
+   - `Stable tag:` in `readme.txt`
+2. **Changelog.** In `CHANGELOG.md`, rename `## [Unreleased]` to `## [1.1.0]`
+   (a trailing ` - YYYY-MM-DD` is fine) and start a fresh, empty
+   `## [Unreleased]` above it. Update `== Changelog ==` in `readme.txt` to match.
+   The `## [1.1.0]` section, up to the next heading, becomes the release notes
+   word for word.
+3. **Check it** before opening the pull request:
+
+   ```bash
+   bash build/check-versions.sh --release 1.1.0
+   bash build/release-notes.sh 1.1.0     # the notes, as they will be published
+   ```
+
+4. **Merge** once CI is green.
+5. **Tag the merge commit on `main` and push the tag:**
+
+   ```bash
+   git checkout main && git pull
+   git tag -a v1.1.0 -m "Basic Firewall 1.1.0"
+   git push origin v1.1.0
+   ```
+
+   `1.1.0` and `v1.1.0` both work. Anything matching `/^v?\d+\.\d+\.\d+.*/`
+   is a release tag.
+
+### What CI does with the tag
+
+The tag runs the whole workflow again, on the tagged commit: `versions`,
+`static`, the full unit and integration matrix, and `package`. Then, only if
+every one of them passed, `release`:
+
+- runs `build/check-versions.sh` against the tag, and refuses if the tag, the
+  header, the constant, the Stable tag and the newest CHANGELOG heading do not
+  all say the same version — the usual cause is a tag pushed before the bump;
+- takes the zip `package` just built and exercised, byte for byte, rather than
+  rebuilding it;
+- cuts the notes with `build/release-notes.sh`;
+- creates the GitHub Release with `gh`, attaching `basic-firewall-<version>.zip`.
+  A version with a pre-release suffix (`1.1.0-rc.1`) is published as a GitHub
+  **pre-release**, so it is never shown as Latest. Re-running the job for a tag
+  that already has a release replaces the zip and the notes instead of failing.
+
+A branch build never publishes: the `release` job's filters ignore every branch,
+and the job itself refuses to run without `CIRCLE_TAG`.
+
+A red nightly-WordPress job holds a release like any other job. Re-run the
+workflow once trunk settles rather than releasing past it.
+
+### One-time setup: the token
+
+The `release` job reads a GitHub token from a CircleCI **context** named
+`basic-firewall-release`. Until that exists, every tag build fails at the
+`release` job, with everything before it still green.
+
+1. Create a token that can write this repository's releases — either a
+   fine-grained personal access token (or GitHub App token) scoped to
+   `kanopi/basic-firewall-wp` with **Contents: Read and write**, or a classic
+   token with the `repo` scope. Prefer the fine-grained one, owned by a bot or
+   service account rather than a person.
+2. In CircleCI, **Organization Settings → Contexts → Create Context**, named
+   exactly `basic-firewall-release`.
+3. Add an environment variable to it named exactly **`GITHUB_TOKEN`** with the
+   token as its value.
+4. Restrict the context to the security group allowed to cut releases, so a
+   pull request cannot reach the token.
 
 ## Deliberately out of scope
 
