@@ -199,6 +199,12 @@ expect_wp ok 'WordPress reports it active' '' plugin is-active "$SLUG" || bail
 expect_wp ok 'it loaded the scoped library' 'yes (scoped)' basic-firewall status || bail
 expect_wp ok 'activation installed the mu-plugin loader' 'present' \
 	eval 'echo file_exists( WPMU_PLUGIN_DIR . "/basic-firewall-loader.php" ) ? "present" : "missing";' || bail
+# Written through a temporary file and a rename, so check it arrived whole and
+# that the temporary file did not stay behind in mu-plugins.
+expect_wp ok 'the installed loader is the shipped one, byte for byte' 'same' \
+	eval 'echo md5_file( WPMU_PLUGIN_DIR . "/basic-firewall-loader.php" ) === md5_file( WP_PLUGIN_DIR . "/basic-firewall/mu-plugin/basic-firewall-loader.php" ) ? "same" : "differs";' || bail
+expect_wp ok 'no temporary loader file was left in mu-plugins' 'clean' \
+	eval 'echo array() === glob( WPMU_PLUGIN_DIR . "/.basic-firewall-loader.php.*" ) ? "clean" : "leftover";' || bail
 
 printf '\npackage: a rule, and a request it refuses\n'
 

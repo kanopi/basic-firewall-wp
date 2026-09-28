@@ -237,6 +237,20 @@ host edge cache (Varnish/CDN)   <- no PHP runs at all. Unreachable.
 activation and removed on deactivation. It is the earliest hook a plugin can own
 and it needs no configuration, which is why it is the default.
 
+The copy is kept in step with the one the plugin ships, so an update that
+changes the loader reaches the site without deactivating anything. The installed
+loader states its version in a constant, and the plugin compares that with its
+own on admin, cron and WP-CLI requests — two constants, no file read, and never
+on a visitor's request. When they differ, or when the plugin is updated through
+the WordPress updater, activated, or Site Health is opened, the two files are
+compared byte for byte and the installed one is replaced: written to a
+temporary file beside it and renamed over it, so a concurrent request never
+loads half a file. It is only ever replaced, never recreated: a loader that has
+been removed stays removed until the plugin is activated again. If mu-plugins is
+not writable, Site Health reports the loader as out of date and says why. To
+manage the file yourself — mu-plugins deployed from version control, say —
+define `BASIC_FIREWALL_MU_LOADER_REFRESH` as `false`.
+
 **The early path** is a `require` in `wp-config.php`. It exists because
 `advanced-cache.php` serves a cached response and calls `exit()` before any
 mu-plugin loads — so on exactly the busy, cached site that most needs a
@@ -1689,6 +1703,11 @@ define( 'BASIC_FIREWALL_TRUSTED_PROXIES', array( '10.0.0.0/8' ) );
 // these. Off entirely when unset.
 define( 'BASIC_FIREWALL_SECRET_DIRECTORIES', array( '/etc/firewall' ) );
 
+// Never rewrite the installed mu-plugin loader when a release ships a new one.
+// For mu-plugins deployed from version control; Site Health still says when
+// the copy there is out of date.
+define( 'BASIC_FIREWALL_MU_LOADER_REFRESH', false );
+
 // Which forwarding headers a trusted proxy may set. Defaults to
 // X-Forwarded-For, -Proto and -Port; deliberately NOT -Host, because the host
 // decides which site a request belongs to and which URLs get generated, and
@@ -1793,6 +1812,12 @@ blocking a client on one site blocks them everywhere, offense counts merge so
 escalation triggers sooner than configured, and one site's block list is readable
 from another. A prefix you typed yourself is not doubled, and the Storage screen
 shows the resulting table names.
+
+The one shared piece is the mu-plugin loader, because mu-plugins is shared. Every
+site of a network runs the same copy of the plugin and so wants the same loader:
+whichever site refreshes it first leaves the others finding it current, and a
+refresh that cannot write the directory is recorded as a network option rather
+than against the site that noticed.
 
 There is no network-wide settings screen. Configuring 200 sites means
 `wp site list --field=url` and a loop.

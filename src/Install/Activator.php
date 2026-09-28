@@ -105,7 +105,8 @@ final class Activator {
 	 * The normal evaluation path. An mu-plugin is the earliest hook a plugin can
 	 * own, and on a site with no page cache it is early enough -- see
 	 * DECISIONS.md section 6 for why it is not early enough on a site that has
-	 * one, and what Site Health does about that.
+	 * one, and what Site Health does about that. Mu_Loader keeps the copy
+	 * current afterwards; this is the only place that creates it.
 	 *
 	 * A failure here is recorded rather than thrown. The plugin still works
 	 * through its ordinary hooks; it just runs later than it could, and Site
@@ -114,51 +115,17 @@ final class Activator {
 	private static function install_mu_plugin(): void {
 		delete_option( self::MU_FAILURE_OPTION );
 
-		$source = BASIC_FIREWALL_DIR . 'mu-plugin/basic-firewall-loader.php';
-		$target = WPMU_PLUGIN_DIR . '/basic-firewall-loader.php';
+		$error = Mu_Loader::instance()->install();
 
-		if ( ! is_readable( $source ) ) {
-			update_option( self::MU_FAILURE_OPTION, 'The mu-plugin loader is missing from this copy of the plugin.', false );
-			return;
-		}
-
-		if ( ! is_dir( WPMU_PLUGIN_DIR ) && ! wp_mkdir_p( WPMU_PLUGIN_DIR ) ) {
-			update_option( self::MU_FAILURE_OPTION, 'The mu-plugins directory does not exist and could not be created.', false );
-			return;
-		}
-
-		if ( ! wp_is_writable( WPMU_PLUGIN_DIR ) ) {
-			update_option( self::MU_FAILURE_OPTION, 'The mu-plugins directory is not writable.', false );
-			return;
-		}
-
-		if ( ! copy( $source, $target ) ) {
-			update_option( self::MU_FAILURE_OPTION, 'The mu-plugin loader could not be copied into the mu-plugins directory.', false );
+		if ( null !== $error ) {
+			update_option( self::MU_FAILURE_OPTION, $error, false );
 		}
 	}
 
 	/**
-	 * Remove the mu-plugin loader.
-	 *
-	 * Only ever removes a file this plugin recognises as its own. An mu-plugin
-	 * survives deactivation by design -- WordPress never disables them -- so
-	 * leaving ours in place would mean a deactivated plugin still evaluating
-	 * requests.
+	 * Remove the mu-plugin loader. See Mu_Loader::remove().
 	 */
 	private static function remove_mu_plugin(): void {
-		$target = WPMU_PLUGIN_DIR . '/basic-firewall-loader.php';
-
-		if ( ! is_readable( $target ) ) {
-			return;
-		}
-
-		$contents = (string) file_get_contents( $target ); // phpcs:ignore WordPress.WP.AlternativeFunctions -- a local file, not a remote URL; WP_Filesystem is not loaded this early.
-
-		if ( false === strpos( $contents, 'BASIC_FIREWALL_MU_LOADER' ) ) {
-			// Somebody else's file, or one an administrator has rewritten. Not ours to delete.
-			return;
-		}
-
-		wp_delete_file( $target );
+		Mu_Loader::instance()->remove();
 	}
 }

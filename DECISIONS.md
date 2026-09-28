@@ -235,7 +235,19 @@ same relationship the module describes between middleware 280 and `page_cache`
 200, arrived at from the opposite direction.
 
 So: the mu-plugin ships and is installed on activation, because it works with no
-configuration and is what most sites need. The `wp-config.php` require is not
+configuration and is what most sites need. It is a copy rather than a link so
+that it survives the plugin being deleted, and a copy goes stale: a release that
+changes the loader has to replace it. That happens when the installed loader's
+`BASIC_FIREWALL_MU_LOADER_VERSION` differs from `Mu_Loader::VERSION` on an
+admin, cron or WP-CLI request — a comparison of two constants, because reading
+the file back on every request to find out would be a disk read per request for
+an answer that changes once a release — and on update, activation, a schema
+upgrade and the Site Health test, which compare contents. Never on a visitor's
+request, where a write is most expensive and every concurrent request after a
+deploy would race to make it. The rewrite is a temporary file renamed into
+place; a refresh never recreates a loader that has been removed, and on a
+network, where every site shares both the plugin and mu-plugins, the first site
+to refresh leaves the rest nothing to do. The `wp-config.php` require is not
 buried as an expert curiosity — Site Health **detects** `WP_CACHE`, an
 `advanced-cache.php` drop-in, and known host caching, and raises the
 recommendation with the exact snippet and path when any is present.
