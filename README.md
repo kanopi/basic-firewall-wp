@@ -777,8 +777,14 @@ last refresh ran and how many entries each list contributed, because "this allow
 rule stopped allowing" is otherwise a hard thing to trace.
 
 A list behind a credential goes in the Advanced box as `upstream.auth`, and is
-stripped from an export like every other credential the plugin holds. Prefer an
-`%env()%` token over the literal value. Two things are refused outright when you
+stripped from an export like every other credential the plugin holds — the
+token, password or value, and every `upstream.headers` entry, on every rule type
+that takes a list. A credential typed into the URL itself
+(`https://user:pass@…`, or a parameter named `token`, `key`, `api_key`,
+`password`, `secret`, `signature` and the like) is replaced with `***` and the
+URL kept; a key in a parameter with any other name is not recognised, which is
+one more reason to use `upstream.auth`. Prefer an `%env()%` token over the
+literal value. Two things are refused outright when you
 type them: an absolute path, and any scheme other than `http`/`https` — a source
 is read at the web server's privilege, and this setting travels in an imported
 configuration document. A relative filename resolves inside the private
@@ -1587,6 +1593,9 @@ Three behaviours are guaranteed, and each has a test that fails if it regresses:
 **Credentials are stripped, and the document says which.** Every rule type
 declares which of its own settings are secret, so a type contributed by another
 plugin has its API key redacted without the exporter knowing the type exists.
+Every type that takes a referenced list has the list's credentials stripped as
+well, and a list URL is exported with any credential in it replaced by `***`;
+the header names those URLs separately.
 
 **`%env(NAME)%` tokens are references, not secrets, and survive intact.** A token
 names an environment variable rather than holding one, so stripping it would
@@ -1597,6 +1606,16 @@ This is the direction that does damage: writing a stripped export over a
 receiving site would erase its challenge secret — and a firewall that cannot
 start fails open, so every rule silently stops being enforced while the interface
 goes on reporting "Blocking".
+
+**A kept credential goes only where it went before.** A stored password is kept
+only while the settings it belongs with are unchanged: the Redis host, port and
+username, a database connection's driver, host, port and user, a log handler's
+type and table, a CAPTCHA's site key, a list's URL. A document that points any of
+those somewhere new without carrying the credential gets it blanked instead, and
+the preview — on the screen and from `wp basic-firewall import` — names each one
+and what changed. A URL exported with `***` is restored from the stored copy when
+the two match apart from the credential. Rules are matched by identifier, so
+reordering them moves nothing to the wrong rule.
 
 ## During an incident
 

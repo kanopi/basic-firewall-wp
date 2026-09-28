@@ -313,23 +313,6 @@ final class Ip_Address extends Rule_Type_Base {
 	/**
 	 * {@inheritDoc}
 	 *
-	 * A referenced list can be behind a credential -- a paid threat feed, an
-	 * internal allowlist service. Those live in the advanced block as
-	 * `upstream.auth`, and are named here so the exporter strips them and says
-	 * it did, exactly as it does for a Turnstile secret or a database password.
-	 */
-	public function secret_settings(): array {
-		return array(
-			'sources.*.advanced.upstream.auth.token',
-			'sources.*.advanced.upstream.auth.password',
-			'sources.*.advanced.upstream.auth.value',
-			'sources.*.advanced.upstream.headers.*',
-		);
-	}
-
-	/**
-	 * {@inheritDoc}
-	 *
 	 * @param array<string, mixed> $rule Described by the interface.
 	 */
 	public function compile( array $rule ): array {

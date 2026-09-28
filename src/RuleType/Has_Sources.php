@@ -45,6 +45,71 @@ trait Has_Sources {
 	}
 
 	/**
+	 * {@inheritDoc}
+	 *
+	 * A referenced list can be behind a credential -- a paid threat feed, an
+	 * internal allowlist service -- declared in its advanced block as
+	 * `upstream.auth` or as request headers. Declared here, once, so every
+	 * type that takes a list has them stripped from an export and named in
+	 * its header, exactly as a Turnstile secret or a database password is.
+	 * The exporter asks source_secret_settings() directly as well, so a type
+	 * that overrides this without calling the parent still has them stripped.
+	 */
+	public function secret_settings(): array {
+		return self::source_secret_settings();
+	}
+
+	/**
+	 * Where a referenced list keeps its credentials, relative to the rule's settings.
+	 *
+	 * The request headers go as a whole. The advanced block takes any header,
+	 * and the ones people add to a feed request are keys and tokens far more
+	 * often than not; a header that turns out to be harmless costs a line to
+	 * put back, and one that was a key costs the key. Whole rather than one
+	 * path per header, too, because a header name may hold a dot, and a dotted
+	 * path cannot address it.
+	 *
+	 * @return list<string>
+	 */
+	public static function source_secret_settings(): array {
+		return array(
+			'sources.*.advanced.upstream.auth.token',
+			'sources.*.advanced.upstream.auth.password',
+			'sources.*.advanced.upstream.auth.value',
+			'sources.*.advanced.upstream.headers',
+		);
+	}
+
+	/**
+	 * Settings holding a list's URL, which can carry a credential of its own.
+	 *
+	 * `https://user:pass@feeds.example.com/list.txt`, or `?api_key=...`. The
+	 * URL is not a secret -- the rule is useless without it -- so the exporter
+	 * keeps it and removes only the credential in it; see
+	 * Secret_Paths::redact_url().
+	 *
+	 * @return list<string>
+	 */
+	public static function source_url_settings(): array {
+		return array(
+			'sources.*.url',
+			'sources.*.advanced.upstream.url',
+		);
+	}
+
+	/**
+	 * What each list credential belongs with: the list's own URL.
+	 *
+	 * A token for one feed is not a token for another, so an import that
+	 * changes a list's URL does not keep the stored credential for it.
+	 *
+	 * @return array<string, list<string>>
+	 */
+	public static function source_secret_bindings(): array {
+		return array_fill_keys( self::source_secret_settings(), self::source_url_settings() );
+	}
+
+	/**
 	 * One referenced list, with everything unset.
 	 *
 	 * @return array<string, mixed>

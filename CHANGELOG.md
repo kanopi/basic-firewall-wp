@@ -168,6 +168,12 @@ does not work as well as what does.
   password-reset links start.
 - Destructive WP-CLI commands refuse to run without `--yes` and exit non-zero
   when they refuse, rather than exiting 0 having done nothing.
+- An export strips a referenced list's credentials on every rule type that takes
+  a list — `upstream.auth` and every `upstream.headers` entry — and replaces a
+  credential in a list URL with `***`, naming each path in its header.
+- An import keeps a stored credential the document left out only while the
+  host, port, account or URL it belongs with is unchanged; otherwise it is
+  blanked and the preview says so. Credentials follow their rule by identifier.
 - A user agent rule that asks to verify crawlers but is left with no domain to
   accept — an import or WP-CLI drops `*.googlebot.com` and keeps the verify flag
   — is skipped when the configuration is compiled and reported on the Status

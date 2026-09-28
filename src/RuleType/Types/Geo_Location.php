@@ -153,8 +153,10 @@ final class Geo_Location extends Condition_Rule_Type_Base {
 
 	/**
 	 * {@inheritDoc}
+	 *
+	 * Along with the referenced lists' credentials, which the parent names.
 	 */
 	public function secret_settings(): array {
-		return array( 'reader.license_key' );
+		return array_merge( parent::secret_settings(), array( 'reader.license_key' ) );
 	}
 }

@@ -503,6 +503,21 @@ final class Rate_Limit extends Rule_Type_Base {
 	}
 
 	/**
+	 * What the Redis password belongs with.
+	 *
+	 * Read by Secret_Paths, so an import that points the counters at another
+	 * Redis does not send this site's password there. The DSN carries its own
+	 * host, so it is bound to nothing.
+	 *
+	 * @return array<string, list<string>>
+	 */
+	public function secret_bindings(): array {
+		return array(
+			'storage.redis_password' => array( 'storage.backend', 'storage.redis_host', 'storage.redis_port' ),
+		);
+	}
+
+	/**
 	 * Split the stored paths, keeping maps intact.
 	 *
 	 * `lines_to_list()` casts every entry to a string, which is right for the

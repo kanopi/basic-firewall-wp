@@ -38,6 +38,13 @@ final class Importer {
 	private array $problems = array();
 
 	/**
+	 * Stored credentials an import did not carry across, and why.
+	 *
+	 * @var list<string>
+	 */
+	private array $withheld = array();
+
+	/**
 	 * Parse a document without applying it.
 	 *
 	 * @param string $yaml Raw document.
@@ -205,7 +212,7 @@ final class Importer {
 		}
 
 		// Restore anything the document did not carry a credential for.
-		return $this->preserve_credentials( $current, $result );
+		return $this->preserve_credentials( $current, $result, $incoming );
 	}
 
 	/**
@@ -346,30 +353,193 @@ final class Importer {
 	 * Put back any credential the incoming document did not carry.
 	 *
 	 * The whole point of the importer. An absent or empty credential means the
-	 * document did not carry it, so the receiving site keeps what it has.
+	 * document did not carry it, so the receiving site keeps what it has --
+	 * **but only while it still goes where it went.** A document that points
+	 * Redis at another host, a database connection at another server or a
+	 * list at another URL, with the password stripped, would otherwise have
+	 * this site's credential sent to wherever the document names. So each
+	 * credential is kept only while every setting it is bound to is unchanged
+	 * (Secret_Paths::bindings_in()); otherwise it is blanked, and the preview
+	 * says so. That applies as well to a credential the merge itself carried
+	 * over from the stored section or rule, which is how a stripped Redis
+	 * password used to follow a new host in.
 	 *
-	 * @param array<string, mixed> $current Current settings.
-	 * @param array<string, mixed> $result  Merged settings.
+	 * Rules are matched by identifier, not by position: the rules in the
+	 * result are not necessarily in the order they were stored in.
+	 *
+	 * A URL exported with its credential replaced by `***` is restored from the
+	 * stored copy when the two match apart from the credential -- which also
+	 * means the same host.
+	 *
+	 * @param array<string, mixed> $current  Current settings.
+	 * @param array<string, mixed> $result   Merged settings.
+	 * @param array<string, mixed> $incoming What the document says.
 	 *
 	 * @return array<string, mixed>
 	 */
-	private function preserve_credentials( array $current, array $result ): array {
-		foreach ( Secret_Paths::in( $current ) as $path ) {
+	private function preserve_credentials( array $current, array $result, array $incoming = array() ): array {
+		$this->withheld = array();
+
+		foreach ( Secret_Paths::bindings_in( $current ) as $path => $bound ) {
 			$existing = Secret_Paths::get( $current, $path );
 
-			if ( null === $existing || '' === $existing ) {
+			if ( Secret_Paths::is_empty( $existing ) ) {
 				// Nothing to preserve.
 				continue;
 			}
 
-			$incoming = Secret_Paths::get( $result, $path );
+			$target = self::translate( $path, $current, $result );
 
-			if ( null === $incoming || '' === $incoming || ( is_string( $incoming ) && '' === trim( $incoming ) ) ) {
-				Secret_Paths::set( $result, $path, $existing );
+			if ( null === $target ) {
+				// The rule it belonged to is gone.
+				continue;
+			}
+
+			$now = Secret_Paths::get( $result, $target );
+
+			if ( ! Secret_Paths::is_empty( $now ) && $now !== $existing ) {
+				// The document carries a credential of its own.
+				continue;
+			}
+
+			$moved = array();
+
+			foreach ( $bound as $anchor ) {
+				$anchor_target = self::translate( $anchor, $current, $result );
+
+				if ( ! self::same_setting( Secret_Paths::get( $current, $anchor ), null === $anchor_target ? null : Secret_Paths::get( $result, $anchor_target ) ) ) {
+					$moved[] = null === $anchor_target ? $anchor : $anchor_target;
+				}
+			}
+
+			if ( array() === $moved ) {
+				Secret_Paths::set( $result, $target, $existing );
+
+				continue;
+			}
+
+			// Carried by the document itself, the same value: it asked for it.
+			if ( self::incoming_value( $target, $result, $incoming ) === $existing ) {
+				continue;
+			}
+
+			Secret_Paths::set( $result, $target, is_array( $existing ) ? array() : '' );
+
+			$this->withheld[] = sprintf(
+				/* translators: 1: the credential's path, 2: the settings that changed. */
+				__( '%1$s is not kept, because %2$s changed and it would be sent somewhere new.', 'basic-firewall' ),
+				$target,
+				implode( ', ', $moved )
+			);
+		}
+
+		foreach ( Secret_Paths::urls_in( $current ) as $path ) {
+			$existing = Secret_Paths::get( $current, $path );
+			$target   = self::translate( $path, $current, $result );
+
+			if ( ! is_string( $existing ) || null === $target ) {
+				continue;
+			}
+
+			$clean = Secret_Paths::redact_url( $existing );
+
+			if ( $clean !== $existing && Secret_Paths::get( $result, $target ) === $clean ) {
+				Secret_Paths::set( $result, $target, $existing );
+			}
+		}
+
+		// A URL still carrying the export's placeholder has nothing to restore it from.
+		foreach ( Secret_Paths::urls_in( $result ) as $path ) {
+			$value = Secret_Paths::get( $result, $path );
+
+			if ( is_string( $value ) && false !== strpos( $value, '***' ) && Secret_Paths::redact_url( $value ) === $value ) {
+				$this->withheld[] = sprintf(
+					/* translators: %s: the URL's path in the document. */
+					__( '%s still has *** where the exporting site removed a credential, and this site has no copy of that URL to take it from. Put the credential back by hand.', 'basic-firewall' ),
+					$path
+				);
 			}
 		}
 
 		return $result;
+	}
+
+	/**
+	 * Whether a setting a credential is bound to is unchanged.
+	 *
+	 * Loosely for scalars, because a port arrives as `"6379"` from YAML typed by
+	 * hand and as `6379` once validated; and a URL counts as unchanged when it
+	 * differs only by the credential the export replaced.
+	 *
+	 * @param mixed $was What the site has.
+	 * @param mixed $now What the import would leave.
+	 */
+	private static function same_setting( $was, $now ): bool {
+		if ( $was === $now ) {
+			return true;
+		}
+
+		if ( ( null === $was || is_scalar( $was ) ) && ( null === $now || is_scalar( $now ) ) && (string) $was === (string) $now ) {
+			return true;
+		}
+
+		return is_string( $was ) && is_string( $now ) && Secret_Paths::redact_url( $was ) === Secret_Paths::redact_url( $now );
+	}
+
+	/**
+	 * Where a path in the stored settings is in the merged result.
+	 *
+	 * The same for everything but a rule, which is found by its identifier.
+	 *
+	 * @param string               $path    A path in the stored settings.
+	 * @param array<string, mixed> $current Current settings.
+	 * @param array<string, mixed> $result  Merged settings.
+	 *
+	 * @return string|null Null when the rule is not in the result.
+	 */
+	private static function translate( string $path, array $current, array $result ): ?string {
+		if ( 1 !== preg_match( '/^rules\.([^.]+)(\..*)?$/', $path, $matches ) ) {
+			return $path;
+		}
+
+		$id = (string) ( $current['rules'][ $matches[1] ]['id'] ?? '' );
+
+		if ( '' === $id ) {
+			return null;
+		}
+
+		foreach ( (array) ( $result['rules'] ?? array() ) as $index => $rule ) {
+			if ( is_array( $rule ) && (string) ( $rule['id'] ?? '' ) === $id ) {
+				return 'rules.' . $index . ( $matches[2] ?? '' );
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * What the document itself said at a path of the merged result.
+	 *
+	 * @param string               $path     A path in the merged result.
+	 * @param array<string, mixed> $result   Merged settings.
+	 * @param array<string, mixed> $incoming What the document says.
+	 *
+	 * @return mixed
+	 */
+	private static function incoming_value( string $path, array $result, array $incoming ) {
+		if ( 1 !== preg_match( '/^rules\.([^.]+)\.(.+)$/', $path, $matches ) ) {
+			return Secret_Paths::get( $incoming, $path );
+		}
+
+		$id = (string) ( $result['rules'][ $matches[1] ]['id'] ?? '' );
+
+		foreach ( (array) ( $incoming['rules'] ?? array() ) as $rule ) {
+			if ( is_array( $rule ) && '' !== $id && (string) ( $rule['id'] ?? '' ) === $id ) {
+				return Secret_Paths::get( $rule, $matches[2] );
+			}
+		}
+
+		return null;
 	}
 
 	/**
@@ -420,11 +590,12 @@ final class Importer {
 		}
 
 		return array(
-			'mode'              => $mode,
-			'rules_new'         => array_values( array_diff( $incoming_ids, $current_ids ) ),
-			'rules_overwritten' => array_values( array_intersect( $incoming_ids, $current_ids ) ),
-			'rules_removed'     => array_values( array_diff( $current_ids, $result_ids ) ),
-			'sections_changed'  => $sections,
+			'mode'                 => $mode,
+			'rules_new'            => array_values( array_diff( $incoming_ids, $current_ids ) ),
+			'rules_overwritten'    => array_values( array_intersect( $incoming_ids, $current_ids ) ),
+			'rules_removed'        => array_values( array_diff( $current_ids, $result_ids ) ),
+			'sections_changed'     => $sections,
+			'credentials_withheld' => $this->withheld,
 		);
 	}
 }
