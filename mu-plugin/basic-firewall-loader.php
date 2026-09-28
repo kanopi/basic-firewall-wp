@@ -39,8 +39,14 @@ define( 'BASIC_FIREWALL_MU_LOADER', true );
 add_action(
 	'muplugins_loaded',
 	static function (): void {
-		if ( defined( 'BASIC_FIREWALL_EVALUATED' ) ) {
-			// The wp-config.php path already evaluated this request.
+		if ( defined( 'BASIC_FIREWALL_EVALUATED' ) && empty( $GLOBALS['basic_firewall_outcome'] ) ) {
+			/*
+			 * The wp-config.php path already evaluated this request, and
+			 * answered it. When it left a verdict behind instead -- a solved
+			 * challenge, which needs settings to set the pass cookie -- the
+			 * plugin is loaded below so the runner can answer it now, before
+			 * any ordinary plugin loads.
+			 */
 			return;
 		}
 
