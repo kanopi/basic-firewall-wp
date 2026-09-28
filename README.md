@@ -205,7 +205,7 @@ and it needs no configuration, which is why it is the default.
 mu-plugin loads — so on exactly the busy, cached site that most needs a
 firewall, the normal path never runs for a cache hit.
 
-The Dashboard always prints the snippet with your site's real private path
+The Status screen always prints the snippet with your site's real private path
 filled in — you cannot write it yourself, because the private directory carries
 a random per-site suffix. Site Health prints it too, when it finds a page cache
 in front of the firewall. It looks like this:
@@ -1586,8 +1586,8 @@ Four ordering rules, and each one has a failure attached to it:
 | **below** any `BASIC_FIREWALL_*` constants | the bootstrap reads them at call time, so ones defined after it are ignored on this path and silently apply only to the mu-plugin one |
 | **above** `require_once ABSPATH . 'wp-settings.php'` | WordPress has already booted; there is nothing left to skip |
 
-The Dashboard prints it with your site's real private path filled in. You cannot
-write it yourself: the directory carries a random per-site suffix.
+The Status screen prints it with your site's real private path filled in. You
+cannot write it yourself: the directory carries a random per-site suffix.
 
 ### Everything else
 
