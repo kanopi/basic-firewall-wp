@@ -309,6 +309,14 @@ The bootstrap leaves it in a global and the runner answers it before any
 ordinary plugin loads — or at `plugins_loaded`, if the mu-plugin loader is
 missing or was copied by an older release.
 
+Where a solved challenge sends the visitor came back through the visitor, so it
+is not trusted. Only a path on this site is followed, rebuilt from the posted
+path and query. Anything holding a control character or whitespace, raw or
+percent-encoded, goes to `/` instead, and a backslash counts as the slash a
+browser makes of it before the `//` check. Browsers strip tabs and read `\` as
+`/`, so `/<tab>/evil.example` and `/\evil.example` would otherwise leave the
+site.
+
 If the bootstrap cannot find the plugin's responder it hands refusals to the
 runner the same way, so they are still answered, but after a page cache has had
 its chance. Site Health reports that as **critical** while the mode is

@@ -168,6 +168,12 @@ does not work as well as what does.
   password-reset links start.
 - Destructive WP-CLI commands refuse to run without `--yes` and exit non-zero
   when they refuse, rather than exiting 0 having done nothing.
+- After a solved challenge in `exception` mode the visitor is sent only to a
+  path on this site, rebuilt from the posted destination's path and query. A
+  destination holding a control character or whitespace, raw or
+  percent-encoded, or that a browser would read as `//` once its backslashes
+  are slashes, is replaced with `/`, so `/<tab>/evil.example` cannot become
+  `//evil.example`.
 
 ### Upgrading from a pre-release build
 

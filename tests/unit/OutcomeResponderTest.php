@@ -118,4 +118,57 @@ final class OutcomeResponderTest extends TestCase {
 			);
 		}
 	}
+	/**
+	 * A destination a browser would repair into another host is refused.
+	 *
+	 * Browsers strip tabs and newlines from a URL and read a backslash as a
+	 * slash, so each of these starts with a single `/` and is still followed
+	 * off the site. The percent-encoded forms are refused too, in case
+	 * anything between the firewall and the browser decodes them.
+	 */
+	public function test_a_destination_a_browser_would_repair_off_site_is_refused(): void {
+		$targets = array(
+			"/\t/evil.example/",
+			"/\n/evil.example/",
+			"/\r\n/evil.example/",
+			"/\r/evil.example/",
+			"\t//evil.example/",
+			'/ /evil.example/',
+			"/\x00/evil.example/",
+			"/\x7f/evil.example/",
+			'/\\evil.example/',
+			'/\\\\evil.example/',
+			'\\/evil.example/',
+			'//evil.example/',
+			'///evil.example/',
+			'/%09/evil.example/',
+			'/%0d%0a/evil.example/',
+			'/%2F/evil.example/',
+			'/%5Cevil.example/',
+			'https://evil.example/',
+			'http:/evil.example/',
+			'javascript:alert(1)',
+			'/wp-admin/' . "\r\n" . 'Set-Cookie: x=1',
+		);
+
+		foreach ( $targets as $target ) {
+			$this->assertSame( '/', Outcome_Responder::safe_redirect( $target ), sprintf( 'The destination %s was followed.', addcslashes( $target, "\0..\37\177" ) ) );
+			$this->assertSame(
+				'/',
+				Outcome_Responder::solved_response( new ChallengeSolvedException( 'token', $target ), null )['redirect'],
+				sprintf( 'The solved challenge followed %s.', addcslashes( $target, "\0..\37\177" ) )
+			);
+		}
+	}
+
+	/**
+	 * An ordinary site path keeps its query string; only a fragment is dropped.
+	 */
+	public function test_a_site_path_keeps_its_query_string(): void {
+		$this->assertSame( '/wp-admin/?x=1', Outcome_Responder::safe_redirect( '/wp-admin/?x=1' ) );
+		$this->assertSame( '/shop/item?a=1&b=%2F%2Fnot-a-host', Outcome_Responder::safe_redirect( '/shop/item?a=1&b=%2F%2Fnot-a-host' ) );
+		$this->assertSame( '/a%20b/', Outcome_Responder::safe_redirect( '/a%20b/' ) );
+		$this->assertSame( '/page', Outcome_Responder::safe_redirect( '/page#top' ) );
+		$this->assertSame( '/', Outcome_Responder::safe_redirect( '/' ) );
+	}
 }
