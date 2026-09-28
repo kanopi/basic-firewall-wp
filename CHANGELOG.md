@@ -10,8 +10,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [1.0.0]
 
 First release. The WordPress port of the Drupal module `basic_firewall`, at
-parity with its 2.0.0-beta9, built on `kanopi/firewall` ^2.33. The release zip
-bundles 2.33.0, namespace-scoped. Requires WordPress 6.4 and PHP 8.1.
+parity with its 2.0.0-beta9, built on `kanopi/firewall` ^2.33.1. The release zip
+bundles 2.33.1, namespace-scoped. Requires WordPress 6.4 and PHP 8.1.
 
 It installs in log-only mode with no rules, so nothing is refused until you say
 so. The README explains every feature below, and — as the module does — what
@@ -78,8 +78,8 @@ does not work as well as what does.
 - **Presets** from the library, included by reference so they update with it.
   The library's `wordpress` preset is withheld, because on a WordPress site it
   locks every administrator out.
-- **Incident tools.** Lockdown refuses every client but an allowlist, before any
-  rule is consulted, and records none of them — so lifting it does not leave a
+- **Incident tools.** Lockdown refuses every client but an allowlist (addresses,
+  CIDR blocks or `start-end` ranges), before any rule is consulted, and records none of them — so lifting it does not leave a
   block list full of customers. A panic file changes the operating mode on the
   next request, on both paths, without a deploy. `BASIC_FIREWALL_ENABLED` and
   `BASIC_FIREWALL_MODE` in `wp-config.php` need no database at all.
@@ -193,4 +193,4 @@ this.
   which is written only by 1.0.0. A directory a pre-release build created
   outside uploads — a filtered private path, or `BASIC_FIREWALL_CACHE_DIR` — is
   emptied of the plugin's files and left in place.
-- A Composer install needs `kanopi/firewall` ^2.33.
+- A Composer install needs `kanopi/firewall` ^2.33.1.

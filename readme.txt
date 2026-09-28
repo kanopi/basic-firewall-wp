@@ -136,7 +136,7 @@ proxy too.
 == Changelog ==
 
 = 1.0.0 =
-* First release. The WordPress port of the Drupal basic_firewall module, built on kanopi/firewall ^2.33; the zip bundles 2.33.0, scoped.
+* First release. The WordPress port of the Drupal basic_firewall module, built on kanopi/firewall ^2.33.1; the zip bundles 2.33.1, scoped.
 * Ten rule types, six responses (allow, mark, record, challenge, redirect, block), observe-only rules and activity windows.
 * Two evaluation paths: an mu-plugin installed on activation, and an optional wp-config.php bootstrap that runs before a page cache.
 * Block list in files, the database or Redis; a cache backend in files, the object cache or APCu.

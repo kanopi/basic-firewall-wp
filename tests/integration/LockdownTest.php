@@ -105,10 +105,61 @@ final class LockdownTest extends Settings_Snapshot {
 	}
 
 	/**
+	 * A range is compiled, and the library matches it.
+	 *
+	 * Asked of the library itself rather than of Lockdown::covers(), because the
+	 * point is that what the screen accepts is what the firewall serves.
+	 */
+	public function test_a_range_is_compiled_and_matched_by_the_library(): void {
+		$result = $this->arm( array( '203.0.113.1-203.0.113.9' ) );
+
+		$this->assertSame( array( '203.0.113.1-203.0.113.9' ), $this->compiled_global()['lockdown_allow'] ?? null );
+		$this->assertSame( array(), $result['problems'] );
+
+		$firewall = new class( array( 'lockdown_allow' => array( '203.0.113.1-203.0.113.9' ) ) ) {
+			use \Kanopi\Firewall\Traits\AddressMatchTrait;
+
+			/**
+			 * Allowlist under test.
+			 *
+			 * @var list<string>
+			 */
+			private array $allow;
+
+			/**
+			 * Build.
+			 *
+			 * @param array{lockdown_allow: list<string>} $config Config.
+			 */
+			public function __construct( array $config ) {
+				$this->allow = $config['lockdown_allow'];
+			}
+
+			/**
+			 * Whether the library would serve this address.
+			 *
+			 * @param string $address Client address.
+			 */
+			public function serves( string $address ): bool {
+				foreach ( $this->allow as $pattern ) {
+					if ( $this->addressMatches( $address, $pattern ) || $this->addressInRange( $address, $pattern ) ) {
+						return true;
+					}
+				}
+
+				return false;
+			}
+		};
+
+		$this->assertTrue( $firewall->serves( '203.0.113.5' ) );
+		$this->assertFalse( $firewall->serves( '203.0.113.10' ) );
+	}
+
+	/**
 	 * An entry the library cannot match is dropped, and said so.
 	 */
-	public function test_a_range_is_dropped_and_reported(): void {
-		$result = $this->arm( array( self::OFFICE, '203.0.113.1-203.0.113.9' ) );
+	public function test_an_unmatchable_entry_is_dropped_and_reported(): void {
+		$result = $this->arm( array( self::OFFICE, '203.0.113.9-203.0.113.1' ) );
 
 		$this->assertSame( array( self::OFFICE ), $this->compiled_global()['lockdown_allow'] ?? null );
 		$this->assertNotEmpty( $result['problems'] );
@@ -239,13 +290,13 @@ final class LockdownTest extends Settings_Snapshot {
 	}
 
 	/**
-	 * A range is refused even while lockdown is off.
+	 * A range the library would ignore is refused even while lockdown is off.
 	 *
 	 * The list is kept so it is ready mid-incident, and discovering then that
 	 * an entry never matched is the worst time to find out.
 	 */
-	public function test_the_review_refuses_a_range_even_while_off(): void {
-		$review = Lockdown::review( false, Lockdown::sort( "198.51.100.0/24\n203.0.113.1-203.0.113.9" ), '' );
+	public function test_the_review_refuses_a_backwards_range_even_while_off(): void {
+		$review = Lockdown::review( false, Lockdown::sort( "198.51.100.0/24\n203.0.113.9-203.0.113.1" ), '' );
 
 		$this->assertNotNull( $review['error'] );
 	}
