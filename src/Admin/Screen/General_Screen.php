@@ -402,7 +402,7 @@ final class General_Screen extends Screen {
 			self::textarea( 'lockdown_allow', implode( "\n", Lockdown::lines( (array) $settings->get( 'global.lockdown_allow', array() ) ) ), 4 ),
 			sprintf(
 				/* translators: %s: the address the firewall sees for the current visitor. */
-				__( 'One per line: single addresses and CIDR blocks, IPv4 or IPv6. Not <code>start-end</code> ranges, which an IP rule accepts and this list does not. It is consulted <em>instead of</em> your allow rules, not as well as them, and it is kept while lockdown is off so it is ready when you need it. The firewall sees your address as <code>%s</code>.', 'basic-firewall' ),
+				__( 'One per line: single addresses, CIDR blocks and <code>start-end</code> ranges, IPv4 or IPv6 — the same forms an IP rule takes. It is consulted <em>instead of</em> your allow rules, not as well as them, and it is kept while lockdown is off so it is ready when you need it. The firewall sees your address as <code>%s</code>.', 'basic-firewall' ),
 				esc_html( '' !== $client ? $client : __( 'unknown', 'basic-firewall' ) )
 			)
 		);

@@ -20,14 +20,14 @@ use Symfony\Component\HttpFoundation\Request;
  * and the ways to get it wrong all end the same way -- the administrator
  * refused along with everybody else, from the page they would use to undo it.
  *
- * **Addresses and CIDR blocks only, not `start-end` ranges.** An IP rule
- * accepts ranges, so it is natural to expect this list to. The library does not
- * match them here: it hands each entry to Symfony's `IpUtils`, which knows
- * nothing of ranges, so a range would be saved, compiled, shown back as though
- * it applied, and never match anybody. On this list, an entry that silently
- * matches nobody is quite possibly the one entry naming the person who typed
- * it, so ranges are refused where they are entered rather than discovered by
- * being locked out.
+ * **Addresses, CIDR blocks and `start-end` ranges**, the same three forms an IP
+ * rule takes. Ranges needed kanopi/firewall 2.33.1: before it the library handed
+ * each entry to Symfony's `IpUtils`, which knows nothing of ranges, so a range
+ * was kept and matched nobody -- on this list quite possibly the one entry
+ * naming the person who typed it. That is why the plugin requires ^2.33.1, and
+ * why the parsing below copies the library's rather than approximating it: an
+ * entry this class accepts has to be one the firewall matches, and one it
+ * refuses has to be one the firewall would ignore.
  */
 final class Lockdown {
 
@@ -63,10 +63,10 @@ final class Lockdown {
 	 * Whether an entry is something the library will actually match.
 	 *
 	 * The same test the library applies before matching, so the answer here
-	 * and the behaviour at the door cannot disagree: a single address, or a
-	 * CIDR block whose prefix fits the address family. A `/33` on IPv4 is a
-	 * typo rather than a range, and treating it as a cap would quietly turn a
-	 * network into one host.
+	 * and the behaviour at the door cannot disagree: a single address, a CIDR
+	 * block whose prefix fits the address family, or a `start-end` range. A
+	 * `/33` on IPv4 is a typo rather than a range, and treating it as a cap
+	 * would quietly turn a network into one host.
 	 *
 	 * @param string $entry Candidate entry.
 	 */
@@ -75,6 +75,10 @@ final class Lockdown {
 
 		if ( '' === $entry ) {
 			return false;
+		}
+
+		if ( null !== self::range_bounds( $entry ) ) {
+			return true;
 		}
 
 		if ( false === strpos( $entry, '/' ) ) {
@@ -90,6 +94,39 @@ final class Lockdown {
 		$maximum = false !== filter_var( $subnet, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6 ) ? 128 : 32;
 
 		return (int) $prefix <= $maximum;
+	}
+
+	/**
+	 * The packed bounds of a `start-end` range, or null when it is not one.
+	 *
+	 * The library's `AddressMatchTrait::rangeBounds()`, rule for rule: two
+	 * addresses of one family joined by a single `-`, lowest first. Backwards
+	 * bounds are refused rather than swapped, as the library refuses them --
+	 * swapping here would accept an entry the firewall then ignores.
+	 *
+	 * @param string $entry Candidate entry.
+	 *
+	 * @return array{0: string, 1: string}|null
+	 */
+	private static function range_bounds( string $entry ): ?array {
+		if ( 1 !== substr_count( $entry, '-' ) ) {
+			return null;
+		}
+
+		list( $start, $end ) = array_map( 'trim', explode( '-', $entry, 2 ) );
+
+		if ( false === filter_var( $start, FILTER_VALIDATE_IP ) || false === filter_var( $end, FILTER_VALIDATE_IP ) ) {
+			return null;
+		}
+
+		$start = (string) inet_pton( $start );
+		$end   = (string) inet_pton( $end );
+
+		if ( strlen( $start ) !== strlen( $end ) || strcmp( $start, $end ) > 0 ) {
+			return null;
+		}
+
+		return array( $start, $end );
 	}
 
 	/**
@@ -115,9 +152,10 @@ final class Lockdown {
 	/**
 	 * Whether an address is on the list.
 	 *
-	 * Matched the way the library matches it, through the same Symfony
-	 * utility, so a warning that says "you are not on this list" is describing
-	 * what the firewall will do rather than an approximation of it.
+	 * Matched the way the library matches it -- the same Symfony utility for
+	 * addresses and CIDR blocks, the same packed-byte comparison for ranges --
+	 * so a warning that says "you are not on this list" is describing what the
+	 * firewall will do rather than an approximation of it.
 	 *
 	 * @param string       $address Client address.
 	 * @param list<string> $allow   Allowlist entries.
@@ -127,7 +165,21 @@ final class Lockdown {
 			return false;
 		}
 
+		$packed = (string) inet_pton( $address );
+
 		foreach ( $allow as $entry ) {
+			$bounds = self::range_bounds( trim( $entry ) );
+
+			if ( null !== $bounds ) {
+				// A different family is outside the range, not an error: an
+				// IPv6 visitor is simply not in an IPv4 office's range.
+				if ( strlen( $packed ) === strlen( $bounds[0] ) && strcmp( $packed, $bounds[0] ) >= 0 && strcmp( $packed, $bounds[1] ) <= 0 ) {
+					return true;
+				}
+
+				continue;
+			}
+
 			if ( self::is_valid_entry( $entry ) && IpUtils::checkIp( $address, $entry ) ) {
 				return true;
 			}
@@ -172,7 +224,7 @@ final class Lockdown {
 		if ( array() !== $sorted['invalid'] ) {
 			$review['error'] = sprintf(
 				/* translators: %s: comma-separated rejected entries. */
-				__( 'The lockdown allowlist takes single addresses and CIDR blocks, and these are neither: %s. A start-end range is accepted by an IP rule but not here — the firewall would keep it and never match it, and on this list that could be the entry naming you.', 'basic-firewall' ),
+				__( 'The lockdown allowlist takes single addresses, CIDR blocks and start-end ranges (lowest address first, one address family), and these are none of those: %s. The firewall would keep them and never match them, and on this list that could be the entry naming you.', 'basic-firewall' ),
 				implode( ', ', $sorted['invalid'] )
 			);
 

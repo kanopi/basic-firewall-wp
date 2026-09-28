@@ -463,7 +463,7 @@ record the client even though something below ends the request. And **redirect
 beats block** because the terminal responses run gentlest first: a redirect
 leaves the visitor somewhere to go.
 
-The last four arrived in `kanopi/firewall` 2.26.0, which the plugin's ^2.33
+The last four arrived in `kanopi/firewall` 2.26.0, which the plugin's ^2.33.1
 requirement covers. On an older library — possible when a site's own Composer
 autoloader wins the race — they are not offered, and a rule carrying one is
 skipped at compile time with a warning rather than compiled into something the
@@ -908,7 +908,7 @@ site cannot: a **TLS fingerprint** — `ja3`, `ja4` — which identifies the cli
 stack rather than what it claims to be, so a script wearing a browser's user
 agent still negotiates TLS like a script; and a **bot score**, the edge's own
 verdict from signals that never reach the origin. Arrived in
-`kanopi/firewall` 2.27.0, which the plugin's ^2.33 requirement covers.
+`kanopi/firewall` 2.27.0, which the plugin's ^2.33.1 requirement covers.
 
 Choose the CDN — Cloudflare, Fastly, or *something else* with the header names
 typed as `signal: Header-Name`. Akamai and CloudFront are not named on purpose:
@@ -1006,7 +1006,7 @@ what a line without one counts:
 ```
 
 `log` is the username field on WordPress's own login form. Arrived in
-`kanopi/firewall` 2.27.0, which the plugin's ^2.33 requirement covers.
+`kanopi/firewall` 2.27.0, which the plugin's ^2.33.1 requirement covers.
 
 **Read this before reaching for it:** the two key shapes catch opposite attacks,
 and swapping one for the other removes protection while looking like it adds
@@ -1582,9 +1582,11 @@ Four things to know before you reach for it:
   alike, which is the honest reading of the word. The General screen refuses to
   save that combination, and the compiler refuses it from an import or WP-CLI
   too — reported, and not applied.
-- **Addresses and CIDR blocks only.** An IP rule also accepts `start-end`
-  ranges; the library does not match them on this list, so the screen refuses
-  them rather than keeping an entry that would silently match nobody.
+- **Addresses, CIDR blocks and `start-end` ranges**, the forms an IP rule
+  takes. Ranges match from kanopi/firewall 2.33.1, which is why the plugin
+  requires it; before that the library kept a range here and matched nobody. A
+  range written backwards (`.20-.10`) or mixing IPv4 and IPv6 is refused on
+  save, because the library refuses it too rather than guess.
 - **Check your own address is on the list.** The screen shows the address the
   firewall sees for you — after trusted proxies, so behind a CDN it is yours and
   not the CDN's — and warns if the list does not cover it. A warning rather than
