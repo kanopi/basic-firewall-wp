@@ -1109,6 +1109,18 @@ or query parameter named with capitals. The library lower-cases every component
 before looking it up, which is harmless for a header and means `post.userName`
 looks for `username` and finds nothing.
 
+#### Where the counts are kept
+
+Each rate limit rule keeps its own counters — in a file in the private
+directory, a database table, or Redis — chosen with **Keep the counters in** on
+the rule. A file is enough for one web server; several servers behind a load balancer
+each keep their own file and each allow the full limit, so use the database or
+Redis there. The Redis password and a DSN are typed and never shown: the field is
+always empty, leaving it blank keeps what is stored, and *Remove the stored
+value* clears it. Both are stripped from an export and shown as `[redacted]` on
+the Compiled screen, and a password is kept by an import only while the Redis
+host and port are unchanged.
+
 ### Regular expressions
 
 **Write the pattern only.** No delimiters, no flags:

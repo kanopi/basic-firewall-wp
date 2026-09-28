@@ -174,6 +174,10 @@ does not work as well as what does.
 - An import keeps a stored credential the document left out only while the
   host, port, account or URL it belongs with is unchanged; otherwise it is
   blanked and the preview says so. Credentials follow their rule by identifier.
+- A rate limit rule's Redis password and DSN are never rendered into its edit
+  form; blank keeps the stored value and a box removes it. Limits and counter
+  storage have their own controls, so saving the form unchanged stores what was
+  there.
 - The Compiled screen shows every credential in the compiled file as
   `[redacted]`; the file itself keeps them for the library.
 - A user agent rule that asks to verify crawlers but is left with no domain to

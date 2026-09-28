@@ -19,6 +19,7 @@ use Kanopi\BasicFirewall\RuleType\Rule_Type;
 use Kanopi\BasicFirewall\RuleType\Rule_Type_Base;
 use Kanopi\BasicFirewall\RuleType\Types\Ip_Address;
 use Kanopi\BasicFirewall\RuleType\Types\Rate_Limit;
+use Kanopi\BasicFirewall\Transfer\Secret_Paths;
 use Kanopi\Firewall\Utility\Schedule;
 use Symfony\Component\Yaml\Yaml;
 
@@ -139,7 +140,7 @@ final class Rule_Edit_Screen extends Screen {
 			$errors['id'] = __( 'A rule with that identifier already exists.', 'basic-firewall' );
 		}
 
-		$settings = $type->validate_settings( $this->posted_array( 'settings' ), $errors );
+		$settings = $type->validate_settings( $this->with_secret_fields( $type, $this->posted_array( 'settings' ), (array) ( $existing['settings'] ?? array() ) ), $errors );
 
 		$response   = $this->posted( 'response', 'block' );
 		$expiration = (int) $this->posted( 'expiration', '3600' );
@@ -327,6 +328,93 @@ final class Rule_Edit_Screen extends Screen {
 		Notices::add( __( 'Rule saved, and the firewall recompiled.', 'basic-firewall' ) );
 
 		$this->redirect( 'basic-firewall-rules' );
+	}
+
+	/**
+	 * Put the credential fields into what was posted, the way a password field works.
+	 *
+	 * A field a type describes as `secret` is never rendered with its value,
+	 * so a blank one on the way back means "keep what is stored", not "clear
+	 * it"; the box beside it is how it is cleared. And it is read from the
+	 * request as typed rather than through the textarea sanitiser, which
+	 * trims, strips anything tag-shaped and drops percent-encoded octets --
+	 * each of which turns a working password into one that fails to
+	 * authenticate, with nothing on the screen to say why.
+	 *
+	 * @param Rule_Type            $type   The rule type.
+	 * @param array<string, mixed> $posted The sanitised settings as posted.
+	 * @param array<string, mixed> $stored The settings stored before this save.
+	 *
+	 * @return array<string, mixed>
+	 */
+	private function with_secret_fields( Rule_Type $type, array $posted, array $stored ): array {
+		$clear = $this->posted_array( 'clear_secret' );
+
+		foreach ( self::secret_fields( $type ) as $path => $segments ) {
+			$typed = self::raw_posted( array_merge( array( 'settings' ), $segments ) );
+
+			if ( ! Secret_Paths::is_empty( Secret_Paths::get( $clear, $path ) ) ) {
+				$value = '';
+			} elseif ( null === $typed || '' === $typed ) {
+				$value = (string) ( Secret_Paths::get( $stored, $path ) ?? '' );
+			} else {
+				$value = $typed;
+			}
+
+			Secret_Paths::set( $posted, $path, $value );
+		}
+
+		return $posted;
+	}
+
+	/**
+	 * The settings a type describes as credentials to be typed but never shown.
+	 *
+	 * @param Rule_Type $type The rule type.
+	 *
+	 * @return array<string, list<string>> Dotted path => its segments.
+	 */
+	private static function secret_fields( Rule_Type $type ): array {
+		$found = array();
+
+		foreach ( $type->settings_help() as $key => $field ) {
+			if ( ! is_array( $field ) ) {
+				continue;
+			}
+
+			if ( ! empty( $field['secret'] ) ) {
+				$found[ (string) $key ] = array( (string) $key );
+			}
+
+			foreach ( (array) ( $field['fields'] ?? array() ) as $child => $child_field ) {
+				if ( is_array( $child_field ) && ! empty( $child_field['secret'] ) ) {
+					$found[ $key . '.' . $child ] = array( (string) $key, (string) $child );
+				}
+			}
+		}
+
+		return $found;
+	}
+
+	/**
+	 * A posted string exactly as typed, or null when it was not posted.
+	 *
+	 * @param list<string> $segments Where it is in the request, outermost first.
+	 */
+	private static function raw_posted( array $segments ): ?string {
+		// phpcs:ignore WordPress.Security.NonceVerification.Missing -- handle() verified the nonce before calling this.
+		$node = $_POST;
+
+		foreach ( $segments as $segment ) {
+			if ( ! is_array( $node ) || ! isset( $node[ $segment ] ) ) {
+				return null;
+			}
+
+			$node = $node[ $segment ];
+		}
+
+		// A credential is used as typed and never printed; sanitising it would change it.
+		return is_string( $node ) ? (string) wp_unslash( $node ) : null;
 	}
 
 	/**
@@ -1369,6 +1457,12 @@ final class Rule_Edit_Screen extends Screen {
 			return;
 		}
 
+		if ( ! empty( $field['secret'] ) ) {
+			$this->render_secret_row( $name, $label, $value, $field, $show_when );
+
+			return;
+		}
+
 		if ( is_array( $initial ) ) {
 			$lines = array();
 
@@ -1377,14 +1471,25 @@ final class Rule_Edit_Screen extends Screen {
 			 * shape its validator reads back -- the reader's header mapping is
 			 * one. Imploding the values alone would drop the keys and post back
 			 * something the validator refuses.
+			 *
+			 * A type that stores its lines as something richer -- the rate
+			 * limit keeps each limit as a map -- says how to write them back,
+			 * so the textarea holds what its validator reads rather than
+			 * "Array".
 			 */
-			foreach ( is_array( $value ) ? $value : array( $value ) as $item_key => $item ) {
-				$lines[] = is_string( $item_key ) ? $item_key . ': ' . (string) $item : (string) $item;
+			if ( isset( $field['lines'] ) && is_callable( $field['lines'] ) ) {
+				$text = (string) call_user_func( $field['lines'], $value );
+			} else {
+				foreach ( is_array( $value ) ? $value : array( $value ) as $item_key => $item ) {
+					$lines[] = is_string( $item_key ) ? $item_key . ': ' . (string) $item : (string) $item;
+				}
+
+				$text = implode( "\n", $lines );
 			}
 
 			$this->row(
 				$label,
-				self::textarea( $name, implode( "\n", $lines ) ),
+				self::textarea( $name, $text ),
 				wp_kses_post( (string) ( $field['description'] ?? __( 'One per line.', 'basic-firewall' ) ) ),
 				$show_when
 			);
@@ -1421,6 +1526,41 @@ final class Rule_Edit_Screen extends Screen {
 			$label,
 			self::text( $name, (string) $value, is_int( $initial ) ? 'number' : 'text' ),
 			$description,
+			$show_when
+		);
+	}
+
+	/**
+	 * A credential row: typed, never shown.
+	 *
+	 * The stored value is not put back into the page, where it would sit in
+	 * the page source, the browser's form cache and every screenshot of the
+	 * screen. Blank keeps it; the box removes it. See with_secret_fields().
+	 *
+	 * @param string               $name      The control's name attribute.
+	 * @param string               $label     The row label.
+	 * @param mixed                $value     The stored value.
+	 * @param array<string, mixed> $field     The type's description of the setting.
+	 * @param string               $show_when When the row is shown.
+	 */
+	private function render_secret_row( string $name, string $label, $value, array $field, string $show_when ): void {
+		$stored = is_string( $value ) && '' !== $value;
+		$clear  = 'clear_secret' . substr( $name, strlen( 'settings' ) );
+
+		$control = self::text( $name, '', 'password', 'autocomplete="new-password"' )
+			. ( $stored ? '<br>' . self::checkbox( $clear, false, __( 'Remove the stored value', 'basic-firewall' ) ) : '' );
+
+		$this->row(
+			$label,
+			$control,
+			wp_kses_post(
+				trim(
+					( $stored ? __( 'A value is stored. Leave blank to keep it.', 'basic-firewall' ) . ' ' : '' )
+					. (string) ( $field['description'] ?? '' ) . ' '
+					/* translators: the %env()% below is a literal token the firewall reads, not a placeholder. */
+					. __( 'This is a credential. Prefer a token — <code>%env(MY_VARIABLE)%</code> — over the value itself: a token is exported and backed up safely, and a rotated value is picked up without a rebuild. Exports strip a literal value and say so.', 'basic-firewall' )
+				)
+			),
 			$show_when
 		);
 	}
