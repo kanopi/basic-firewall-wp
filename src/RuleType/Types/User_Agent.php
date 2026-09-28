@@ -47,6 +47,21 @@ use Kanopi\Firewall\Plugins\UserAgent;
 final class User_Agent extends Condition_Rule_Type_Base {
 
 	/**
+	 * What the screen stores for "what `bot` consults", and the library's name.
+	 *
+	 * The screen's words are kept in storage because they are what a person
+	 * chose between; the library's are what compiles. Every value on the right
+	 * is one of UserAgent::BOT_DETECTORS, which a test holds it to.
+	 *
+	 * @var array<string, string>
+	 */
+	public const BOT_DETECTORS = array(
+		'curated' => 'device-detector',
+		'wider'   => 'crawler-detect',
+		'either'  => 'both',
+	);
+
+	/**
 	 * {@inheritDoc}
 	 */
 	public function id(): string {
@@ -208,7 +223,7 @@ final class User_Agent extends Condition_Rule_Type_Base {
 
 		$source = (string) ( $settings['bot_source'] ?? 'curated' );
 
-		$clean['bot_source']      = in_array( $source, array( 'curated', 'wider', 'either' ), true ) ? $source : 'curated';
+		$clean['bot_source']      = isset( self::BOT_DETECTORS[ $source ] ) ? $source : 'curated';
 		$clean['cache_detection'] = ! empty( $settings['cache_detection'] );
 
 		$suffixes = self::normalise_suffixes( $settings['verify_suffixes'] ?? array() );
@@ -376,10 +391,21 @@ final class User_Agent extends Condition_Rule_Type_Base {
 			$metadata['cache'] = false;
 		}
 
-		$source = (string) ( $settings['bot_source'] ?? 'curated' );
+		/*
+		 * `bot_detector`, in the library's vocabulary. This wrote the stored
+		 * `bot_source` as it was, a key the library has never read, so every
+		 * choice behaved as the default: "the wider list" still let sqlmap
+		 * through `bot equals true`.
+		 *
+		 * Nothing for the curated database, which is the library's default.
+		 * Naming it explicitly is how an operator tells the library they have
+		 * thought about the coverage gap, and it then stops logging the notice
+		 * that `bot` misses scanners -- a default nobody chose is not that.
+		 */
+		$detector = self::BOT_DETECTORS[ (string) ( $settings['bot_source'] ?? 'curated' ) ] ?? null;
 
-		if ( 'curated' !== $source ) {
-			$metadata['bot_source'] = $source;
+		if ( null !== $detector && UserAgent::BOT_DETECTOR_DEFAULT !== $detector ) {
+			$metadata['bot_detector'] = $detector;
 		}
 
 		/*

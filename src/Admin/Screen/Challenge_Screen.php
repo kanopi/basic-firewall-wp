@@ -341,8 +341,12 @@ final class Challenge_Screen extends Screen {
 
 		$this->row(
 			__( 'Verification timeout', 'basic-firewall' ),
-			self::text( 'options[' . $provider . '][timeout]', (string) ( $options['timeout'] ?? 5 ), 'number', 'min="1" max="120"' ),
-			__( 'Seconds. The visitor is waiting for this.', 'basic-firewall' )
+			self::text( 'options[' . $provider . '][timeout]', (string) ( $options['timeout'] ?? 5 ), 'number', 'min="1" max="' . Library_Map::CHALLENGE_TIMEOUT_MAX . '"' ),
+			sprintf(
+				/* translators: %d: the longest timeout the provider allows. */
+				__( 'Seconds, up to %d — the most the provider will wait, whatever is asked for. The visitor is waiting for this.', 'basic-firewall' ),
+				Library_Map::CHALLENGE_TIMEOUT_MAX
+			)
 		);
 
 		$this->row(

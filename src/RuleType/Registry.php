@@ -18,7 +18,6 @@ use Kanopi\BasicFirewall\RuleType\Types\Ip_Address;
 use Kanopi\BasicFirewall\RuleType\Types\Rate_Limit;
 use Kanopi\BasicFirewall\RuleType\Types\Url;
 use Kanopi\BasicFirewall\RuleType\Types\User_Agent;
-use Kanopi\BasicFirewall\RuleType\Types\Vulnerability_Score;
 
 /**
  * Holds the rule types, shipped and contributed.
@@ -28,6 +27,26 @@ use Kanopi\BasicFirewall\RuleType\Types\Vulnerability_Score;
  * through a filter.
  */
 final class Registry {
+
+	/**
+	 * Rule types this plugin once offered and has withdrawn.
+	 *
+	 * `vulnerability_score` compiled a `threshold` and a map of `weights`. The
+	 * library's VulnerabilityScore plugin reads neither: it scores a request
+	 * with its own `scoring.*` signals and matches on `risk_levels`. So the
+	 * rule saved, loaded, reported itself healthy, and never matched anything
+	 * -- whatever threshold it was given. Rather than ship it in 1.0 it is
+	 * withdrawn until it is rebuilt on the library's scoring model.
+	 *
+	 * A withdrawn id is not offered, cannot be claimed by another plugin --
+	 * a stored rule would silently start compiling to somebody else's idea of
+	 * it -- and is never compiled. Stored rules of the type are kept, because
+	 * they are somebody's configuration, and the compiler names each one on
+	 * the Status screen and in Site Health.
+	 *
+	 * @var list<string>
+	 */
+	public const WITHDRAWN = array( 'vulnerability_score' );
 
 	/**
 	 * Resolved types, keyed by id.
@@ -88,6 +107,11 @@ final class Registry {
 			}
 		}
 
+		// And nobody gets a withdrawn one; see WITHDRAWN.
+		foreach ( self::WITHDRAWN as $withdrawn ) {
+			unset( $resolved[ $withdrawn ] );
+		}
+
 		uasort(
 			$resolved,
 			static fn ( Rule_Type $a, Rule_Type $b ): int => array( $a->weight(), $a->label() ) <=> array( $b->weight(), $b->label() )
@@ -112,7 +136,6 @@ final class Registry {
 			new Edge_Signal(),
 			new Asn(),
 			new Geo_Location(),
-			new Vulnerability_Score(),
 			new Abuse_Ipdb(),
 			new Crs(),
 		);
@@ -145,6 +168,15 @@ final class Registry {
 	 */
 	public function available(): array {
 		return array_filter( $this->all(), static fn ( Rule_Type $t ): bool => $t->is_available() );
+	}
+
+	/**
+	 * Whether a type id is one this plugin has withdrawn.
+	 *
+	 * @param string $id Type id.
+	 */
+	public static function is_withdrawn( string $id ): bool {
+		return in_array( $id, self::WITHDRAWN, true );
 	}
 
 	/**

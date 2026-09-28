@@ -452,9 +452,17 @@ generated.
 | Edge signal | The TLS fingerprint (JA3, JA4) or bot score your CDN computed. Needs a CDN sending the headers, and trusted proxies |
 | ASN | Autonomous system number (`asn`) or organisation (`asn_org`). Needs a MaxMind ASN database |
 | Geolocation | Country, continent, city, postal code, timezone, coordinates. MaxMind database or CDN headers |
-| Vulnerability score | Method, country, network, attack patterns, user agent — summed |
 | IP reputation | AbuseIPDB confidence score. Free API key, one cached lookup per visitor per day, fails open |
 | OWASP Core Rule Set | The full CRS ruleset, via `kanopi/crs-engine` |
+
+**The vulnerability score type is withdrawn from 1.0.** It saved a threshold and
+a set of weights, and the library's `VulnerabilityScore` plugin reads neither: it
+scores with its own signals (`scoring.*`) and matches on `risk_levels`. So the
+rule loaded, reported itself healthy, and never matched anything. It comes back
+when it is rebuilt on the library's scoring model. Until then it is not offered,
+another plugin cannot register a type under its id, and a rule saved by a
+pre-release build is kept as it is — never compiled, and named on the Status
+screen and in Site Health until you delete it.
 
 ### Responses
 
@@ -806,8 +814,8 @@ would resolve against the process working directory — a different answer under
 php-fpm, WP-CLI and cron, and all three wrong — so the list would load nothing
 while the error policy hid the reason.
 
-Not offered on rate limiting, IP reputation, vulnerability score or the Core
-Rule Set: none of those matches a list of values. The rule screen asks each type
+Not offered on rate limiting, IP reputation or the Core Rule Set: none of those
+matches a list of values. The rule screen asks each type
 whether it supports references and only offers the fields when it does.
 
 ### Naming a header, cookie or query parameter
@@ -1883,6 +1891,10 @@ these are the cases to check by hand:
 - **A table renamed on the Storage screen, or kept in another database** through
   a DSN. Only the four default names are dropped, because a `DROP` built from a
   stored name is one an imported settings document could aim anywhere.
+- **`firewall_rate_limit_storage`**, unprefixed. A pre-release build counted
+  database-backed rate limits into it by mistake; so can anything else using
+  kanopi/firewall on the same database, and nothing in it says which. Uninstall
+  names it when a rule could have written to it.
 - **Networks larger than 500 sites.** Uninstall visits the first 500; beyond
   that, run `wp plugin uninstall` per site.
 

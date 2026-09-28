@@ -214,7 +214,13 @@ final class Schema {
 					'type'    => 'int',
 					'label'   => 'Seconds added to a block each time an already-blocked client returns',
 					'default' => 3600,
-					'min'     => 0,
+
+					/*
+					 * One, not zero. The library drops falsy values from its
+					 * global section before reading it and then adds 3600, so a
+					 * zero here would mean "an hour" while saying "nothing".
+					 */
+					'min'     => 1,
 				),
 				'behind_proxy'            => array(
 					'type'    => 'string',
@@ -726,10 +732,12 @@ final class Schema {
 								),
 								'timeout'       => array(
 									'type'    => 'int',
-									'label'   => 'Verification timeout in seconds',
+									'label'   => 'Verification timeout in seconds, at most 10',
 									'default' => 5,
 									'min'     => 1,
-									'max'     => 120,
+
+									// The provider's own ceiling; see Library_Map::CHALLENGE_TIMEOUT_MAX.
+									'max'     => Library_Map::CHALLENGE_TIMEOUT_MAX,
 								),
 								'on_error'      => array(
 									'type'    => 'string',
@@ -740,6 +748,11 @@ final class Schema {
 									 * means an outage at the vendor switches the
 									 * challenge off rather than taking the page
 									 * down -- a real choice, but not a silent one.
+									 *
+									 * The providers spell these `block` and
+									 * `allow`; the compiler translates, so what
+									 * is stored stays what the screen says. See
+									 * Config_Compiler::provider_options().
 									 */
 									'default' => 'fail',
 									'choices' => array( 'fail', 'pass' ),
@@ -802,10 +815,12 @@ final class Schema {
 								),
 								'timeout'           => array(
 									'type'    => 'int',
-									'label'   => 'Verification timeout in seconds',
+									'label'   => 'Verification timeout in seconds, at most 10',
 									'default' => 5,
 									'min'     => 1,
-									'max'     => 120,
+
+									// The provider's own ceiling; see Library_Map::CHALLENGE_TIMEOUT_MAX.
+									'max'     => Library_Map::CHALLENGE_TIMEOUT_MAX,
 								),
 								'on_error'          => array(
 									'type'    => 'string',

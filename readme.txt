@@ -22,7 +22,7 @@ It is the WordPress port of the Drupal module `basic_firewall`, built on the
 `kanopi/firewall` library, and it keeps that module's habit of writing down what
 does not work as well as what does.
 
-**Ten rule types**
+**Nine rule types**
 
 * IP address — single addresses, CIDR blocks, ranges, IPv4 and IPv6
 * Request / URL — method, host, path, query, body, headers, cookies
@@ -31,7 +31,6 @@ does not work as well as what does.
 * Edge signal — the TLS fingerprint or bot score your CDN computed
 * ASN — turn away a whole hosting provider or VPN
 * Geolocation — from a MaxMind database or your CDN's headers
-* Vulnerability score — signals that are only suspicious in combination
 * IP reputation — AbuseIPDB, cached, fails open
 * OWASP Core Rule Set
 
@@ -137,10 +136,10 @@ proxy too.
 
 = 1.0.0 =
 * First release. The WordPress port of the Drupal basic_firewall module, built on kanopi/firewall ^2.33.1; the zip bundles 2.33.1, scoped.
-* Ten rule types, six responses (allow, mark, record, challenge, redirect, block), observe-only rules and activity windows.
+* Nine rule types, six responses (allow, mark, record, challenge, redirect, block), observe-only rules and activity windows.
 * Two evaluation paths: an mu-plugin installed on activation, and an optional wp-config.php bootstrap that runs before a page cache.
 * Block list in files, the database or Redis; a cache backend in files, the object cache or APCu.
 * Fifteen admin screens, fifteen WP-CLI subcommands and seventeen Site Health tests.
 * Lockdown and a panic file for incidents; every decision announced as a WordPress action.
 * Export and import with credentials stripped; an uninstall that removes what the plugin wrote.
-* Upgrading from a pre-release build: stored settings are rewritten automatically; see CHANGELOG.md for the two things to check by hand.
+* Upgrading from a pre-release build: stored settings are rewritten automatically; see CHANGELOG.md for the five things to check by hand.

@@ -115,7 +115,8 @@ final class Abuse_Ipdb extends Rule_Type_Base {
 			'api_key'      => $key,
 			'cache_ttl'    => max( 60, (int) ( $settings['cache_ttl'] ?? 86400 ) ),
 			'timeout'      => max( 1, (int) ( $settings['timeout'] ?? 5 ) ),
-			'max_age_days' => max( 1, (int) ( $settings['max_age_days'] ?? 90 ) ),
+			// AbuseIPDB answers for 1 to 365 days of reports, and refuses anything else.
+			'max_age_days' => max( 1, min( 365, (int) ( $settings['max_age_days'] ?? 90 ) ) ),
 		);
 	}
 
@@ -129,11 +130,18 @@ final class Abuse_Ipdb extends Rule_Type_Base {
 		$settings = $rule['settings'] ?? array();
 
 		$entry['config'] = array(
-			'api_key'      => (string) ( $settings['api_key'] ?? '' ),
-			'threshold'    => (int) ( $settings['threshold'] ?? 75 ),
-			'cache_ttl'    => (int) ( $settings['cache_ttl'] ?? 86400 ),
-			'timeout'      => (int) ( $settings['timeout'] ?? 5 ),
-			'max_age_days' => (int) ( $settings['max_age_days'] ?? 90 ),
+			'api_key'         => (string) ( $settings['api_key'] ?? '' ),
+			'threshold'       => (int) ( $settings['threshold'] ?? 75 ),
+			'cache_ttl'       => (int) ( $settings['cache_ttl'] ?? 86400 ),
+			'timeout'         => (int) ( $settings['timeout'] ?? 5 ),
+
+			/*
+			 * `max_age_in_days`, the provider's key. This wrote the stored name,
+			 * `max_age_days`, which nothing reads, so every lookup asked about
+			 * the library's 30 days of reports while the screen said 90 -- and
+			 * an address reported two months ago was treated as clean.
+			 */
+			'max_age_in_days' => (int) ( $settings['max_age_days'] ?? 90 ),
 
 			/*
 			 * Pointed at the private directory rather than left to the library's
@@ -148,7 +156,7 @@ final class Abuse_Ipdb extends Rule_Type_Base {
 			 * otherwise keep it on the storage that constant moved everything
 			 * else off.
 			 */
-			'cache_dir'    => Plugin::instance()->paths()->cache_root() . '/abuseipdb',
+			'cache_dir'       => Plugin::instance()->paths()->cache_root() . '/abuseipdb',
 		);
 
 		return $entry;

@@ -19,9 +19,9 @@ does not work as well as what does.
 
 ### Added
 
-- **Ten rule types**: IP address, Request / URL, user agent, rate limit, edge
-  signal, ASN, geolocation, vulnerability score, IP reputation (AbuseIPDB) and
-  the OWASP Core Rule Set. Each has its own form, validation, compilation and
+- **Nine rule types**: IP address, Request / URL, user agent, rate limit, edge
+  signal, ASN, geolocation, IP reputation (AbuseIPDB) and the OWASP Core Rule
+  Set. Each has its own form, validation, compilation and
   library capability detection, so a type the installed library cannot run is
   not offered rather than compiled into something that matches nothing. Other
   plugins can add types through the `basic_firewall_rule_types` filter.
@@ -37,6 +37,10 @@ does not work as well as what does.
   - The edge signal type matches what the CDN worked out that the site cannot:
     a JA3 or JA4 TLS fingerprint, or the bot score, from Cloudflare, Fastly or a
     custom CDN. Believed only behind a trusted proxy.
+  - Every setting of every type, and every site-wide setting, is proved in CI
+    against the library that enforces it: the compiled file is loaded, and the
+    library's own objects are asked what they ended up with, or a request is
+    evaluated. A setting with no such test fails the build.
 - **Six responses**, evaluated in this order: allow, mark, record, challenge,
   redirect, block. Mark and record do not end evaluation. Whether a match is
   written to the durable block list is a separate, per-rule choice, which is
@@ -136,6 +140,15 @@ does not work as well as what does.
   that always means the current release. Composer installation works too,
   unscoped.
 
+### Removed
+
+- **The vulnerability score rule type**, before release. It saved a threshold
+  and weights that the library's `VulnerabilityScore` plugin never reads — it
+  scores with its own `scoring.*` signals and matches on `risk_levels` — so the
+  rule matched nothing. It is withdrawn until it is rebuilt on that model. A
+  rule saved by a pre-release build is kept, skipped, and named on the Status
+  screen and in Site Health.
+
 ### Security
 
 - The private directory is created with `.htaccess`, `web.config` and
@@ -180,8 +193,36 @@ this.
   without being edited: the operators `gt`, `gte`, `lt`, `lte` and
   `not_contains`, which the library does not know and which matched nothing;
   and the geolocation and ASN reader settings, which compiled to keys the
-  library never read.
+  library never read. So did these, each now compiled to the key the library
+  reads:
+  - Challenge provider options, which went nowhere. Turnstile or reCAPTCHA with
+    any challenge rule stopped the firewall starting, and the plugin failed
+    open. "Let the visitor through" if verification is unreachable is now
+    honoured, and a timeout above 10 seconds is written as the 10 the provider
+    allows.
+  - The Core Rule Set's inbound and outbound thresholds, which were always 5
+    and 4.
+  - A user agent rule's choice of what `bot` consults, which was always the
+    curated database.
+  - AbuseIPDB's report age, which was always 30 days whatever the screen said.
+  - A database-backed rate limit's table, which was always the library's
+    unprefixed `firewall_rate_limit_storage`.
+  - An IPv6 `start-end` range on an IP address rule, which matched nobody. It
+    is compiled as the CIDR blocks covering the same addresses.
+  - A referenced list declared as XML, which stopped its rule constructing. XML
+    is no longer offered; the format is detected from a `.xml` URL instead.
+  - A database log handler connecting with individual parameters, which was
+    compiled with no connection.
 - **Check by hand**:
+  - A database-backed rate limit counted into `firewall_rate_limit_storage`,
+    without the site's table prefix. It now counts into
+    `{prefix}basic_firewall_ratelimit`, so counters start again. Drop the old
+    table once nothing else using kanopi/firewall on that database needs it;
+    uninstall names it but will not drop it.
+  - A rate limit's status code field is gone. The library always answers 429,
+    whatever it said.
+  - **Seconds added when a blocked client returns** can no longer be 0, which
+    the library read as 3600. A stored 0 is reported until it is changed.
   - A user agent rule saved from the rule screen in a pre-release build has
     **Cache agent detection** switched off, because the screen never posted it.
     Tick it and save, or each PHP worker pays about 618 ms on its first request.

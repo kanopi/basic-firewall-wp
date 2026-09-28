@@ -77,7 +77,7 @@ final class Rate_Limit extends Rule_Type_Base {
 	 * {@inheritDoc}
 	 */
 	public function description(): string {
-		return __( 'Limits how many requests one address may make against each pattern you list, within a time window. Needs its own counter storage.', 'basic-firewall' );
+		return __( 'Limits how many requests one address may make against each pattern you list, within a time window, and answers the rest with 429 Too Many Requests. Needs its own counter storage.', 'basic-firewall' );
 	}
 
 	/**
@@ -118,7 +118,14 @@ final class Rate_Limit extends Rule_Type_Base {
 			 * whole site. Untick it to limit only the listed patterns.
 			 */
 			'limit_unlisted_paths' => true,
-			'status_code'          => 429,
+
+			/*
+			 * No status code. There used to be one, defaulting to 429, and the
+			 * library ignores it: RateLimit::getStatusCode() returns 429 and
+			 * reads nothing. A field that changes nothing is a promise the
+			 * firewall does not keep, so it went; a value an earlier build
+			 * stored is dropped the next time the rule is validated.
+			 */
 			'storage'              => array(
 				'backend'           => 'file',
 				'file'              => 'ratelimit.data',
@@ -292,14 +299,11 @@ final class Rate_Limit extends Rule_Type_Base {
 			$backend                   = 'file';
 		}
 
-		$status = (int) ( $settings['status_code'] ?? 429 );
-
 		return array(
 			'paths'                => $paths,
 			'default_limit'        => max( 1, (int) ( $settings['default_limit'] ?? 60 ) ),
 			'default_window'       => max( 1, (int) ( $settings['default_window'] ?? 60 ) ),
 			'limit_unlisted_paths' => ! empty( $settings['limit_unlisted_paths'] ),
-			'status_code'          => ( $status >= 100 && $status <= 599 ) ? $status : 429,
 			'storage'              => array(
 				'backend'           => $backend,
 				'file'              => trim( (string) ( $storage['file'] ?? 'ratelimit.data' ) ),
@@ -436,10 +440,18 @@ final class Rate_Limit extends Rule_Type_Base {
 			$source = (string) ( $storage['connection_source'] ?? 'wordpress' );
 			$table  = (string) ( $storage['table'] ?? 'basic_firewall_ratelimit' );
 
-			// Prefixed only when the table lives in WordPress's own database. A
-			// supplied DSN points at a schema somebody named themselves, and
-			// prefixing it would rename a table they created.
-			$compiled['config']['storage-table'] = 'wordpress' === $source
+			/*
+			 * `storage_table`, which DatabaseRateLimitStorage reads. This wrote
+			 * `storage-table`, which it does not, so every database-backed rate
+			 * limit counted into the library's default `firewall_rate_limit_storage`
+			 * -- unprefixed, so shared by every site in the database, and not a
+			 * table the uninstaller knows about.
+			 *
+			 * Prefixed only when the table lives in WordPress's own database. A
+			 * supplied DSN points at a schema somebody named themselves, and
+			 * prefixing it would rename a table they created.
+			 */
+			$compiled['config']['storage_table'] = 'wordpress' === $source
 				? $credentials->prefix_table( $table )
 				: $table;
 

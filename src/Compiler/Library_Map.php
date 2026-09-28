@@ -232,6 +232,17 @@ final class Library_Map {
 	public const REMOTE_CHALLENGE_PROVIDERS = array( 'turnstile', 'recaptcha' );
 
 	/**
+	 * The longest a remote provider will wait on its vendor, in seconds.
+	 *
+	 * Both providers clamp `timeout` to this, privately -- a larger value is
+	 * accepted and quietly shortened. The Challenge screen caps its field here
+	 * so it never offers a number that is not the one in force.
+	 *
+	 * @var int
+	 */
+	public const CHALLENGE_TIMEOUT_MAX = 10;
+
+	/**
 	 * Resolve a short key to a class name.
 	 *
 	 * @param array<string, class-string> $map      One of the maps above.
