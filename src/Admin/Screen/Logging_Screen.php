@@ -298,7 +298,7 @@ final class Logging_Screen extends Screen {
 		$this->row(
 			__( 'Additional variables to redact', 'basic-firewall' ),
 			self::textarea( 'redact_extra', implode( "\n", (array) $settings->get( 'logging.redact_extra', array() ) ), 4 ),
-			__( 'At debug level the firewall records the value a condition matched, so a rule inspecting a header or cookie would write session tokens into the log. A sensible set is redacted already — the <code>cookie</code>, <code>authorization</code>, <code>x-api-key</code>, <code>x-auth-token</code> and <code>x-csrf-token</code> headers, plus every individual cookie. Add your own by name, one per line, with a trailing <code>.*</code> for a prefix. Redaction affects the log only: evaluation always sees the real value, so it can never change whether a request is blocked.', 'basic-firewall' )
+			__( 'At debug level the firewall records the value a condition matched, so a rule inspecting a header or cookie would write session tokens into the log. A sensible set is redacted already — the <code>cookie</code>, <code>authorization</code>, <code>x-api-key</code>, <code>x-auth-token</code> and <code>x-csrf-token</code> headers, plus every individual cookie. Add your own the way the firewall names them — <code>header.x-session-id</code>, <code>query.token</code> — one per line, with a trailing <code>.*</code> for a prefix, such as <code>query.*</code>. They are added to that set, never in place of it, and apply on both evaluation paths. Redaction affects the log only: evaluation always sees the real value, so it can never change whether a request is blocked.', 'basic-firewall' )
 		);
 
 		echo '</tbody></table>';

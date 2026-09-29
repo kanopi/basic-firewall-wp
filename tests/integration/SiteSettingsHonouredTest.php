@@ -128,7 +128,7 @@ final class SiteSettingsHonouredTest extends Honoured_Settings {
 		'challenge.provider_options.recaptcha.on_error'   => 'test_remote_challenge_providers',
 		'challenge.provider_options.recaptcha.send_remoteip' => 'test_remote_challenge_providers',
 		'challenge.provider_options.recaptcha.use_recaptcha_net' => 'test_remote_challenge_providers',
-		'logging.redact_extra'                            => 'unapplied: stored and shown on the Logging screen, but never handed to LoggingFactory::setRedactedVariables().',
+		'logging.redact_extra'                            => 'test_redact_extra',
 		'logging.to_wordpress'                            => 'unapplied: stored and shown on the Logging screen, but no handler forwards events to WordPress.',
 		'logging.wp_level'                                => 'unapplied: the level for logging.to_wordpress, which nothing applies.',
 		'logger.*.type'                                   => 'test_log_handlers',
@@ -855,6 +855,45 @@ final class SiteSettingsHonouredTest extends Honoured_Settings {
 			$this->assertLessThanOrEqual( $ceiling, $providers[ $name ]['children']['timeout']['max'], "The $name timeout offers more than the library allows." );
 			$this->assertLessThanOrEqual( $ceiling, $providers[ $name ]['children']['timeout']['default'] );
 		}
+	}
+
+	/**
+	 * Additional names are redacted from the log on both paths, defaults kept.
+	 */
+	public function test_redact_extra(): void {
+		$this->build(
+			array(
+				'logging' => array(
+					'redact_extra' => array( ' Header.X-Honoured-Session ', 'query.*', '' ),
+				),
+			)
+		);
+
+		try {
+			self::invoke( \Kanopi\BasicFirewall\Plugin::instance()->runner(), 'apply_redaction' );
+
+			$this->assertTrue( LoggingFactory::shouldRedactVariable( 'header.x-honoured-session' ), 'A name typed on the Logging screen is logged in clear.' );
+			$this->assertTrue( LoggingFactory::shouldRedactVariable( 'query.token' ), 'A prefix typed on the Logging screen is logged in clear.' );
+			$this->assertTrue( LoggingFactory::shouldRedactVariable( 'header.cookie' ), 'Adding a name stopped the library redacting its own defaults.' );
+			$this->assertFalse( LoggingFactory::shouldRedactVariable( 'header.user-agent' ) );
+
+			// The wp-config.php path reads the same names from the sidecar.
+			require_once dirname( __DIR__, 2 ) . '/bootstrap.php';
+
+			$runtime = basic_firewall_runtime( array( 'private_path' => \Kanopi\BasicFirewall\Plugin::instance()->paths()->base() ) + basic_firewall_options() );
+
+			$this->assertSame( array( 'header.x-honoured-session', 'query.*' ), $runtime['redact'], 'The wp-config.php path cannot see the names to redact.' );
+
+			\Kanopi\BasicFirewall\Logging\Redaction::apply( array() );
+
+			basic_firewall_apply_redaction( basic_firewall_options(), $runtime['redact'] );
+
+			$this->assertTrue( LoggingFactory::shouldRedactVariable( 'header.x-honoured-session' ), 'The wp-config.php path did not hand the names to the library.' );
+		} finally {
+			\Kanopi\BasicFirewall\Logging\Redaction::apply( array() );
+		}
+
+		$this->assertFalse( LoggingFactory::shouldRedactVariable( 'header.x-honoured-session' ), 'Names from one configuration outlived it.' );
 	}
 
 	/**

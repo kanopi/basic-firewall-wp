@@ -81,7 +81,8 @@ does not work as well as what does.
 - **Logging** through Monolog, because it runs before WordPress's logger
   exists: a file, rotating files, the PHP error log or a database table, which
   the Log screen reads back. Any handler can send after the visitor has their
-  response.
+  response. Names added under **Additional variables to redact** are redacted
+  on both paths as well as the library's own set.
 - **Challenges**: arithmetic, ALTCHA proof of work, Cloudflare Turnstile and
   Google reCAPTCHA.
 - **Presets** from the library, included by reference so they update with it.

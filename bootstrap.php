@@ -215,6 +215,7 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 		basic_firewall_define_cache_constants( $options );
 		basic_firewall_enable_file_secrets( $options );
 		basic_firewall_set_trusted_proxies( $options );
+		basic_firewall_apply_redaction( $options, $runtime['redact'] );
 
 		/*
 		 * Marks the request as dealt with, so the mu-plugin does not evaluate it
@@ -560,11 +561,12 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 	 *
 	 * @param array<string, mixed> $options Bootstrap options.
 	 *
-	 * @return array{enabled: bool}
+	 * @return array{enabled: bool, redact: list<string>}
 	 */
 	function basic_firewall_runtime( array $options ) {
 		$runtime = array(
 			'enabled' => true,
+			'redact'  => array(),
 		);
 
 		$compiled = basic_firewall_compiled_path( $options );
@@ -589,7 +591,49 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 			$runtime['enabled'] = false;
 		}
 
+		foreach ( is_array( $decoded['redact'] ?? null ) ? $decoded['redact'] : array() as $name ) {
+			if ( is_string( $name ) && '' !== $name ) {
+				$runtime['redact'][] = $name;
+			}
+		}
+
 		return $runtime;
+	}
+
+	/**
+	 * Redact the site's own names from the log, as well as the library's.
+	 *
+	 * The same class the runner uses, loaded by hand for the reason
+	 * Decision_Dispatcher is. One that cannot be loaded leaves the library's
+	 * defaults in place, which is less redaction and never a failed request.
+	 *
+	 * @param array<string, mixed> $options Bootstrap options.
+	 * @param list<string>         $names   Names from the runtime sidecar.
+	 *
+	 * @return void
+	 */
+	function basic_firewall_apply_redaction( array $options, array $names ) {
+		if ( array() === $names ) {
+			return;
+		}
+
+		$class = 'Kanopi\\BasicFirewall\\Logging\\Redaction';
+
+		try {
+			if ( ! class_exists( $class, false ) ) {
+				$file = rtrim( (string) $options['plugin_path'], '/' ) . '/src/Logging/Redaction.php';
+
+				if ( ! is_readable( $file ) ) {
+					return;
+				}
+
+				require_once $file;
+			}
+
+			call_user_func( array( $class, 'apply' ), $names );
+		} catch ( \Throwable $e ) {
+			return;
+		}
 	}
 
 	/**

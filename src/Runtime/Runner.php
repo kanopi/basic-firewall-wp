@@ -12,6 +12,7 @@ namespace Kanopi\BasicFirewall\Runtime;
 use Kanopi\BasicFirewall\Cache\Cache_Backend;
 use Kanopi\BasicFirewall\Database_Credentials;
 use Kanopi\BasicFirewall\Library_Loader;
+use Kanopi\BasicFirewall\Logging\Redaction;
 use Kanopi\BasicFirewall\Plugin;
 use Kanopi\Firewall\Firewall;
 use Symfony\Component\HttpFoundation\Request;
@@ -132,6 +133,9 @@ final class Runner {
 		 * address, and one visitor's offense blocks the lot.
 		 */
 		Trusted_Proxies::apply();
+
+		// Before the firewall exists, so nothing is logged unredacted first.
+		$this->apply_redaction();
 
 		try {
 			/*
@@ -362,6 +366,17 @@ final class Runner {
 		}
 
 		return (bool) Plugin::instance()->settings()->get( 'enabled', true );
+	}
+
+	/**
+	 * Redact the site's own names from the log, as well as the library's.
+	 *
+	 * The library has no configuration key for these, so they are handed to
+	 * it directly -- here from settings, and on the wp-config.php path from
+	 * the runtime sidecar. See Redaction.
+	 */
+	private function apply_redaction(): void {
+		Redaction::apply( (array) Plugin::instance()->settings()->get( 'logging.redact_extra', array() ) );
 	}
 
 	/**

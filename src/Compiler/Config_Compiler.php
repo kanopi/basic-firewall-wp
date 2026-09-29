@@ -12,6 +12,7 @@ namespace Kanopi\BasicFirewall\Compiler;
 use Kanopi\BasicFirewall\Cache\Cache_Backend;
 use Kanopi\BasicFirewall\Database_Credentials;
 use Kanopi\BasicFirewall\Library_Capabilities;
+use Kanopi\BasicFirewall\Logging\Redaction;
 use Kanopi\BasicFirewall\Install\Challenge_Secret;
 use Kanopi\BasicFirewall\Plugin;
 use Kanopi\BasicFirewall\RuleType\Condition_Rule_Type_Base;
@@ -57,6 +58,7 @@ final class Config_Compiler {
 	 */
 	public const RUNTIME_DEFAULTS = array(
 		'enabled' => true,
+		'redact'  => array(),
 	);
 
 	/**
@@ -228,6 +230,9 @@ final class Config_Compiler {
 
 		return array(
 			'enabled' => (bool) $settings->get( 'enabled', true ),
+
+			// Names the log redacts as well as the library's own; see Redaction.
+			'redact'  => Redaction::clean( (array) $settings->get( 'logging.redact_extra', array() ) ),
 		);
 	}
 

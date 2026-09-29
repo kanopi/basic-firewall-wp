@@ -1525,6 +1525,19 @@ blocked the most clients this week, whether a rule has matched anything at all
 since it was added, what the firewall did to an address before its owner
 complained.
 
+### What is kept out of the log
+
+At `debug` the library records the value each condition compared, so a rule
+reading a header or a cookie would write it into the log. It redacts a sensible
+set on its own — the `cookie`, `authorization`, `proxy-authorization`,
+`x-api-key`, `x-auth-token`, `x-csrf-token` and `x-session-token` headers, and
+every cookie. **Additional variables to redact** on the Logging screen adds to
+that set, never replaces it: one name per line the way the firewall names it —
+`header.x-session-id`, `query.token` — or a prefix ending in `.*`, such as
+`query.*`. The names apply on both evaluation paths (the `wp-config.php` path
+reads them from `runtime.json`) and to the Test screen's log. Redaction changes
+what is written, never what is evaluated.
+
 ### Off the request path
 
 Every handler has a **Send after the visitor has their response** option. It holds

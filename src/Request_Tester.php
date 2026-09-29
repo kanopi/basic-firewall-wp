@@ -12,6 +12,7 @@ namespace Kanopi\BasicFirewall;
 use Kanopi\BasicFirewall\Cache\Cache_Backend;
 use Kanopi\BasicFirewall\Compiler\Library_Map;
 use Kanopi\BasicFirewall\Logging\Log_Reader;
+use Kanopi\BasicFirewall\Logging\Redaction;
 use Kanopi\Firewall\Exception\ChallengeRequiredException;
 use Kanopi\Firewall\Exception\FirewallBlockedException;
 use Kanopi\Firewall\Exception\FirewallRedirectException;
@@ -61,6 +62,10 @@ final class Request_Tester {
 		}
 
 		$capture = new TestHandler( Level::Debug );
+
+		// The run's log is shown on screen, which is somewhere else a session
+		// token should not appear.
+		Redaction::apply( (array) Plugin::instance()->settings()->get( 'logging.redact_extra', array() ) );
 
 		try {
 			$firewall = Firewall::create( array( $compiled ), $this->overrides( $capture, $compiled ) );
