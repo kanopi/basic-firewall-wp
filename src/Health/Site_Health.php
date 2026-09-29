@@ -652,6 +652,26 @@ final class Site_Health {
 			);
 		}
 
+		$late = $paths->late_filter();
+
+		if ( null !== $late ) {
+			/*
+			 * Ahead of the reachability probe, because it changes what that
+			 * probe is about: whoever added the filter believes the files live
+			 * where it says, and they do not.
+			 */
+			return self::recommended(
+				__( 'The basic_firewall_private_path filter is added too late to take effect', 'basic-firewall' ),
+				'<p>' . sprintf(
+					/* translators: 1: directory the filter names, 2: directory in use. */
+					esc_html__( 'The filter names %1$s, but the firewall is using %2$s. It settles the directory at muplugins_loaded, before any ordinary plugin or theme loads, so a filter added from one of those is never consulted.', 'basic-firewall' ),
+					'<code>' . esc_html( $late ) . '</code>',
+					'<code>' . esc_html( $paths->base() ) . '</code>'
+				) . '</p>'
+				. '<p>' . esc_html__( 'Move the add_filter() call into a file in wp-content/mu-plugins, then rebuild the firewall. Until then every request reads and writes the directory in use, so the site is protected — just not where you asked.', 'basic-firewall' ) . '</p>'
+			);
+		}
+
 		$probe = $paths->probe_reachability();
 
 		if ( 'exposed' === $probe['status'] ) {

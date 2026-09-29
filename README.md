@@ -395,8 +395,18 @@ location ~* /basic-firewall-private-[a-f0-9]+/ { deny all; return 404; }
 Or move the directory out of the web root entirely, which is strictly better:
 
 ```php
+// wp-content/mu-plugins/basic-firewall-path.php
 add_filter( 'basic_firewall_private_path', fn() => '/var/private/basic-firewall' );
 ```
+
+**Add the filter from an mu-plugin.** The firewall settles its directory once per
+request, at `muplugins_loaded`, before any ordinary plugin or the theme has
+loaded, so a filter added from one of those is never consulted — every request
+goes on using the default directory. It is settled once on purpose: an answer
+that changed partway through a request would have the admin write a compiled
+file the firewall never reads. Site Health notices a filter added too late and
+names both directories. The `wp-config.php` path takes the directory from the
+snippet's `private_path` instead, so update that too.
 
 ### How stored paths resolve
 

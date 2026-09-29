@@ -105,6 +105,13 @@ final class Paths {
 	private ?string $base = null;
 
 	/**
+	 * Whether the base directory was settled before ordinary plugins loaded.
+	 *
+	 * @var bool
+	 */
+	private bool $settled_early = false;
+
+	/**
 	 * Absolute path to the private directory, without a trailing slash.
 	 *
 	 * Not created as a side effect of being asked for. Callers that intend to
@@ -124,13 +131,41 @@ final class Paths {
 		 * responsible for the directory being writable; the guard files are
 		 * still written, and the reachability test still runs.
 		 *
+		 * **Add it from an mu-plugin.** The answer is settled once per request,
+		 * and the runner asks at `muplugins_loaded` -- before any ordinary
+		 * plugin or theme has loaded -- so a filter added from one of those is
+		 * never consulted: every request reads and writes the default
+		 * directory, consistently, and the filter does nothing. It is settled
+		 * once on purpose. Answering differently later in the same request
+		 * would have the admin write a compiled file the runner never reads.
+		 * late_filter() notices the mistake, and Site Health reports it.
+		 *
 		 * @param string $path Absolute path, no trailing slash.
 		 */
 		$filtered = apply_filters( 'basic_firewall_private_path', $this->default_base() );
 
-		$this->base = rtrim( (string) $filtered, '/\\' );
+		$this->base          = rtrim( (string) $filtered, '/\\' );
+		$this->settled_early = ! did_action( 'plugins_loaded' ) && ! doing_action( 'plugins_loaded' );
 
 		return $this->base;
+	}
+
+	/**
+	 * What a filter added too late to count would have made the directory.
+	 *
+	 * Null when the answer in force already agrees with the filter as it
+	 * stands now, or when there is no way to tell -- the answer was settled
+	 * after plugins loaded, so a late filter was already consulted.
+	 */
+	public function late_filter(): ?string {
+		if ( ! $this->settled_early || ! did_action( 'plugins_loaded' ) ) {
+			return null;
+		}
+
+		/** This filter is documented in src/Support/Paths.php */
+		$now = rtrim( (string) apply_filters( 'basic_firewall_private_path', $this->default_base() ), '/\\' );
+
+		return $now === $this->base() ? null : $now;
 	}
 
 	/**
@@ -764,6 +799,7 @@ final class Paths {
 	 * @internal
 	 */
 	public function reset(): void {
-		$this->base = null;
+		$this->base          = null;
+		$this->settled_early = false;
 	}
 }
