@@ -49,6 +49,11 @@ does not work as well as what does.
     delimiters and the case flag come from the form. A pattern between slashes,
     such as `/wp-admin/`, is a path and is kept exactly as written through
     every save.
+  - A document written straight into the option — WP-CLI, a deploy, a restore
+    — is compiled as each rule type's validator reads it, so settings in the
+    shape a person types them compile as the rule screen would store them. A
+    rule that could only be read by dropping part of it is skipped and named on
+    the Status screen and in Site Health.
   - Every setting of every type, and every site-wide setting, is proved in CI
     against the library that enforces it: the compiled file is loaded, and the
     library's own objects are asked what they ended up with, or a request is

@@ -865,6 +865,63 @@ final class RuleTypesHonouredTest extends Honoured_Settings {
 	}
 
 	/**
+	 * A hand-edited option, with settings in the shape a person types them.
+	 *
+	 * Only the settings service runs each rule through its type's validator,
+	 * so a document written straight into the option -- `wp option update`, a
+	 * deploy, a restore -- reached the compiler with addresses as one string,
+	 * a rate limit's lines as a string and its storage as a word. The types
+	 * threw, warned, or compiled something else: one junk address, and a rate
+	 * limit with no limits. They are compiled as the validator reads them, and
+	 * a rule whose reading would drop part of it is skipped and reported.
+	 */
+	public function test_hand_edited_settings_compile_as_the_validator_reads_them(): void {
+		$firewall = $this->build(
+			array(
+				'rules' => array(
+					$this->rule( 'raw-ips', 'ip_address', array( 'addresses' => "203.0.113.5\n198.51.100.0/24" ) ),
+					$this->rule(
+						'raw-limit',
+						'rate_limit',
+						array(
+							'paths'         => '/raw-limit 2 60',
+							'default_limit' => '30',
+							'storage'       => 'file',
+						)
+					),
+					$this->rule( 'raw-shorthand', 'url', array( 'conditions' => 'path@contains:x' ) ),
+					$this->rule(
+						'raw-bad-condition',
+						'url',
+						array(
+							'match_type' => 'all',
+							'conditions' => array(
+								self::condition( 'path', 'starts_with', '/wp-admin' ),
+								self::condition( 'path', 'no_such_operator', 'x' ),
+							),
+						)
+					),
+				),
+			),
+			true
+		);
+
+		$ips = $this->plugin_named( $firewall, 'raw-ips' );
+
+		$this->assertTrue( (bool) $ips->evaluate( self::request( '/', '203.0.113.5' ) ) );
+		$this->assertTrue( (bool) $ips->evaluate( self::request( '/', '198.51.100.9' ) ) );
+
+		$limit = $this->plugin_named( $firewall, 'raw-limit' );
+
+		$this->assertSame( array( '/raw-limit' ), array_column( (array) self::property( $limit, 'config' ), 'path' ), 'A rate limit line stored as a string compiled to no limit.' );
+
+		foreach ( array( 'raw-shorthand', 'raw-bad-condition' ) as $skipped ) {
+			$this->assertNull( $this->bucket_of( $firewall, $skipped ), "$skipped was compiled into something other than what is stored." );
+			$this->assertNotEmpty( preg_grep( '/"' . $skipped . '".*skipped/', $this->problems ), "$skipped was skipped without saying so." );
+		}
+	}
+
+	/**
 	 * Listed limits, the fallback allowance, and whether it applies at all.
 	 */
 	public function test_rate_limit_counts(): void {

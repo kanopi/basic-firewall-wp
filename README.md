@@ -1769,6 +1769,18 @@ and what changed. A URL exported with `***` is restored from the stored copy whe
 the two match apart from the credential. Rules are matched by identifier, so
 reordering them moves nothing to the wrong rule.
 
+### Writing the option directly
+
+`wp option update basic_firewall_settings`, a deploy script or a restored backup
+skips the screens and the importer, and with them every rule type's validator.
+The compiler runs each rule through its type's validator anyway, so settings in
+the shape a person types them — addresses as one string, a rate limit's lines as
+text — compile as the rule screen would have stored them. A rule that could only
+be read by dropping part of it — a condition list written as one shorthand
+string, a condition with an operator the firewall does not know — is skipped
+rather than compiled into a different rule, and named on the Status screen and
+in Site Health. Open it and save it.
+
 ## During an incident
 
 ### Lockdown: refuse everyone but a list

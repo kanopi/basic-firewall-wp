@@ -236,6 +236,16 @@ abstract class Condition_Rule_Type_Base extends Rule_Type_Base {
 		$raw = $settings['conditions'] ?? array();
 
 		if ( ! is_array( $raw ) ) {
+			/*
+			 * Said rather than silently emptied. Only a hand-edited document
+			 * gets here -- a condition written as `path@contains:x`, say -- and
+			 * emptying the list quietly would leave a rule that matches nothing
+			 * reporting itself healthy.
+			 */
+			if ( ! is_scalar( $raw ) || '' !== trim( (string) $raw ) ) {
+				$errors['conditions'] = __( 'The conditions are not a list of conditions, so none of them could be read.', 'basic-firewall' );
+			}
+
 			$raw = array();
 		}
 

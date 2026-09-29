@@ -18,6 +18,7 @@ use Kanopi\BasicFirewall\Plugin;
 use Kanopi\BasicFirewall\RuleType\Condition_Rule_Type_Base;
 use Kanopi\BasicFirewall\RuleType\Registry;
 use Kanopi\BasicFirewall\RuleType\Response_Settings;
+use Kanopi\BasicFirewall\RuleType\Rule_Type;
 use Kanopi\BasicFirewall\RuleType\Rule_Type_Base;
 use Kanopi\BasicFirewall\RuleType\Types\Edge_Signal;
 use Kanopi\BasicFirewall\RuleType\Types\User_Agent;
@@ -47,6 +48,11 @@ use Symfony\Component\Yaml\Yaml;
  * that is a requirement rather than a nicety.
  */
 final class Config_Compiler {
+
+	/**
+	 * What dig() returns for a path a document does not have.
+	 */
+	private const ABSENT = "\0absent";
 
 	/**
 	 * The runtime sidecar's contents when nothing in it differs from a default.
@@ -887,6 +893,25 @@ final class Config_Compiler {
 			}
 
 			/*
+			 * The rule's settings in the shape its type compiles from.
+			 *
+			 * Every settings write puts each rule through its type's validator,
+			 * but a document can reach the compiler without one: a hand-edited
+			 * option, a deploy writing it directly, a restore. A type handed a
+			 * shape it never produces threw a TypeError from inside the
+			 * compiler, or -- worse -- compiled quietly wrong: addresses typed
+			 * as one string became one junk entry, and a rate limit written as
+			 * a line compiled with no limits at all.
+			 */
+			$settings = $this->normalised_settings( $type, $rule );
+
+			if ( null === $settings ) {
+				continue;
+			}
+
+			$rule['settings'] = $settings;
+
+			/*
 			 * A response the installed library cannot honour is skipped, loudly.
 			 *
 			 * `redirect` and `mark` arrived in library 2.26.0. An older library
@@ -955,7 +980,7 @@ final class Config_Compiler {
 			 * everything that was not a domain, and compiling that without its
 			 * verification is an allow rule for anybody claiming to be Googlebot.
 			 */
-			if ( 'user_agent' === (string) ( $rule['type'] ?? '' ) && User_Agent::verification_unusable( (array) ( $rule['settings'] ?? array() ) ) ) {
+			if ( 'user_agent' === (string) ( $rule['type'] ?? '' ) && User_Agent::verification_unusable( $settings ) ) {
 				$this->problems[] = sprintf(
 					/* translators: %s: rule identifier. */
 					__( 'Rule "%s" verifies crawlers by reverse DNS but lists no domain to accept — anything that is not a plain domain, such as *.googlebot.com, is dropped. It was skipped rather than compiled into a rule that believes every client claiming to be a crawler.', 'basic-firewall' ),
@@ -1017,7 +1042,7 @@ final class Config_Compiler {
 			 * was wrong was the silence -- the rule reported itself healthy.
 			 */
 			if ( $type instanceof Condition_Rule_Type_Base ) {
-				foreach ( $type->unreadable_variables( (array) ( $rule['settings'] ?? array() ) ) as $variable ) {
+				foreach ( $type->unreadable_variables( $settings ) as $variable ) {
 					$this->problems[] = sprintf(
 						/* translators: 1: rule identifier, 2: variable name. */
 						__( 'Rule "%1$s" has a condition on %2$s, which the firewall library cannot read. That condition compares against nothing on every request. Edit the rule to remove it.', 'basic-firewall' ),
@@ -1034,7 +1059,7 @@ final class Config_Compiler {
 			 * exactly what the Status screen and Site Health are for.
 			 */
 			if ( method_exists( $type, 'reader_database_problem' ) ) {
-				$mismatch = $type->reader_database_problem( (array) ( $rule['settings'] ?? array() ) );
+				$mismatch = $type->reader_database_problem( $settings );
 
 				if ( is_string( $mismatch ) ) {
 					$this->problems[] = sprintf(
@@ -1046,7 +1071,16 @@ final class Config_Compiler {
 				}
 			}
 
-			$compiled[] = $type->compile( $rule );
+			try {
+				$compiled[] = $type->compile( $rule );
+			} catch ( \Throwable $e ) {
+				$this->problems[] = sprintf(
+					/* translators: 1: rule identifier, 2: the error. */
+					__( 'Rule "%1$s" could not be compiled, so it was skipped and is not being enforced: %2$s', 'basic-firewall' ),
+					(string) ( $rule['id'] ?? '?' ),
+					$e->getMessage()
+				);
+			}
 		}
 
 		// Lower weights first, matching the order the library evaluates in.
@@ -1056,6 +1090,114 @@ final class Config_Compiler {
 		);
 
 		return $compiled;
+	}
+
+	/**
+	 * A rule's settings as its type's validator leaves them, or null to skip it.
+	 *
+	 * Settings that are already the validator's output come back unchanged:
+	 * every type is required to read back its own output, and a test across
+	 * all of them holds it to that. Anything else is compiled from what the
+	 * validator makes of it -- which is what the next save of the document
+	 * would store -- unless the validator also objected. Then something was
+	 * dropped or defaulted to get there, and compiling it would enforce a
+	 * rule other than the one stored, possibly a wider one: a condition
+	 * dropped out of an "all" rule widens it. Such a rule is skipped and
+	 * reported instead, the way every other rule this compiler cannot compile
+	 * faithfully is.
+	 *
+	 * @param Rule_Type            $type The rule's type.
+	 * @param array<string, mixed> $rule The stored rule.
+	 *
+	 * @return array<string, mixed>|null
+	 */
+	private function normalised_settings( Rule_Type $type, array $rule ): ?array {
+		$id     = (string) ( $rule['id'] ?? '?' );
+		$stored = $rule['settings'] ?? array();
+
+		if ( ! is_array( $stored ) ) {
+			$this->problems[] = sprintf(
+				/* translators: %s: rule identifier. */
+				__( 'Rule "%s" has settings that are not a set of values at all, so it was skipped and is not being enforced. Open the rule and save it.', 'basic-firewall' ),
+				$id
+			);
+
+			return null;
+		}
+
+		$errors = array();
+
+		try {
+			$clean = $type->validate_settings( $stored, $errors );
+		} catch ( \Throwable $e ) {
+			$this->problems[] = sprintf(
+				/* translators: 1: rule identifier, 2: the error. */
+				__( 'Rule "%1$s" has settings its type cannot read, so it was skipped and is not being enforced: %2$s', 'basic-firewall' ),
+				$id,
+				$e->getMessage()
+			);
+
+			return null;
+		}
+
+		// phpcs:ignore Universal.Operators.StrictComparisons.LooseEqual -- key order is not a difference.
+		if ( $clean == $stored ) {
+			return $stored;
+		}
+
+		/*
+		 * An objection counts only where the validator changed the value it
+		 * objected to. Some are advisory and leave the value as it was -- a
+		 * geolocation rule with no database path is one, and compiles to a
+		 * rule the library skips, as it always did -- and so is one about a
+		 * value the document never held, which the validator filled in with
+		 * its default. A condition the validator dropped, or a list it
+		 * emptied, is exactly the change that would enforce something else.
+		 */
+		$material = array_filter(
+			$errors,
+			static function ( string $path ) use ( $stored, $clean ): bool {
+				$was = self::dig( $stored, $path );
+
+				return self::ABSENT !== $was && self::dig( $clean, $path ) !== $was;
+			},
+			ARRAY_FILTER_USE_KEY
+		);
+
+		if ( array() === $material ) {
+			return $clean;
+		}
+
+		$this->problems[] = sprintf(
+			/* translators: 1: rule identifier, 2: what the validator objected to. */
+			__( 'Rule "%1$s" is stored in a shape the rule screen never saves, and reading it would change what it matches (%2$s). It was skipped rather than compiled into a different rule; open it, correct it, and save it.', 'basic-firewall' ),
+			$id,
+			implode( ' ', array_map( 'strval', $material ) )
+		);
+
+		return null;
+	}
+
+	/**
+	 * The value at a dotted path, or a marker saying there is none.
+	 *
+	 * @param array<array-key, mixed> $values Document.
+	 * @param string                  $path   Dotted path, as a validator names an error.
+	 *
+	 * @return mixed
+	 */
+	private static function dig( array $values, string $path ) {
+		$cursor = $values;
+
+		foreach ( explode( '.', $path ) as $segment ) {
+			if ( ! is_array( $cursor ) || ! array_key_exists( $segment, $cursor ) ) {
+				return self::ABSENT;
+			}
+
+			$cursor = $cursor[ $segment ];
+		}
+
+		return $cursor;
 	}
 
 	/**
