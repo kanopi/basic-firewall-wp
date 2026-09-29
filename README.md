@@ -1346,6 +1346,15 @@ block()  -> false          the client is not recorded
 request  -> allowed        the firewall fails open
 ```
 
+Database storage can connect four ways, all chosen on the Storage screen:
+WordPress's credentials, a DSN, individual parameters (driver, host, port,
+database, user, password), or nothing at all so that an enabled preset supplies
+the connection. A DSN and a password are typed and never shown: the field is
+always empty, leaving it blank keeps what is stored, and *Remove the stored
+value* clears it. A stored password is kept only while the driver, host, port
+and user are unchanged. Saving the screen without touching the connection keeps
+it exactly as it is, however it was set.
+
 ### Redis, and why expiry is the interesting part
 
 File and database storage both sweep expired blocks as they go. Redis does not
@@ -1554,7 +1563,12 @@ Keep logs in the private directory. A log under a public directory is
 downloadable by anyone and discloses exactly which addresses you are blocking.
 
 The **Database table** handler writes each event as a row and the **Log** screen
-reads them back. A file answers "what happened just now" if you can reach a
+reads them back. It connects the way database storage does — WordPress's
+credentials, a DSN, or individual parameters — chosen on the handler's card,
+with the DSN and the password typed and never shown. A stored DSN is kept while
+the handler's type and table are unchanged, and a password while the driver,
+host, port and user are, so saving the Logging screen never repoints a handler
+at another database. A file answers "what happened just now" if you can reach a
 shell; a table answers the questions that actually get asked — which rule has
 blocked the most clients this week, whether a rule has matched anything at all
 since it was added, what the firewall did to an address before its owner

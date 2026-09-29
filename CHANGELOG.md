@@ -199,6 +199,11 @@ does not work as well as what does.
   form; blank keeps the stored value and a box removes it. Limits and counter
   storage have their own controls, so saving the form unchanged stores what was
   there.
+- The Storage screen and each database log handler on the Logging screen offer
+  every way a connection can be given — WordPress's credentials, a DSN or
+  individual parameters, and for storage a preset — and render the DSN and
+  password write-only in the same way. Saving either screen unchanged keeps the
+  connection as stored.
 - The Compiled screen shows every credential in the compiled file as
   `[redacted]`; the file itself keeps them for the library.
 - A user agent rule that asks to verify crawlers but is left with no domain to

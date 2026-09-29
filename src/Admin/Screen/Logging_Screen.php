@@ -120,6 +120,56 @@ final class Logging_Screen extends Screen {
 			$when( 'database' )
 		);
 
+		/*
+		 * Where a database handler connects. Not on this screen at first, and
+		 * its handler rebuilt every handler from the fields it did render --
+		 * so a handler imported with a DSN or individual parameters came back
+		 * from the next save of this screen, by somebody who changed nothing,
+		 * pointed at the WordPress database with its credentials gone.
+		 *
+		 * A tbody of its own so the whole group hides with the type, and each
+		 * row inside it hides with the connection source.
+		 */
+		$source     = (string) ( $handler['connection_source'] ?? 'wordpress' );
+		$dsn_stored = '' !== (string) ( $handler['dsn'] ?? '' );
+
+		printf( '</tbody><tbody data-bfw-show-when="%s">', esc_attr( $when( 'database' ) ) );
+
+		$this->row(
+			__( 'Connection', 'basic-firewall' ),
+			self::select(
+				$name . '[connection_source]',
+				array(
+					'wordpress'  => __( 'Reuse WordPress\'s database credentials', 'basic-firewall' ),
+					'dsn'        => __( 'A connection DSN I supply', 'basic-firewall' ),
+					'parameters' => __( 'Individual connection parameters', 'basic-firewall' ),
+				),
+				$source
+			),
+			esc_html__( 'WordPress\'s credentials are read fresh on every request and never written into the compiled file. A log on another database server is where "Off the request path" below earns its keep.', 'basic-firewall' )
+		);
+
+		$this->row(
+			__( 'Connection DSN', 'basic-firewall' ),
+			self::secret_text( $name . '[dsn]', $name . '[dsn_clear]', $dsn_stored ),
+			wp_kses_post(
+				trim(
+					( $dsn_stored ? __( 'A value is stored. Leave blank to keep it.', 'basic-firewall' ) . ' ' : '' )
+					/* translators: the %env()% below is a literal token the firewall reads, not a placeholder. */
+					. __( 'The scheme is a Doctrine driver name, such as <code>mysqli://user:password@host:3306/database</code>. A DSN embeds the password, so the whole string has to be a <code>%env()%</code> token or none of it can be. A stored one is kept only while the handler type and table are unchanged.', 'basic-firewall' )
+				)
+			),
+			$name . '[connection_source]:dsn'
+		);
+
+		$this->render_connection_parameters(
+			$name . '[parameters]',
+			is_array( $handler['parameters'] ?? null ) ? $handler['parameters'] : array(),
+			$name . '[connection_source]:parameters'
+		);
+
+		echo '</tbody><tbody>';
+
 		$this->row(
 			__( 'Keep history for', 'basic-firewall' ),
 			self::text( $name . '[retain_days]', (string) ( $handler['retain_days'] ?? 30 ), 'number', 'min="0"' ),
@@ -162,19 +212,43 @@ final class Logging_Screen extends Screen {
 
 		$handlers = array();
 
-		foreach ( $this->posted_array( 'handlers' ) as $handler ) {
+		/*
+		 * The handlers as stored, by position, for the two credentials this
+		 * screen never renders. Cards are posted under the index they were
+		 * rendered with, and the rendered list is the stored one, so the
+		 * posted key finds the handler a card came from. A credential is kept
+		 * only while what it belongs with is unchanged -- the same binding the
+		 * importer applies.
+		 */
+		$stored = array_values( array_filter( (array) ( $all['logger'] ?? array() ), 'is_array' ) );
+
+		foreach ( $this->posted_array( 'handlers' ) as $index => $handler ) {
 			if ( ! is_array( $handler ) || '' === (string) ( $handler['type'] ?? '' ) ) {
 				continue;
 			}
 
+			$previous = is_int( $index ) && isset( $stored[ $index ] ) ? $stored[ $index ] : array();
+			$type     = (string) $handler['type'];
+			$table    = (string) ( $handler['table'] ?? 'basic_firewall_log' );
+
 			$handlers[] = array(
-				'type'              => (string) $handler['type'],
+				'type'              => $type,
 				'enabled'           => ! empty( $handler['enabled'] ),
 				'level'             => (string) ( $handler['level'] ?? 'warning' ),
 				'path'              => (string) ( $handler['path'] ?? 'logs/firewall.log' ),
 				'max_files'         => (int) ( $handler['max_files'] ?? 14 ),
-				'table'             => (string) ( $handler['table'] ?? 'basic_firewall_log' ),
+				'table'             => $table,
 				'connection_source' => (string) ( $handler['connection_source'] ?? 'wordpress' ),
+				'dsn'               => self::kept_secret(
+					(string) ( $handler['dsn'] ?? '' ),
+					! empty( $handler['dsn_clear'] ),
+					(string) ( $previous['dsn'] ?? '' ),
+					( $previous['type'] ?? null ) === $type && ( $previous['table'] ?? null ) === $table
+				),
+				'parameters'        => self::posted_connection_parameters(
+					is_array( $handler['parameters'] ?? null ) ? $handler['parameters'] : array(),
+					is_array( $previous['parameters'] ?? null ) ? $previous['parameters'] : array()
+				),
 				'retain_days'       => (int) ( $handler['retain_days'] ?? 30 ),
 				'buffered'          => ! empty( $handler['buffered'] ),
 				'deferred'          => ! empty( $handler['deferred'] ),

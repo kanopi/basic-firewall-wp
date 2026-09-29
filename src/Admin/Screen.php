@@ -11,6 +11,7 @@ namespace Kanopi\BasicFirewall\Admin;
 
 use Kanopi\BasicFirewall\Install\Capabilities;
 use Kanopi\BasicFirewall\Plugin;
+use Kanopi\BasicFirewall\Support\Schema;
 
 /**
  * One administrative screen.
@@ -421,5 +422,126 @@ abstract class Screen {
 			checked( $checked, true, false ),
 			esc_html( $label )
 		);
+	}
+
+	/**
+	 * A credential control: typed, never shown.
+	 *
+	 * The stored value is not put back into the page, where it would sit in
+	 * the page source, the browser's form cache and every screenshot of the
+	 * screen. Blank keeps it; the box, offered only when something is stored,
+	 * removes it. Read back with kept_secret().
+	 *
+	 * @param string $name       Field name.
+	 * @param string $clear_name The "remove" box's field name.
+	 * @param bool   $stored     Whether a value is stored.
+	 */
+	protected static function secret_text( string $name, string $clear_name, bool $stored ): string {
+		return self::text( $name, '', 'password', 'autocomplete="new-password"' )
+			. ( $stored ? '<br>' . self::checkbox( $clear_name, false, __( 'Remove the stored value', 'basic-firewall' ) ) : '' );
+	}
+
+	/**
+	 * The credential to store, given what a secret_text() control posted.
+	 *
+	 * What was typed wins. Otherwise the stored value is kept, unless the box
+	 * asked for it to go, or what it belongs with has changed -- a password
+	 * for one host is not a password for another, the same rule the importer
+	 * applies.
+	 *
+	 * @param string $typed       What was typed.
+	 * @param bool   $clear       Whether "remove the stored value" was ticked.
+	 * @param string $stored      What is stored.
+	 * @param bool   $still_bound Whether what the credential belongs with is unchanged.
+	 */
+	protected static function kept_secret( string $typed, bool $clear, string $stored, bool $still_bound ): string {
+		if ( '' !== $typed ) {
+			return $typed;
+		}
+
+		return $clear || ! $still_bound ? '' : $stored;
+	}
+
+	/**
+	 * The rows for a database connection given as individual parameters.
+	 *
+	 * Shared by the Storage and Logging screens, which store the same shape
+	 * under different keys. The password is a credential and is never
+	 * rendered; see secret_text().
+	 *
+	 * @param string               $name       Field name prefix, such as `parameters`.
+	 * @param array<string, mixed> $parameters What is stored.
+	 * @param string               $show_when  When the rows are shown.
+	 */
+	protected function render_connection_parameters( string $name, array $parameters, string $show_when ): void {
+		$field = static fn ( string $key ): string => $name . '[' . $key . ']';
+
+		$this->row(
+			__( 'Driver', 'basic-firewall' ),
+			self::select( $field( 'driver' ), array_combine( Schema::CONNECTION_DRIVERS, Schema::CONNECTION_DRIVERS ), (string) ( $parameters['driver'] ?? 'pdo_mysql' ) ),
+			wp_kses_post( __( 'A Doctrine driver name, not a database name: <code>pdo_mysql</code> or <code>mysqli</code> for MySQL and MariaDB.', 'basic-firewall' ) ),
+			$show_when
+		);
+
+		$this->row( __( 'Host', 'basic-firewall' ), self::text( $field( 'host' ), (string) ( $parameters['host'] ?? '' ) ), '', $show_when );
+
+		$this->row(
+			__( 'Port', 'basic-firewall' ),
+			self::text( $field( 'port' ), (string) (int) ( $parameters['port'] ?? 0 ), 'number', 'min="0" max="65535"' ),
+			esc_html__( '0 for the driver\'s default.', 'basic-firewall' ),
+			$show_when
+		);
+
+		$this->row( __( 'Database name', 'basic-firewall' ), self::text( $field( 'dbname' ), (string) ( $parameters['dbname'] ?? '' ) ), '', $show_when );
+		$this->row( __( 'User', 'basic-firewall' ), self::text( $field( 'user' ), (string) ( $parameters['user'] ?? '' ) ), '', $show_when );
+
+		$stored = '' !== (string) ( $parameters['password'] ?? '' );
+
+		$this->row(
+			__( 'Password', 'basic-firewall' ),
+			self::secret_text( $field( 'password' ), $field( 'password_clear' ), $stored ),
+			wp_kses_post(
+				trim(
+					( $stored ? __( 'A value is stored. Leave blank to keep it.', 'basic-firewall' ) . ' ' : '' )
+					/* translators: the %env()% below is a literal token the firewall reads, not a placeholder. */
+					. __( 'Prefer a token — <code>%env(MY_VARIABLE)%</code> — over the value itself. Exports strip a literal value, and a stored one is kept only while the driver, host, port and user are unchanged.', 'basic-firewall' )
+				)
+			),
+			$show_when
+		);
+	}
+
+	/**
+	 * Connection parameters as posted by render_connection_parameters().
+	 *
+	 * @param array<string, mixed> $posted What the form posted under the prefix.
+	 * @param array<string, mixed> $stored What is stored.
+	 *
+	 * @return array<string, mixed>
+	 */
+	protected static function posted_connection_parameters( array $posted, array $stored ): array {
+		$parameters = array(
+			'driver' => (string) ( $posted['driver'] ?? ( $stored['driver'] ?? 'pdo_mysql' ) ),
+			'host'   => trim( (string) ( $posted['host'] ?? '' ) ),
+			'port'   => (int) ( $posted['port'] ?? 0 ),
+			'dbname' => trim( (string) ( $posted['dbname'] ?? '' ) ),
+			'user'   => trim( (string) ( $posted['user'] ?? '' ) ),
+		);
+
+		$bound = true;
+
+		foreach ( array( 'driver', 'host', 'port', 'user' ) as $key ) {
+			$was   = (string) ( $stored[ $key ] ?? ( 'port' === $key ? 0 : '' ) );
+			$bound = $bound && (string) $parameters[ $key ] === $was;
+		}
+
+		$parameters['password'] = self::kept_secret(
+			(string) ( $posted['password'] ?? '' ),
+			! empty( $posted['password_clear'] ),
+			(string) ( $stored['password'] ?? '' ),
+			$bound
+		);
+
+		return $parameters;
 	}
 }
