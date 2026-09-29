@@ -265,10 +265,32 @@ final class Dashboard_Screen extends Screen {
 			return;
 		}
 
-		$early = defined( 'BASIC_FIREWALL_EVALUATED' );
+		// Whether wp-config.php actually evaluated this request -- not
+		// BASIC_FIREWALL_EVALUATED, which the mu-plugin runner sets as well.
+		$early = Site_Health::early_report()['evaluated'];
 		$mu    = is_readable( WPMU_PLUGIN_DIR . '/basic-firewall-loader.php' );
 
 		printf( '<h2>%s</h2>', esc_html__( 'Evaluation point', 'basic-firewall' ) );
+
+		/*
+		 * No snippet on a network. The bootstrap steps aside there, because it
+		 * runs before WordPress knows which site a request is for and each
+		 * site has its own rules -- so printing it here would be printing an
+		 * instruction to add a line that does nothing.
+		 */
+		if ( is_multisite() ) {
+			printf(
+				'<p>%s</p><p class="description">%s</p>',
+				esc_html(
+					$mu
+						? __( 'An mu-plugin, before plugins and the theme load, once WordPress has worked out which site the request is for — so each site of the network is held to its own rules.', 'basic-firewall' )
+						: __( 'Once every plugin has loaded, which is later than it should be. The mu-plugin loader is not installed; deactivating and reactivating the plugin will try again.', 'basic-firewall' )
+				),
+				esc_html__( 'The wp-config.php snippet is for single sites only. On a network it runs before the site is known, so it steps aside and evaluates nothing; if wp-config.php calls basic_firewall_evaluate(), remove it. A page cache in front of the network serves cache hits before the firewall sees them, so anything that must see every request belongs at the CDN or the web server.', 'basic-firewall' )
+			);
+
+			return;
+		}
 
 		if ( $early ) {
 			$where = __( 'wp-config.php, before WordPress loads. This is the earliest any PHP on this site can act, and a page cache cannot serve a request without it being evaluated first.', 'basic-firewall' );

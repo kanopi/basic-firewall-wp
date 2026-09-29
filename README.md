@@ -1923,6 +1923,18 @@ than against the site that noticed.
 There is no network-wide settings screen. Configuring 200 sites means
 `wp site list --field=url` and a loop.
 
+**The `wp-config.php` path is for single sites.** One `wp-config.php` serves
+every site of a network, and it runs before WordPress has worked out which site
+a request is for — so it cannot know whose rules to apply. When it sees
+`MULTISITE` or `SUBDOMAIN_INSTALL` defined above it (or the snippet passes
+`'multisite' => true`), the bootstrap returns without evaluating and without
+marking the request, and the mu-plugin evaluates each site against its own
+rules. The Status screen prints no snippet on a network, and Site Health says
+to remove one that is there, since it only costs a function call. The trade is
+the one the snippet exists to avoid: a page cache in front of the network
+serves cache hits before the firewall sees them, so anything that must see
+every request belongs at the CDN or the web server.
+
 ## Uninstalling
 
 Deactivating is reversible: it removes the mu-plugin loader and the compiled

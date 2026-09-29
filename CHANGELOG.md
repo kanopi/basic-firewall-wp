@@ -136,6 +136,11 @@ does not work as well as what does.
 - **Schema upgrades** that are numbered, idempotent and advance one routine at a
   time, so an upgrade interrupted by a timeout resumes rather than corrupting
   settings. A failure is reported in Site Health, never fatal.
+- **Multisite, per site.** Each site of a network has its own settings,
+  compiled file, block list, counters and logs, and is evaluated from the
+  mu-plugin against its own rules. The `wp-config.php` path steps aside on a
+  network, since it runs before the site is known; Site Health says to remove
+  a snippet left in.
 - **A release zip** that vendors the library namespace-scoped, so it cannot
   collide with another plugin bundling `kanopi/firewall`, and needs no Composer
   on the server. Both evaluation paths run the scoped copy even when another

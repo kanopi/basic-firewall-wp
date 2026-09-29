@@ -757,6 +757,10 @@ final class Site_Health {
 	 * @return array{status: string, label: string, description: string, actions: string}
 	 */
 	private static function check_bootstrap(): array {
+		if ( is_multisite() ) {
+			return self::check_bootstrap_on_a_network();
+		}
+
 		if ( self::early_path_active() ) {
 			return self::ok(
 				__( 'wp-config.php calls the firewall', 'basic-firewall' ),
@@ -790,6 +794,34 @@ final class Site_Health {
 			__( 'wp-config.php does not appear to call the firewall', 'basic-firewall' ),
 			$description
 			. '<p>' . esc_html__( 'wp-config.php itself could not be read to confirm this, so this is based only on the snippet not having run.', 'basic-firewall' ) . '</p>'
+		);
+	}
+
+	/**
+	 * The snippet on a multisite network, where it does nothing.
+	 *
+	 * The bootstrap steps aside on a network, because it runs before
+	 * WordPress knows which site a request is for and each site has its own
+	 * rules. So its absence is the healthy state, and its presence is worth a
+	 * word: somebody added it expecting the protection it gives a single site,
+	 * and on a network it gives none.
+	 *
+	 * @return array{status: string, label: string, description: string, actions: string}
+	 */
+	private static function check_bootstrap_on_a_network(): array {
+		$why = '<p>' . esc_html__( 'On a multisite network the firewall evaluates from its mu-plugin, once WordPress has worked out which site a request is for, so each site is held to its own rules. The wp-config.php path runs before that is known, so it steps aside on a network rather than apply one site\'s rules to all of them.', 'basic-firewall' ) . '</p>';
+
+		if ( self::early_path_active() || true === self::snippet_is_in_wp_config() ) {
+			return self::recommended(
+				__( 'wp-config.php calls the firewall, which does nothing on a multisite network', 'basic-firewall' ),
+				$why
+				. '<p>' . esc_html__( 'The call returns without evaluating anything, so it costs a little on every request and protects nothing. Remove the require_once line and the basic_firewall_evaluate() call from wp-config.php. A page cache in front of the network still serves cache hits without the firewall seeing them.', 'basic-firewall' ) . '</p>'
+			);
+		}
+
+		return self::ok(
+			__( 'Each site of the network evaluates against its own rules', 'basic-firewall' ),
+			$why
 		);
 	}
 
@@ -831,8 +863,11 @@ final class Site_Health {
 	private static function check_evaluation(): array {
 		$mu_installed = is_readable( WPMU_PLUGIN_DIR . '/basic-firewall-loader.php' );
 		$mu_error     = get_option( Activator::MU_FAILURE_OPTION, '' );
-		$early        = self::early_path_active();
 		$cache        = self::detect_page_cache();
+
+		// On a network the bootstrap steps aside, so it is never where this
+		// runs; check_bootstrap() says what to do about a snippet left in.
+		$early = self::early_path_active() && ! is_multisite();
 
 		if ( $early && ! self::early_report()['evaluated'] && ! in_array( self::early_report()['reason'], array( 'disabled', 'switched-off' ), true ) ) {
 			/*
@@ -928,6 +963,23 @@ final class Site_Health {
 
 		if ( null !== $stale ) {
 			return $stale;
+		}
+
+		if ( null !== $cache && is_multisite() ) {
+			/*
+			 * The same gap, without the snippet as the answer: on a network
+			 * the wp-config.php path steps aside, so recommending it would be
+			 * recommending a line that does nothing.
+			 */
+			return self::recommended(
+				__( 'A page cache is serving requests before the firewall sees them', 'basic-firewall' ),
+				'<p>' . sprintf(
+					/* translators: %s: the detected cache. */
+					esc_html__( '%s serves cached pages from advanced-cache.php, which WordPress loads before any plugin — including the firewall\'s mu-plugin loader. A cache hit is therefore never evaluated.', 'basic-firewall' ),
+					esc_html( $cache )
+				) . '</p>'
+				. '<p>' . esc_html__( 'On a single site the wp-config.php snippet closes this gap. On a multisite network it cannot: it runs before WordPress knows which site a request is for, so it steps aside and each site is evaluated from the mu-plugin. Put anything that must see every request in front of the cache — at the CDN or the web server.', 'basic-firewall' ) . '</p>'
+			);
 		}
 
 		if ( null !== $cache ) {
@@ -1085,6 +1137,8 @@ final class Site_Health {
 		switch ( $reason ) {
 			case 'disabled':
 				return __( 'BASIC_FIREWALL_ENABLED is defined as false in wp-config.php, which switches the firewall off on both paths.', 'basic-firewall' );
+			case 'multisite':
+				return __( 'This is a multisite network, where the wp-config.php path steps aside and each site is evaluated from the mu-plugin against its own rules.', 'basic-firewall' );
 			case 'switched-off':
 				return __( '"Enable the firewall" is unticked on the General screen, which switches the firewall off on both paths.', 'basic-firewall' );
 			case 'no-compiled-file':
@@ -1358,7 +1412,7 @@ final class Site_Health {
 			}
 		}
 
-		if ( 'database' === $backend && self::early_path_active() && ! self::early_path_reaches_database() ) {
+		if ( 'database' === $backend && self::early_path_active() && ! is_multisite() && ! self::early_path_reaches_database() ) {
 			/*
 			 * The module's one documented fail-open -- but checked rather than
 			 * assumed. In WordPress the early path can reach the database, so

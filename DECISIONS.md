@@ -134,6 +134,16 @@ already per-site:
 | Compiled config, file storage, logs, counters | `wp_upload_dir()`, which is `uploads/sites/N/` |
 | Database tables | `$wpdb->prefix`, which carries the blog id |
 
+**The `wp-config.php` path steps aside on a network.** It runs before
+`ms-settings.php` has decided which site a request is for, and each site has its
+own compiled file in its own private directory — so it can only guess, and it
+used to guess the first directory its glob found, applying one site's rules to
+every site and marking the request evaluated so the right ones never ran.
+Keying the private directory by host would work for subdomain and mapped-domain
+networks and not for subdirectory ones without reimplementing site lookup, so
+the bootstrap refuses instead and the mu-plugin evaluates per site. Page cache
+hits on a network are therefore not evaluated, and the README says so.
+
 The module has to apply Drupal's table prefix by hand because the library reaches
 the database through Doctrine DBAL rather than the CMS layer. The same is true
 here, and for the same reason: `$wpdb->prefix` must be applied explicitly, and

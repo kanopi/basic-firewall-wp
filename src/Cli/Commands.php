@@ -364,7 +364,11 @@ final class Commands {
 		$mu    = is_readable( WPMU_PLUGIN_DIR . '/basic-firewall-loader.php' );
 		$early = Site_Health::early_report();
 
-		if ( $early['called'] && ! $early['evaluated'] && 'disabled' !== $early['reason'] ) {
+		if ( $early['called'] && 'multisite' === $early['reason'] ) {
+			return 'mu-plugin, per site (the wp-config.php snippet steps aside on a multisite network and can be removed)';
+		}
+
+		if ( $early['called'] && ! $early['evaluated'] && ! in_array( $early['reason'], array( 'disabled', 'switched-off' ), true ) ) {
 			return sprintf(
 				'wp-config.php snippet present but NOT evaluating (%s) — running from the mu-plugin instead',
 				(string) $early['reason']

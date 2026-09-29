@@ -302,6 +302,30 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 	}
 
 	/**
+	 * On a multisite network this path steps aside for the mu-plugin.
+	 *
+	 * It runs before WordPress knows which site a request is for, and found
+	 * whichever site's private directory the glob reached first -- so every
+	 * site was evaluated against one site's rules, and marking the request
+	 * evaluated stopped the mu-plugin applying the right ones.
+	 */
+	public function test_a_network_is_left_to_the_mu_plugin(): void {
+		$this->given_rule( 'block', 'block' );
+
+		$this->assertSame( 403, $this->request( '/bfw-early-match' )['status'], 'The fixture does not refuse on a single site, so this test proves nothing.' );
+
+		$response = $this->request( '/bfw-early-match', array( 'X-Bfw-Test-Network' => '1' ) );
+
+		$this->assertSame( 200, $response['status'], 'The early path evaluated a request on a multisite network.' );
+		$this->assertSame( 'multisite', $response['reason'] );
+		$this->assertSame( 'no', $response['evaluated'], 'The request was marked evaluated, so the mu-plugin would not apply the site\'s own rules.' );
+
+		// And the option says so for a network that defines neither constant
+		// where the bootstrap can see it.
+		$this->assertTrue( basic_firewall_is_multisite( basic_firewall_options( array( 'multisite' => true ) ) ) );
+	}
+
+	/**
 	 * Only verdicts are verdicts.
 	 *
 	 * Anything else the library throws is a failure of the firewall, which the

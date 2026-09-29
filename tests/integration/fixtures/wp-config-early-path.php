@@ -19,6 +19,15 @@
 
 $basic_firewall_plugin = (string) getenv( 'BFW_EARLY_PLUGIN_PATH' );
 
+/*
+ * A network's wp-config.php defines these above the snippet. A request header
+ * stands in for that here, so one server can play both kinds of site.
+ */
+if ( isset( $_SERVER['HTTP_X_BFW_TEST_NETWORK'] ) ) {
+	define( 'MULTISITE', true ); // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals -- WordPress's own constant, as a network's wp-config.php defines it.
+	define( 'SUBDOMAIN_INSTALL', false ); // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals -- as above.
+}
+
 require_once $basic_firewall_plugin . '/bootstrap.php';
 
 basic_firewall_evaluate(

@@ -76,6 +76,10 @@
  *     basic_firewall_evaluate( array(
  *         'private_path' => '/absolute/path/to/basic-firewall-private-abc123',
  *     ) );
+ *
+ * Not on a multisite network: see basic_firewall_is_multisite(). There the
+ * call returns without evaluating, and the mu-plugin evaluates each site
+ * against its own rules.
  */
 
 if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
@@ -142,6 +146,26 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 
 		if ( ! $options['enabled'] ) {
 			$GLOBALS['basic_firewall_early']['reason'] = 'disabled';
+
+			return true;
+		}
+
+		/*
+		 * Not on a multisite network. One wp-config.php serves every site of
+		 * it, and at this point WordPress has not yet worked out which site a
+		 * request is for -- that is ms-settings.php, well after this line. But
+		 * each site has its own settings, its own compiled file and its own
+		 * private directory, and the glob below finds whichever came first:
+		 * so this path used to evaluate every site's traffic against one
+		 * site's rules, and by marking the request evaluated it stopped the
+		 * mu-plugin applying the right ones.
+		 *
+		 * So it steps aside, and does not mark the request, and the mu-plugin
+		 * evaluates each site against its own rules. Site Health on a network
+		 * says the snippet is doing nothing and can go.
+		 */
+		if ( basic_firewall_is_multisite( $options ) ) {
+			$GLOBALS['basic_firewall_early']['reason'] = 'multisite';
 
 			return true;
 		}
@@ -438,6 +462,33 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 	}
 
 	/**
+	 * Whether this is a multisite network, as far as wp-config.php has said.
+	 *
+	 * `MULTISITE` is what WordPress itself reads, and the network setup screen
+	 * tells an administrator to define it -- with `SUBDOMAIN_INSTALL` -- above
+	 * the line this file is required from. Either is enough, and so is the
+	 * snippet saying so, for a network that defines them somewhere this file
+	 * cannot see yet.
+	 *
+	 * @param array<string, mixed> $options Bootstrap options.
+	 *
+	 * @return bool
+	 */
+	function basic_firewall_is_multisite( array $options ) {
+		if ( ! empty( $options['multisite'] ) ) {
+			return true;
+		}
+
+		// Read as constant(), not is_multisite(): that is a WordPress function,
+		// and there is no WordPress yet.
+		if ( defined( 'MULTISITE' ) && constant( 'MULTISITE' ) ) {
+			return true;
+		}
+
+		return defined( 'SUBDOMAIN_INSTALL' );
+	}
+
+	/**
 	 * Fill in the bootstrap options.
 	 *
 	 * @param array<string, mixed> $options Caller-supplied options.
@@ -459,6 +510,9 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 			'secret_directories' => defined( 'BASIC_FIREWALL_SECRET_DIRECTORIES' ) ? BASIC_FIREWALL_SECRET_DIRECTORIES : array(),
 			// Runtime overrides, as Symfony property-access paths.
 			'overrides'          => array(),
+			// True on a multisite network, where this path steps aside for
+			// the mu-plugin. MULTISITE and SUBDOMAIN_INSTALL say so as well.
+			'multisite'          => false,
 		);
 
 		return array_merge( $defaults, $options );
