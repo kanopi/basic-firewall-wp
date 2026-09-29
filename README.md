@@ -1966,7 +1966,7 @@ would turn any environment-variable injection into remote code execution.
 
 ```bash
 wp basic-firewall status            # what the firewall is doing right now
-wp basic-firewall rules             # rules in evaluation order
+wp basic-firewall rules             # rules in evaluation order: response, then weight
 wp basic-firewall rebuild           # recompile the configuration
 wp basic-firewall sources           # available presets
 wp basic-firewall refresh-sources   # re-fetch the lists rules reference

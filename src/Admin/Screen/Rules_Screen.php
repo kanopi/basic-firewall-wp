@@ -12,6 +12,7 @@ namespace Kanopi\BasicFirewall\Admin\Screen;
 use Kanopi\BasicFirewall\Admin\Admin;
 use Kanopi\BasicFirewall\Admin\Notices;
 use Kanopi\BasicFirewall\Admin\Screen;
+use Kanopi\BasicFirewall\Compiler\Evaluation_Order;
 use Kanopi\BasicFirewall\RuleType\Registry;
 use Kanopi\BasicFirewall\RuleType\Rule_Type;
 use Kanopi\BasicFirewall\RuleType\Rule_Type_Base;
@@ -49,7 +50,7 @@ final class Rules_Screen extends Screen {
 	 * {@inheritDoc}
 	 */
 	public function intro(): string {
-		return esc_html__( 'Rules are evaluated in weight order, lowest first. Allow rules run before challenges, and challenges before blocks — a match ends evaluation, which is what makes a low-weight allow rule for your own address a reliable safety net.', 'basic-firewall' );
+		return esc_html__( 'Listed in the order they are evaluated: by response first — allow, then mark, record, challenge, redirect and block — and by weight, lowest first, within each. So an allow rule runs before every block rule whatever their weights, which is what makes an allow rule for your own address a reliable safety net. Mark and record let evaluation carry on; any other match ends it. Disabled rules are listed last.', 'basic-firewall' );
 	}
 
 	/**
@@ -357,10 +358,21 @@ final class Rules_Screen extends Screen {
 			return;
 		}
 
-		usort(
-			$rules,
-			static fn ( array $a, array $b ): int => ( (int) ( $a['weight'] ?? 0 ) ) <=> ( (int) ( $b['weight'] ?? 0 ) )
-		);
+		/*
+		 * In the order the firewall evaluates them, which is by response
+		 * first and weight within it -- the intro says so, and a list sorted
+		 * by weight alone put a heavy block rule above the allow rule that
+		 * runs before it. Weight alone only where the library is missing, in
+		 * which case nothing is evaluated and the Status screen says why.
+		 */
+		if ( Evaluation_Order::is_available() ) {
+			$rules = array_column( Evaluation_Order::of( $rules ), 'rule' );
+		} else {
+			usort(
+				$rules,
+				static fn ( array $a, array $b ): int => ( (int) ( $a['weight'] ?? 0 ) ) <=> ( (int) ( $b['weight'] ?? 0 ) )
+			);
+		}
 
 		echo '<table class="widefat striped bfw-rules"><thead><tr>';
 

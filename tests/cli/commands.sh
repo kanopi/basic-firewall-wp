@@ -123,7 +123,17 @@ printf 'wp-cli: reporting commands\n'
 
 expect ok 'status reports the library version' 'Library' status
 expect ok 'status renders as json' '"Enabled"' status --format=json
-expect ok 'rules lists in evaluation order' '' rules
+# The listing claims evaluation order, so it has to carry the library's
+# partitioning -- position and stage -- rather than a weight sort. A site with
+# no rules says so instead, which is also a pass.
+rules_listing=$($WP basic-firewall rules --format=csv </dev/null 2>&1)
+if printf '%s' "$rules_listing" | grep -qF 'No rules are configured' \
+	|| printf '%s' "$rules_listing" | head -1 | grep -qF 'order,stage,id,type,response,weight,enabled,status'; then
+	report pass 'rules lists by position and stage'
+else
+	report fail 'rules lists by position and stage' "$(printf '%s' "$rules_listing" | head -1)"
+fi
+expect ok 'rules renders as json' '' rules --format=json
 expect ok 'sources lists the presets' '' sources
 expect ok 'blocked lists the block list' '' blocked
 expect ok 'blocked renders as csv' '' blocked --format=csv

@@ -12,10 +12,12 @@ namespace Kanopi\BasicFirewall\Cli;
 use Kanopi\BasicFirewall\Cache\Cache_Backend;
 use Kanopi\BasicFirewall\Cache\Cache_Clearer;
 use Kanopi\BasicFirewall\Cache\Cache_Warmer;
+use Kanopi\BasicFirewall\Compiler\Evaluation_Order;
 use Kanopi\BasicFirewall\Health\Site_Health;
 use Kanopi\BasicFirewall\Library_Capabilities;
 use Kanopi\BasicFirewall\Library_Loader;
 use Kanopi\BasicFirewall\Plugin;
+use Kanopi\BasicFirewall\RuleType\Rule_Type;
 use Kanopi\BasicFirewall\Runtime\Trusted_Proxies;
 use Kanopi\BasicFirewall\Sources\Refresher;
 use Kanopi\BasicFirewall\Transfer\Exporter;
@@ -417,7 +419,18 @@ final class Commands {
 	}
 
 	/**
-	 * List the rules in evaluation order.
+	 * List the rules in the order the firewall evaluates them.
+	 *
+	 * By response first and weight within it, as the library partitions them:
+	 * allow, then mark, record, challenge, redirect and block. So a block rule
+	 * at weight -100 is listed after an allow rule at 50, because that is when
+	 * it runs. `order` is the position; `stage` is the partition. Mark and
+	 * record do not end evaluation, the others do.
+	 *
+	 * Before any rule, lockdown and the durable block list are consulted, and
+	 * a preset's rules are merged in by the library alongside these; neither
+	 * is listed. Disabled rules are listed last with no position, because the
+	 * library never sees them.
 	 *
 	 * ## OPTIONS
 	 *
@@ -432,6 +445,11 @@ final class Commands {
 	 *   - csv
 	 * ---
 	 *
+	 * ## EXAMPLES
+	 *
+	 *     wp basic-firewall rules
+	 *     wp basic-firewall rules --format=json
+	 *
 	 * @param array<int, string>    $args       Positional arguments.
 	 * @param array<string, string> $assoc_args Flags.
 	 */
@@ -445,33 +463,58 @@ final class Commands {
 			return;
 		}
 
-		usort(
-			$rules,
-			static fn ( array $a, array $b ): int => ( (int) ( $a['weight'] ?? 0 ) ) <=> ( (int) ( $b['weight'] ?? 0 ) )
-		);
+		/*
+		 * The order is the library's to decide, so without the library there
+		 * is none to show -- and nothing is being evaluated anyway. Said, and
+		 * exited non-zero, rather than falling back to a weight sort that
+		 * would be claimed as an order it is not.
+		 */
+		if ( ! Evaluation_Order::is_available() ) {
+			WP_CLI::error( 'The firewall library is not available, so no rule is being evaluated and there is no evaluation order to show.' );
+		}
 
 		$rows = array();
 
-		foreach ( $rules as $rule ) {
+		foreach ( Evaluation_Order::of( $rules ) as $placed ) {
+			$rule = $placed['rule'];
 			$type = $registry->get( (string) ( $rule['type'] ?? '' ) );
 
 			$rows[] = array(
+				'order'    => null === $placed['position'] ? '-' : (string) $placed['position'],
+				'stage'    => '' === $placed['stage'] ? 'not evaluated' : $placed['stage'],
 				'id'       => (string) ( $rule['id'] ?? '' ),
 				'type'     => (string) ( $rule['type'] ?? '' ),
 				'response' => (string) ( $rule['response'] ?? '' ),
 				'weight'   => (int) ( $rule['weight'] ?? 0 ),
 				'enabled'  => empty( $rule['enabled'] ) ? 'no' : 'yes',
-				'status'   => null === $type
-					? 'UNKNOWN TYPE'
-					: ( $type->is_available() ? 'ok' : 'UNAVAILABLE' ),
+				'status'   => $this->rule_status( $type, $rule ),
 			);
 		}
 
 		Utils\format_items(
 			(string) ( $assoc_args['format'] ?? 'table' ),
 			$rows,
-			array( 'id', 'type', 'response', 'weight', 'enabled', 'status' )
+			array( 'order', 'stage', 'id', 'type', 'response', 'weight', 'enabled', 'status' )
 		);
+	}
+
+	/**
+	 * Whether a listed rule is running as configured.
+	 *
+	 * @param Rule_Type|null       $type The rule's type, or null when unknown.
+	 * @param array<string, mixed> $rule The stored rule.
+	 */
+	private function rule_status( ?Rule_Type $type, array $rule ): string {
+		if ( null === $type ) {
+			return 'UNKNOWN TYPE';
+		}
+
+		if ( ! $type->is_available() ) {
+			return 'UNAVAILABLE';
+		}
+
+		// Evaluated in its place, and every match treated as no match.
+		return ! empty( $rule['observe'] ) ? 'ok (observe only)' : 'ok';
 	}
 
 	/**
