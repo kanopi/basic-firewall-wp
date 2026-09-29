@@ -211,7 +211,10 @@ does not work as well as what does.
 - A rule's credentials are never rendered into its edit form: a rate limit
   rule's Redis password and DSN, a geolocation or ASN rule's MaxMind license
   key, an AbuseIPDB rule's API key, and any setting a contributed rule type
-  declares secret. Blank keeps the stored value and a box removes it. Limits
+  declares secret. Blank keeps the stored value and a box removes it. A
+  referenced list's Advanced box shows its `upstream.auth` credential and each
+  header value as `[redacted]`, which a save keeps while the list's URL is
+  unchanged. Limits
   and counter storage have their own controls, so saving the form unchanged
   stores what was there.
 - The Storage screen and each database log handler on the Logging screen offer

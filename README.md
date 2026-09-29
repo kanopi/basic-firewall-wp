@@ -852,7 +852,10 @@ that takes a list. A credential typed into the URL itself
 `password`, `secret`, `signature` and the like) is replaced with `***` and the
 URL kept; a key in a parameter with any other name is not recognised, which is
 one more reason to use `upstream.auth`. Prefer an `%env()%` token over the
-literal value. Two things are refused outright when you
+literal value. On the rule screen the Advanced box shows a stored credential
+and every header value as `[redacted]`: leave it to keep what is stored, or
+type over it. The stored value is kept only while the list's URL is unchanged,
+so changing the URL asks for the credential again. Two things are refused outright when you
 type them: an absolute path, and any scheme other than `http`/`https` — a source
 is read at the web server's privilege, and this setting travels in an imported
 configuration document. A relative filename resolves inside the private

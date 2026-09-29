@@ -140,7 +140,11 @@ final class Rule_Edit_Screen extends Screen {
 			$errors['id'] = __( 'A rule with that identifier already exists.', 'basic-firewall' );
 		}
 
-		$settings = $type->validate_settings( $this->with_secret_fields( $type, $this->posted_array( 'settings' ), (array) ( $existing['settings'] ?? array() ) ), $errors );
+		$stored_settings = (array) ( $existing['settings'] ?? array() );
+		$posted_settings = $this->with_secret_fields( $type, $this->posted_array( 'settings' ), $stored_settings );
+		$posted_settings = self::with_source_credentials( $posted_settings, $stored_settings, $errors );
+
+		$settings = $type->validate_settings( $posted_settings, $errors );
 
 		$response   = $this->posted( 'response', 'block' );
 		$expiration = (int) $this->posted( 'expiration', '3600' );
@@ -365,6 +369,184 @@ final class Rule_Edit_Screen extends Screen {
 		}
 
 		return $posted;
+	}
+
+	/**
+	 * Where a referenced list's advanced block keeps a credential, as a single value.
+	 *
+	 * Relative to the advanced block. The request headers are masked one by
+	 * one instead -- see mask_source_credentials() -- so their names stay
+	 * readable. Mirrors Has_Sources::source_secret_settings(), which is what
+	 * the exporter strips.
+	 */
+	private const SOURCE_CREDENTIALS = array( 'upstream.auth.token', 'upstream.auth.password', 'upstream.auth.value' );
+
+	/**
+	 * A list's advanced block with each literal credential replaced by a placeholder.
+	 *
+	 * The block is YAML in a textarea, so without this a list's bearer token,
+	 * basic-auth password, API-key header value and every request header went
+	 * into the page as typed. They are replaced by Secret_Paths::REDACTED;
+	 * posted back unchanged, the placeholder means "keep what is stored" --
+	 * see with_source_credentials(). A `%env()%` or `%file()%` token names
+	 * where a credential lives rather than holding it, and is shown as is.
+	 *
+	 * @param array<string, mixed> $advanced The stored advanced block.
+	 *
+	 * @return array<string, mixed>
+	 */
+	private static function mask_source_credentials( array $advanced ): array {
+		foreach ( self::SOURCE_CREDENTIALS as $path ) {
+			if ( self::is_literal_credential( Secret_Paths::get( $advanced, $path ) ) ) {
+				Secret_Paths::set( $advanced, $path, Secret_Paths::REDACTED );
+			}
+		}
+
+		if ( is_array( $advanced['upstream']['headers'] ?? null ) ) {
+			foreach ( $advanced['upstream']['headers'] as $header => $value ) {
+				if ( self::is_literal_credential( $value ) ) {
+					$advanced['upstream']['headers'][ $header ] = Secret_Paths::REDACTED;
+				}
+			}
+		}
+
+		return $advanced;
+	}
+
+	/**
+	 * Whether a stored value is a credential typed literally, rather than nothing or a token.
+	 *
+	 * @param mixed $value The stored value.
+	 */
+	private static function is_literal_credential( $value ): bool {
+		return is_string( $value ) && ! Secret_Paths::is_empty( $value ) && ! Secret_Paths::is_token( $value );
+	}
+
+	/**
+	 * Put each list's stored credentials back where the form posted a placeholder.
+	 *
+	 * The counterpart of mask_source_credentials(). A placeholder is replaced
+	 * with the stored value from the same list, matched by its URL: a
+	 * credential for one feed is not a credential for another, which is the
+	 * binding an import applies too (Has_Sources::source_secret_bindings()).
+	 * So a list whose URL was changed in the same save does not carry the old
+	 * credential to the new host; the save is refused with a note to type it
+	 * again, rather than storing the placeholder as the credential or quietly
+	 * dropping it.
+	 *
+	 * A block that does not parse is left as posted, for the validator to
+	 * report in its own words.
+	 *
+	 * @param array<string, mixed>  $posted The settings as posted.
+	 * @param array<string, mixed>  $stored The settings stored before this save.
+	 * @param array<string, string> $errors Problems, by reference.
+	 *
+	 * @return array<string, mixed>
+	 */
+	private static function with_source_credentials( array $posted, array $stored, array &$errors ): array {
+		if ( ! is_array( $posted['sources'] ?? null ) ) {
+			return $posted;
+		}
+
+		$stored_sources = array_values( array_filter( (array) ( $stored['sources'] ?? array() ), 'is_array' ) );
+
+		foreach ( $posted['sources'] as $index => $source ) {
+			if ( ! is_array( $source ) || ! is_string( $source['advanced'] ?? null ) || ! str_contains( $source['advanced'], Secret_Paths::REDACTED ) ) {
+				continue;
+			}
+
+			try {
+				$advanced = Yaml::parse( $source['advanced'] );
+			} catch ( \Throwable $e ) {
+				continue;
+			}
+
+			if ( ! is_array( $advanced ) ) {
+				continue;
+			}
+
+			$match = self::stored_source_for( $source, $advanced, $stored_sources, (int) $index );
+			$kept  = is_array( $match['advanced'] ?? null ) ? $match['advanced'] : array();
+			$lost  = false;
+
+			foreach ( self::SOURCE_CREDENTIALS as $path ) {
+				if ( Secret_Paths::REDACTED !== Secret_Paths::get( $advanced, $path ) ) {
+					continue;
+				}
+
+				$value = Secret_Paths::get( $kept, $path );
+
+				if ( is_string( $value ) && '' !== $value ) {
+					Secret_Paths::set( $advanced, $path, $value );
+				} else {
+					Secret_Paths::unset_at( $advanced, $path );
+					$lost = true;
+				}
+			}
+
+			if ( is_array( $advanced['upstream']['headers'] ?? null ) ) {
+				foreach ( $advanced['upstream']['headers'] as $header => $value ) {
+					if ( Secret_Paths::REDACTED !== $value ) {
+						continue;
+					}
+
+					$stored_value = $kept['upstream']['headers'][ $header ] ?? null;
+
+					if ( is_string( $stored_value ) && '' !== $stored_value ) {
+						$advanced['upstream']['headers'][ $header ] = $stored_value;
+					} else {
+						unset( $advanced['upstream']['headers'][ $header ] );
+						$lost = true;
+					}
+				}
+			}
+
+			if ( $lost ) {
+				/* translators: the %env()% below is a literal token the firewall reads, not a placeholder. */
+				$errors[ 'sources.' . $index . '.advanced' ] = __( 'A credential in this list\'s advanced block was shown as [redacted], and there is no stored value for it to keep -- the list\'s URL has changed, or the credential is new. Type the credential, or a %env()% token for it, in place of [redacted]. Nothing was saved.', 'basic-firewall' );
+
+				continue;
+			}
+
+			$posted['sources'][ $index ]['advanced'] = $advanced;
+		}
+
+		return $posted;
+	}
+
+	/**
+	 * The stored list a posted one is the same list as, by URL.
+	 *
+	 * The same position first, since that is where an unchanged list is, and
+	 * then any stored list with the same URLs, so removing a list above it on
+	 * the same save does not orphan its credential.
+	 *
+	 * @param array<string, mixed>       $source   The posted list.
+	 * @param array<string, mixed>       $advanced Its parsed advanced block.
+	 * @param list<array<string, mixed>> $stored   The stored lists.
+	 * @param int                        $index    The posted list's position.
+	 *
+	 * @return array<string, mixed>|null
+	 */
+	private static function stored_source_for( array $source, array $advanced, array $stored, int $index ): ?array {
+		$same = static function ( array $candidate ) use ( $source, $advanced ): bool {
+			$candidate_advanced = is_array( $candidate['advanced'] ?? null ) ? $candidate['advanced'] : array();
+
+			return trim( (string) ( $candidate['url'] ?? '' ) ) === trim( (string) ( $source['url'] ?? '' ) )
+				&& (string) ( $candidate_advanced['upstream']['url'] ?? '' ) === (string) ( $advanced['upstream']['url'] ?? '' );
+		};
+
+		if ( isset( $stored[ $index ] ) && $same( $stored[ $index ] ) ) {
+			return $stored[ $index ];
+		}
+
+		foreach ( $stored as $candidate ) {
+			if ( $same( $candidate ) ) {
+				return $candidate;
+			}
+		}
+
+		return null;
 	}
 
 	/**
@@ -1234,13 +1416,13 @@ final class Rule_Edit_Screen extends Screen {
 			__( 'Advanced', 'basic-firewall' ),
 			self::textarea(
 				$name( 'advanced' ),
-				is_array( $advanced ) && array() !== $advanced ? Yaml::dump( $advanced, 6, 2 ) : ( is_string( $advanced ) ? $advanced : '' ),
+				is_array( $advanced ) && array() !== $advanced ? Yaml::dump( self::mask_source_credentials( $advanced ), 6, 2 ) : ( is_string( $advanced ) ? $advanced : '' ),
 				5,
 				true
 			),
 			wp_kses_post(
 				/* translators: the %env()% below is a literal token the firewall reads, not a placeholder. */
-				__( 'YAML for everything the fields above do not cover, merged into this list\'s definition.<br><br><code>where:</code> filters the records, using the same condition syntax the rest of the firewall uses, against the record\'s own keys — <code>- service@equals:CLOUDFRONT</code> reduces AWS\'s 10,000 prefixes to CloudFront\'s. Every rule must pass, so the list narrows as you add them.<br><br>Also here: a nested <code>template:</code> map, <code>header_row</code>, <code>delimiter</code> and <code>comment</code> for CSV, and <code>upstream:</code> for a credential, extra headers, a method or a body. A credential belongs in a <code>%env()%</code> token rather than typed literally — exports strip <code>upstream.auth</code> and say they did.', 'basic-firewall' )
+				__( 'YAML for everything the fields above do not cover, merged into this list\'s definition.<br><br><code>where:</code> filters the records, using the same condition syntax the rest of the firewall uses, against the record\'s own keys — <code>- service@equals:CLOUDFRONT</code> reduces AWS\'s 10,000 prefixes to CloudFront\'s. Every rule must pass, so the list narrows as you add them.<br><br>Also here: a nested <code>template:</code> map, <code>header_row</code>, <code>delimiter</code> and <code>comment</code> for CSV, and <code>upstream:</code> for a credential, extra headers, a method or a body. A credential belongs in a <code>%env()%</code> token rather than typed literally — exports strip <code>upstream.auth</code> and say they did. A stored credential and every header value are shown as <code>[redacted]</code>: leave that as it is to keep what is stored, or replace it.', 'basic-firewall' )
 			)
 		);
 
