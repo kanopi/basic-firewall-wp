@@ -7,6 +7,23 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- **Naming the Composer autoloader for the wp-config.php early path.** An
+  `'autoloader'` option to `basic_firewall_evaluate()`, and a
+  `BASIC_FIREWALL_AUTOLOADER` constant, for a site-level Composer install whose
+  `vendor-dir` is not beside the WordPress root. The option beats the constant.
+  The plugin's own `vendor/` still comes first, so a release zip keeps running
+  its scoped copy of the library whatever a site names.
+- The snippet on the Status screen, in Site Health and in
+  `wp basic-firewall status` carries the `'autoloader'` line when the plugin is
+  running from a site-level Composer install whose autoloader the bootstrap
+  would not find. The path is read off the library actually running, and
+  written relative to `ABSPATH` when it is inside it.
+- `wp basic-firewall status` warns with the reason when the wp-config.php
+  snippet is present but not evaluating, and prints the snippet when the
+  reason is a missing or unreadable autoloader.
+
 ### Changed
 
 - **Requires and bundles `kanopi/firewall` 2.33.2** (was ^2.33.1). The release
@@ -14,6 +31,18 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **A custom Composer `vendor-dir` left the early path doing nothing** (#26).
+  The bootstrap looked only in the plugin's `vendor/` and beside the WordPress
+  root, so a site with `"vendor-dir": "web/wp-content/mu-plugins/vendor"`
+  always ended in `no-autoloader` and was evaluated after
+  `advanced-cache.php`. It now also uses the autoloader the site names, and a
+  library `wp-config.php` already loaded above the snippet.
+- A named autoloader that cannot be read is reported as
+  `autoloader-unreadable`, naming the file and whether the option or the
+  constant named it, instead of falling through to the guessed locations.
+- The `no-autoloader` reason in Site Health and on the Status screen says how
+  to fix it, and both print the snippet beside it rather than a rebuild button
+  that cannot help.
 - **A rate limit can count a form field, cookie or query parameter whose name
   has capitals in it.** Before 2.33.2 the library lower-cased every key
   component, so `post.userName` read a field called `username`, found nothing,

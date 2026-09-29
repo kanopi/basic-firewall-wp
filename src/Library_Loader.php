@@ -27,6 +27,15 @@ use Kanopi\Firewall\Firewall;
  *                          library lives in the site's own vendor tree and is
  *                          already autoloaded before any plugin file runs.
  *
+ * This class never goes looking for a site's vendor tree, and that is what
+ * makes a custom Composer `vendor-dir` a non-event here: the site has
+ * required its autoloader by the time plugins load -- from wp-config.php, or
+ * from an mu-plugin beside a vendor-dir under mu-plugins -- so the library is
+ * simply loadable, and resolve_mode() reads where it came from off the class
+ * itself. Only the wp-config.php bootstrap, which runs before either of
+ * those, has to be told where the tree is; see
+ * basic_firewall_resolve_autoloader().
+ *
  * Only the first is collision-proof. For the other two this class does what the
  * brief calls the guarded autoload: it refuses to silently defer to whatever
  * version loaded first. If the library is already present when we arrive, we do
@@ -410,7 +419,7 @@ final class Library_Loader {
 
 		switch ( self::$failure ) {
 			case 'no-vendor':
-				return __( 'The firewall library is not installed. This copy of the plugin has no vendor directory, which usually means it was checked out from git rather than installed from a release zip.', 'basic-firewall' );
+				return __( 'The firewall library is not installed. This copy of the plugin has no vendor directory, which usually means it was checked out from git rather than installed from a release zip. A site that installs the plugin with Composer has to require its own vendor/autoload.php — wherever composer.json\'s vendor-dir puts it — from wp-config.php or an mu-plugin, so the library is loaded before plugins are.', 'basic-firewall' );
 
 			case 'no-library':
 				return __( 'The firewall library did not load. A vendor directory is present but does not contain kanopi/firewall.', 'basic-firewall' );

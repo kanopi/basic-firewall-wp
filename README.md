@@ -208,6 +208,20 @@ controls its own dependencies and is worth knowing about on one that does not:
 if another plugin bundles a different version of `kanopi/firewall`, whichever
 autoloader registers first wins. Site Health says so.
 
+The site has to load its own `vendor/autoload.php` before plugins load — from
+`wp-config.php`, or from an mu-plugin — because WordPress does not. On the
+normal path that is all the plugin needs: it asks whether the library is
+loadable and never goes looking for the vendor tree, so a `vendor-dir` anywhere
+works.
+
+The [wp-config.php early path](#where-evaluation-happens) runs before either of
+those, and has to find the autoloader itself. It looks in the plugin's own
+`vendor/` and in a `vendor/` beside the WordPress root. If your `composer.json`
+sets `vendor-dir` anywhere else — `web/wp-content/mu-plugins/vendor`, say — name
+it in the snippet with `'autoloader'` (see [Finding the Composer
+autoloader](#finding-the-composer-autoloader)). The Status screen and Site
+Health add that line to the snippet they print when they can see it is needed.
+
 ## Getting started safely
 
 A firewall can lock you out of your own site. The plugin is built so that cannot
@@ -308,6 +322,48 @@ compile — leaves the previous compiled file in force, and so leaves the
 injection paths and both sidecars describing that file. The Compiled screen and
 Site Health report the failure; nothing that file needs is taken away from it
 in the meantime.
+
+### Finding the Composer autoloader
+
+The bootstrap has to load `kanopi/firewall` before WordPress does anything, so
+it needs a Composer autoloader. It uses the first of these that applies:
+
+1. **The plugin's own `vendor/autoload.php`.** The release zip carries the
+   library there, scoped under the plugin's prefix, and its compiled file names
+   the scoped classes — so it always wins, whatever else a site names. A firewall
+   built from another copy of the library could not read its own configuration.
+2. **The `'autoloader'` option** passed to `basic_firewall_evaluate()`.
+3. **The `BASIC_FIREWALL_AUTOLOADER` constant.** The same thing, said once per
+   environment. The option beats it, as every bootstrap option beats the
+   constant it defaults to.
+4. **A `vendor/` beside the WordPress root** — `dirname( ABSPATH ) . '/vendor'`,
+   where Bedrock and most Composer-built sites keep it.
+5. **A library that is already loaded**, because `wp-config.php` required the
+   site's autoloader above the snippet. Nothing more to require.
+
+So a site that installs the plugin with Composer and a custom `vendor-dir` adds
+one line:
+
+```php
+require_once ABSPATH . 'wp-content/plugins/basic-firewall/bootstrap.php';
+basic_firewall_evaluate( array(
+    'private_path' => '/path/to/uploads/basic-firewall-private-abc123',
+    'autoloader'   => ABSPATH . 'wp-content/mu-plugins/vendor/autoload.php',
+) );
+```
+
+The Status screen, Site Health and `wp basic-firewall status` print the snippet
+with that line filled in when the plugin is running from a site-level Composer
+install whose autoloader is not somewhere the bootstrap looks. The path is read
+off the library that is actually running, not from `composer.json`.
+
+If none of these applies, the snippet does nothing and says so: the reason is
+`no-autoloader`, and the request is evaluated from the mu-plugin instead. If
+the option or the constant names a file that cannot be read, the reason is
+`autoloader-unreadable` and the bootstrap stops there rather than trying the
+locations it guesses — a path somebody wrote down being wrong is worth hearing
+about. Site Health, the Status screen and `wp basic-firewall status` name the
+file and which of the two named it.
 
 ### `exception` mode before WordPress
 
@@ -1920,6 +1976,13 @@ define( 'BASIC_FIREWALL_ENABLED', false );
 // Force a mode regardless of what is configured: block, log, exception, disabled.
 // Wins over a panic file too.
 define( 'BASIC_FIREWALL_MODE', 'log' );
+
+// Where the site's Composer autoloader is, for a vendor-dir that is not
+// beside the WordPress root. Read by the wp-config.php bootstrap only, and
+// only when the plugin has no vendor/ of its own; the snippet's 'autoloader'
+// option wins over it. __DIR__, not ABSPATH: this sits above the line that
+// defines ABSPATH. See "Finding the Composer autoloader".
+define( 'BASIC_FIREWALL_AUTOLOADER', __DIR__ . '/wp-content/mu-plugins/vendor/autoload.php' );
 
 // Supply the challenge signing secret without storing it in the database.
 define( 'BASIC_FIREWALL_CHALLENGE_SECRET', getenv( 'FIREWALL_CHALLENGE_SECRET' ) );
