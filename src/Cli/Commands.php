@@ -26,8 +26,8 @@ use WP_CLI\Utils;
 /**
  * Manage the Basic Firewall.
  *
- * The same twelve verbs as the Drush commands, so a runbook written for one
- * site works on the other.
+ * Named after the Drupal module's Drush commands, so a runbook written for
+ * one site reads the same on the other.
  */
 final class Commands {
 
@@ -477,6 +477,9 @@ final class Commands {
 	/**
 	 * List every blocked client.
 	 *
+	 * Exits non-zero when the storage backend cannot list what it holds,
+	 * rather than printing an empty table that reads as "nobody is blocked".
+	 *
 	 * ## OPTIONS
 	 *
 	 * [--format=<format>]
@@ -489,6 +492,11 @@ final class Commands {
 	 *   - yaml
 	 *   - csv
 	 * ---
+	 *
+	 * ## EXAMPLES
+	 *
+	 *     wp basic-firewall blocked
+	 *     wp basic-firewall blocked --format=csv
 	 *
 	 * @param array<int, string>    $args       Positional arguments.
 	 * @param array<string, string> $assoc_args Flags.
@@ -590,12 +598,24 @@ final class Commands {
 	}
 
 	/**
-	 * Find which rule would match a request.
+	 * Find the blocked client a block reference belongs to.
+	 *
+	 * A refused visitor is shown a reference, and the log line for that block
+	 * carries the same one. This looks it up in the block list and prints the
+	 * address, the rule that blocked it and when.
+	 *
+	 * It is a lookup, not a replay: nothing is evaluated. It finds only a block
+	 * that was recorded to the block list and has not yet expired or been
+	 * released -- a rule set not to record, a challenge, or a block made before
+	 * the current storage backend leaves nothing to find.
+	 *
+	 * Exits non-zero when the reference is not found, and when the storage
+	 * backend cannot list what it holds.
 	 *
 	 * ## OPTIONS
 	 *
 	 * <reference>
-	 * : A block reference from a log line or a blocked response.
+	 * : The reference from a blocked response or its log line.
 	 *
 	 * ## EXAMPLES
 	 *
@@ -615,20 +635,27 @@ final class Commands {
 
 		$listing = Plugin::instance()->blocked()->all();
 
-		if ( $listing['supported'] ) {
-			foreach ( $listing['clients'] as $client ) {
-				if ( strtoupper( (string) ( $client['record']['event_id'] ?? '' ) ) === $reference ) {
-					WP_CLI::success(
-						sprintf(
-							'%s — blocked by rule "%s" at %s.',
-							(string) $client['ip'],
-							(string) ( $client['record']['plugin'] ?? 'unknown' ),
-							(string) ( $client['record']['timestamp'] ?? 'unknown' )
-						)
-					);
+		/*
+		 * Said rather than folded into "not found". A backend that cannot list
+		 * was searched for nothing, and "not found" would send somebody off to
+		 * look for an expiry that never happened.
+		 */
+		if ( ! $listing['supported'] ) {
+			WP_CLI::error( 'The configured storage backend cannot list what it holds, so a reference cannot be looked up. Use `wp basic-firewall check <ip>` if you know the address.' );
+		}
 
-					return;
-				}
+		foreach ( $listing['clients'] as $client ) {
+			if ( strtoupper( (string) ( $client['record']['event_id'] ?? '' ) ) === $reference ) {
+				WP_CLI::success(
+					sprintf(
+						'%s — blocked by rule "%s" at %s.',
+						(string) $client['ip'],
+						(string) ( $client['record']['plugin'] ?? 'unknown' ),
+						(string) ( $client['record']['timestamp'] ?? 'unknown' )
+					)
+				);
+
+				return;
 			}
 		}
 
@@ -700,6 +727,10 @@ final class Commands {
 	 *
 	 * <ip>
 	 * : The client address.
+	 *
+	 * ## EXAMPLES
+	 *
+	 *     wp basic-firewall unblock 203.0.113.10
 	 *
 	 * @param array<int, string>    $args       Positional arguments.
 	 * @param array<string, string> $assoc_args Flags.
@@ -821,7 +852,10 @@ final class Commands {
 	}
 
 	/**
-	 * List the available presets.
+	 * List the available presets, and which are enabled.
+	 *
+	 * Presets, despite the name: the lists a rule references are
+	 * `refresh-sources`.
 	 *
 	 * ## OPTIONS
 	 *
@@ -835,6 +869,10 @@ final class Commands {
 	 *   - yaml
 	 *   - csv
 	 * ---
+	 *
+	 * ## EXAMPLES
+	 *
+	 *     wp basic-firewall sources
 	 *
 	 * @param array<int, string>    $args       Positional arguments.
 	 * @param array<string, string> $assoc_args Flags.

@@ -126,6 +126,7 @@ expect ok 'status renders as json' '"Enabled"' status --format=json
 expect ok 'rules lists in evaluation order' '' rules
 expect ok 'sources lists the presets' '' sources
 expect ok 'blocked lists the block list' '' blocked
+expect ok 'blocked renders as csv' '' blocked --format=csv
 expect ok 'rebuild recompiles' 'Compiled to' rebuild
 
 printf '\nwp-cli: the block list\n'
@@ -135,6 +136,18 @@ expect ok 'block takes a duration and a reason' 'is blocked' \
 	block "$ADDRESS" --duration=600 --reason='CLI coverage'
 expect ok 'check sees the block it just made' 'true' check "$ADDRESS"
 expect ok 'check reports the reason back' 'CLI coverage' check "$ADDRESS"
+
+# find-reference looks a reference up in the block list, so the block just made
+# is the one reference this script can be sure exists. Read from `check`, which
+# prints it, rather than from storage the script cannot see under ddev.
+reference=$($WP basic-firewall check "$ADDRESS" --format=json </dev/null 2>/dev/null \
+	| sed -n 's/.*"reference":"\([^"]*\)".*/\1/p')
+if [ -n "$reference" ]; then
+	expect ok 'find-reference names the address a reference belongs to' "$ADDRESS" find-reference "$reference"
+	expect ok 'find-reference names the rule that blocked it' 'Manual' find-reference "$(printf '%s' "$reference" | tr '[:upper:]' '[:lower:]')"
+else
+	report fail 'find-reference names the address a reference belongs to' 'check printed no reference to look up'
+fi
 expect ok 'blocked lists the blocked address' "$ADDRESS" blocked
 expect ok 'unblock releases it' 'unblocked' unblock "$ADDRESS"
 expect ok 'check sees it released' 'false' check "$ADDRESS"
@@ -160,6 +173,16 @@ else
 	report fail 'refresh-sources --dry-run reports the cache for each list' "$(printf '%s' "$refresh_preview" | head -1)"
 fi
 expect ok 'refresh-sources --dry-run renders as json' '' refresh-sources --dry-run --format=json
+
+printf '\nwp-cli: caches\n'
+
+# Neither needs --yes -- losing a cache costs a rebuild and nothing else -- so
+# both must run to completion with stdin closed and exit 0. Each has two honest
+# outcomes (something cleared or nothing to clear; rules to warm or none), and
+# both are success lines.
+expect ok 'clear-cache runs without confirmation' 'Success:' clear-cache
+expect ok 'warm-cache builds the agent corpus, or says there is none to build' 'agent corpus' warm-cache
+expect ok 'warm-cache is safe to run twice' 'agent corpus' warm-cache
 
 printf '\nwp-cli: export and import\n'
 
