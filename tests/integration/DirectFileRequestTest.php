@@ -516,12 +516,12 @@ final class DirectFileRequestTest extends Settings_Snapshot {
 	 *
 	 * @param string                           $id         Rule ID.
 	 * @param array<int, array<string, mixed>> $conditions Conditions.
-	 * @param string                           $match      `any` or `all`.
+	 * @param string                           $match_type `any` or `all`.
 	 * @param string                           $response   Response.
 	 *
 	 * @return array<string, mixed>
 	 */
-	private static function url_rule( string $id, array $conditions, string $match = 'any', string $response = 'block' ): array {
+	private static function url_rule( string $id, array $conditions, string $match_type = 'any', string $response = 'block' ): array {
 		return array(
 			'id'                 => $id,
 			'type'               => 'url',
@@ -529,7 +529,7 @@ final class DirectFileRequestTest extends Settings_Snapshot {
 			'response'           => $response,
 			'challenge_provider' => 'math',
 			'settings'           => array(
-				'match_type' => $match,
+				'match_type' => $match_type,
 				'conditions' => $conditions,
 			),
 		);
