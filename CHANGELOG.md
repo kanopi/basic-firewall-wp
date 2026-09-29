@@ -7,6 +7,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.0.0-rc.2]
+
+**Second release candidate for 1.0.0.** Published as a GitHub pre-release, so
+the `releases/latest/download` URL does not serve it; install it by its own URL.
+What changed since 1.0.0-rc.1 is below; the full description of the plugin is
+under 1.0.0-rc.1.
+
 ### Added
 
 - **Naming the Composer autoloader for the wp-config.php early path.** An
