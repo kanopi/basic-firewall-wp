@@ -30,6 +30,11 @@ final class SourceCredentialFormTest extends Settings_Snapshot {
 	private const HEADER = 'FEED-HEADER-5e07';
 
 	/**
+	 * A list URL carrying credentials of its own, in the userinfo and a key parameter.
+	 */
+	private const URL = 'https://reader:URLPASS-33@feeds.example.test/list.txt?api_key=QKEY-44';
+
+	/**
 	 * Request globals, put back after each test.
 	 *
 	 * @var array{get: array<mixed>, post: array<mixed>, user: int}
@@ -80,6 +85,10 @@ final class SourceCredentialFormTest extends Settings_Snapshot {
 		$this->assertStringContainsString( 'X-Api-Key', $advanced, 'The header name should stay readable.' );
 		$this->assertStringContainsString( '%env(FEED_TRACE)%', $advanced, 'A token is a reference, and is shown.' );
 		$this->assertStringContainsString( 'bearer', $advanced );
+
+		$this->assertStringNotContainsString( 'URLPASS-33', $this->rendered_html, 'The URL\'s password is in the page.' );
+		$this->assertStringNotContainsString( 'QKEY-44', $this->rendered_html, 'The URL\'s key is in the page.' );
+		$this->assertStringContainsString( 'feeds.example.test/list.txt', (string) ( $fields['settings[sources][0][url]'] ?? '' ) );
 	}
 
 	/**
@@ -93,8 +102,10 @@ final class SourceCredentialFormTest extends Settings_Snapshot {
 		$this->assertTrue( $this->save_as_rendered( 'feed' ), 'The screen refused its own rendering of the rule.' );
 		$this->assertSame( $before['advanced'], $this->stored_source()['advanced'] );
 		$this->assertSame( self::TOKEN, $this->stored_source()['advanced']['upstream']['auth']['token'] ?? null );
+		$this->assertSame( self::URL, $this->stored_source()['url'] ?? null, 'The URL lost its credential.' );
 
 		$this->assertTrue( $this->save_as_rendered( 'feed' ) );
+		$this->assertSame( self::URL, $this->stored_source()['url'] ?? null );
 		$this->assertSame( $before['advanced'], $this->stored_source()['advanced'] );
 	}
 
@@ -109,7 +120,20 @@ final class SourceCredentialFormTest extends Settings_Snapshot {
 			'The save went through with a placeholder and no credential for it.'
 		);
 		$this->assertSame( self::TOKEN, $this->stored_source()['advanced']['upstream']['auth']['token'] ?? null, 'The stored rule changed.' );
-		$this->assertSame( 'https://feeds.example.test/list.txt', $this->stored_source()['url'] ?? null );
+		$this->assertSame( self::URL, $this->stored_source()['url'] ?? null );
+	}
+
+	/**
+	 * A masked URL edited around its `***` is refused, not stored with `***` as the credential.
+	 */
+	public function test_an_edited_masked_url_is_refused(): void {
+		$this->given_feed();
+
+		$shown = (string) ( $this->rendered_fields( 'feed' )['settings[sources][0][url]'] ?? '' );
+
+		$this->assertStringContainsString( '***', $shown );
+		$this->assertFalse( $this->save_as_rendered( 'feed', array( 'settings[sources][0][url]' => str_replace( 'list.txt', 'other.txt', $shown ) ) ) );
+		$this->assertSame( self::URL, $this->stored_source()['url'] ?? null );
 	}
 
 	/**
@@ -147,7 +171,7 @@ final class SourceCredentialFormTest extends Settings_Snapshot {
 						Ip_Address::source_defaults(),
 						array(
 							'name'     => 'feed',
-							'url'      => 'https://feeds.example.test/list.txt',
+							'url'      => self::URL,
 							'format'   => 'txt',
 							'advanced' => array(
 								'upstream' => array(

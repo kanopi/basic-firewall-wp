@@ -213,8 +213,8 @@ does not work as well as what does.
   key, an AbuseIPDB rule's API key, and any setting a contributed rule type
   declares secret. Blank keeps the stored value and a box removes it. A
   referenced list's Advanced box shows its `upstream.auth` credential and each
-  header value as `[redacted]`, which a save keeps while the list's URL is
-  unchanged. Limits
+  header value as `[redacted]`, and a credential in the list's URL as `***`;
+  a save keeps each while the list's URL is unchanged. Limits
   and counter storage have their own controls, so saving the form unchanged
   stores what was there.
 - The Storage screen and each database log handler on the Logging screen offer

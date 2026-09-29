@@ -855,7 +855,8 @@ one more reason to use `upstream.auth`. Prefer an `%env()%` token over the
 literal value. On the rule screen the Advanced box shows a stored credential
 and every header value as `[redacted]`: leave it to keep what is stored, or
 type over it. The stored value is kept only while the list's URL is unchanged,
-so changing the URL asks for the credential again. Two things are refused outright when you
+so changing the URL asks for the credential again. A credential in the URL is
+shown as `***` there too, and kept by a save that leaves the URL as shown. Two things are refused outright when you
 type them: an absolute path, and any scheme other than `http`/`https` — a source
 is read at the web server's privilege, and this setting travels in an imported
 configuration document. A relative filename resolves inside the private

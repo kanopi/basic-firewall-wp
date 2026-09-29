@@ -396,6 +396,10 @@ final class Rule_Edit_Screen extends Screen {
 	 * @return array<string, mixed>
 	 */
 	private static function mask_source_credentials( array $advanced ): array {
+		if ( is_string( $advanced['upstream']['url'] ?? null ) ) {
+			$advanced['upstream']['url'] = Secret_Paths::redact_url( $advanced['upstream']['url'] );
+		}
+
 		foreach ( self::SOURCE_CREDENTIALS as $path ) {
 			if ( self::is_literal_credential( Secret_Paths::get( $advanced, $path ) ) ) {
 				Secret_Paths::set( $advanced, $path, Secret_Paths::REDACTED );
@@ -451,7 +455,27 @@ final class Rule_Edit_Screen extends Screen {
 		$stored_sources = array_values( array_filter( (array) ( $stored['sources'] ?? array() ), 'is_array' ) );
 
 		foreach ( $posted['sources'] as $index => $source ) {
-			if ( ! is_array( $source ) || ! is_string( $source['advanced'] ?? null ) || ! str_contains( $source['advanced'], Secret_Paths::REDACTED ) ) {
+			if ( ! is_array( $source ) ) {
+				continue;
+			}
+
+			/*
+			 * The URL first, because the credentials below are matched on it.
+			 * A URL posted back exactly as it was shown -- with `***` where
+			 * the export puts it -- is the stored URL.
+			 */
+			$url = self::unmasked_url( (string) ( $source['url'] ?? '' ), array_map( static fn ( array $candidate ): string => (string) ( $candidate['url'] ?? '' ), $stored_sources ), (int) $index );
+
+			if ( null === $url ) {
+				$errors[ 'sources.' . $index . '.url' ] = self::masked_url_problem();
+
+				continue;
+			}
+
+			$posted['sources'][ $index ]['url'] = $url;
+			$source['url']                      = $url;
+
+			if ( ! is_string( $source['advanced'] ?? null ) || ( ! str_contains( $source['advanced'], Secret_Paths::REDACTED ) && ! str_contains( $source['advanced'], '***' ) ) ) {
 				continue;
 			}
 
@@ -463,6 +487,22 @@ final class Rule_Edit_Screen extends Screen {
 
 			if ( ! is_array( $advanced ) ) {
 				continue;
+			}
+
+			if ( is_string( $advanced['upstream']['url'] ?? null ) ) {
+				$upstream = self::unmasked_url(
+					$advanced['upstream']['url'],
+					array_map( static fn ( array $candidate ): string => (string) ( $candidate['advanced']['upstream']['url'] ?? '' ), $stored_sources ),
+					(int) $index
+				);
+
+				if ( null === $upstream ) {
+					$errors[ 'sources.' . $index . '.advanced' ] = self::masked_url_problem();
+
+					continue;
+				}
+
+				$advanced['upstream']['url'] = $upstream;
 			}
 
 			$match = self::stored_source_for( $source, $advanced, $stored_sources, (int) $index );
@@ -512,6 +552,45 @@ final class Rule_Edit_Screen extends Screen {
 		}
 
 		return $posted;
+	}
+
+	/**
+	 * A posted URL with the credential the screen masked put back, or null when it cannot be.
+	 *
+	 * A URL that is not masked is returned as typed. A masked one is the
+	 * stored URL it is the masked form of -- the same position first -- and
+	 * null when no stored URL masks to it: somebody edited the URL around the
+	 * `***`, and storing it would store `***` as the credential.
+	 *
+	 * @param string       $posted The URL as posted.
+	 * @param list<string> $stored The stored lists' URLs, by position.
+	 * @param int          $index  The posted list's position.
+	 */
+	private static function unmasked_url( string $posted, array $stored, int $index ): ?string {
+		$posted = trim( $posted );
+
+		if ( '' === $posted || in_array( $posted, $stored, true ) || Secret_Paths::redact_url( $posted ) !== $posted || ! str_contains( $posted, '***' ) ) {
+			return $posted;
+		}
+
+		if ( isset( $stored[ $index ] ) && Secret_Paths::redact_url( $stored[ $index ] ) === $posted ) {
+			return $stored[ $index ];
+		}
+
+		foreach ( $stored as $candidate ) {
+			if ( '' !== $candidate && Secret_Paths::redact_url( $candidate ) === $posted ) {
+				return $candidate;
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * What to say about a masked URL with no stored credential behind it.
+	 */
+	private static function masked_url_problem(): string {
+		return __( 'This URL shows *** in place of a credential, and was changed, so there is no stored credential to keep. Type the whole URL again with its credential -- or better, move the credential into the advanced block\'s upstream.auth. Nothing was saved.', 'basic-firewall' );
 	}
 
 	/**
@@ -1266,7 +1345,8 @@ final class Rule_Edit_Screen extends Screen {
 
 		$this->row(
 			__( 'List URL', 'basic-firewall' ),
-			self::text( $name( 'url' ), (string) $source['url'], 'text', 'class="large-text" placeholder="https://example.com/ips.txt"' ),
+			// A credential in the URL is shown as the export shows it; see with_source_credentials().
+			self::text( $name( 'url' ), Secret_Paths::redact_url( (string) $source['url'] ), 'text', 'class="large-text" placeholder="https://example.com/ips.txt"' ),
 			esc_html__( 'An http(s) URL, or a filename inside the firewall\'s private directory. Clearing this removes the list.', 'basic-firewall' )
 		);
 
