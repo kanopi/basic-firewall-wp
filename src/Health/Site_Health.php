@@ -1194,10 +1194,11 @@ final class Site_Health {
 	 * `autoloader` is which Composer autoloader the bootstrap used and where
 	 * it came from -- `plugin`, `option`, `constant`, `site`, `loaded`, or
 	 * `unreadable` and `none` when it found nothing to use -- so a failure can
-	 * name the file it is about. Null from a bootstrap that did not get that
+	 * name the file it is about, and `named` is whether the snippet's option
+	 * or the constant named one. Null from a bootstrap that did not get that
 	 * far, or predates the question.
 	 *
-	 * @return array{called: bool, credentials: bool, evaluated: bool, reason: string|null, responder: bool, autoloader: array{source: string, file: string|null}|null}
+	 * @return array{called: bool, credentials: bool, evaluated: bool, reason: string|null, responder: bool, autoloader: array{source: string, file: string|null, named: string|null}|null}
 	 */
 	public static function early_report(): array {
 		$report = $GLOBALS['basic_firewall_early'] ?? array();
@@ -1208,6 +1209,7 @@ final class Site_Health {
 			$autoloader = array(
 				'source' => $report['autoloader']['source'],
 				'file'   => isset( $report['autoloader']['file'] ) && is_string( $report['autoloader']['file'] ) ? $report['autoloader']['file'] : null,
+				'named'  => isset( $report['autoloader']['named'] ) && is_string( $report['autoloader']['named'] ) ? $report['autoloader']['named'] : null,
 			);
 		}
 
@@ -1277,7 +1279,7 @@ final class Site_Health {
 		$autoloader = self::early_report()['autoloader'];
 		$file       = (string) ( $autoloader['file'] ?? '' );
 
-		if ( 'constant' === ( $autoloader['source'] ?? null ) ) {
+		if ( 'constant' === ( $autoloader['named'] ?? null ) ) {
 			return sprintf(
 				/* translators: %s: the path BASIC_FIREWALL_AUTOLOADER names. */
 				__( 'BASIC_FIREWALL_AUTOLOADER names %s as the Composer autoloader, and that file cannot be read, so the firewall library was never loaded. Correct the path, or remove the constant if the plugin\'s own vendor directory or one beside the WordPress root should be used instead.', 'basic-firewall' ),

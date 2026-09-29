@@ -28,19 +28,67 @@ if ( isset( $_SERVER['HTTP_X_BFW_TEST_NETWORK'] ) ) {
 	define( 'SUBDOMAIN_INSTALL', false ); // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals -- as above.
 }
 
+/*
+ * Where the Composer autoloader is, as a site would say it. A request header
+ * picks the scenario so one server can play every kind of install:
+ *
+ * - `X-Bfw-Test-Plugin: bare` runs the plugin from a copy with no vendor/,
+ *   as a site-level Composer install has, so its own autoloader is not there
+ *   to win.
+ * - `X-Bfw-Test-Autoloader` names the site's autoloader through the option,
+ *   the constant, both, a path that does not exist, or by having required it
+ *   above the snippet -- the way a site loads its vendor-dir itself.
+ *
+ * The site autoloader is a stand-in that records being loaded, then loads
+ * the real one: which file won is what the scoped-first test asserts.
+ */
+$basic_firewall_bootstrap = array(
+	'private_path' => (string) getenv( 'BFW_EARLY_PRIVATE_PATH' ),
+	'plugin_path'  => $basic_firewall_plugin,
+);
+
+if ( 'bare' === ( $_SERVER['HTTP_X_BFW_TEST_PLUGIN'] ?? '' ) ) { // phpcs:ignore WordPress.Security.ValidatedSanitizedInput -- compared against a literal, in a test fixture with no WordPress to unslash with.
+	$basic_firewall_bootstrap['plugin_path'] = (string) getenv( 'BFW_EARLY_BARE_PLUGIN_PATH' );
+}
+
+$basic_firewall_custom  = (string) getenv( 'BFW_EARLY_CUSTOM_AUTOLOADER' );
+$basic_firewall_missing = dirname( $basic_firewall_custom ) . '/not-here/autoload.php';
+
+switch ( $_SERVER['HTTP_X_BFW_TEST_AUTOLOADER'] ?? '' ) {
+	case 'option':
+		$basic_firewall_bootstrap['autoloader'] = $basic_firewall_custom;
+		break;
+	case 'constant':
+		define( 'BASIC_FIREWALL_AUTOLOADER', $basic_firewall_custom );
+		break;
+	case 'both':
+		// The option is the more local of the two, and wins.
+		define( 'BASIC_FIREWALL_AUTOLOADER', $basic_firewall_missing );
+		$basic_firewall_bootstrap['autoloader'] = $basic_firewall_custom;
+		break;
+	case 'missing':
+		$basic_firewall_bootstrap['autoloader'] = $basic_firewall_missing;
+		break;
+	case 'missing-constant':
+		define( 'BASIC_FIREWALL_AUTOLOADER', $basic_firewall_missing );
+		break;
+	case 'preloaded':
+		require_once $basic_firewall_custom;
+		break;
+}
+
 require_once $basic_firewall_plugin . '/bootstrap.php';
 
-basic_firewall_evaluate(
-	array(
-		'private_path' => (string) getenv( 'BFW_EARLY_PRIVATE_PATH' ),
-		'plugin_path'  => $basic_firewall_plugin,
-	)
-);
+basic_firewall_evaluate( $basic_firewall_bootstrap );
 
 // What the bootstrap left for the runner, for a test to assert on.
 header( 'X-Early-Stashed: ' . ( empty( $GLOBALS['basic_firewall_outcome'] ) ? 'no' : 'yes' ) );
 header( 'X-Early-Outcome: ' . (string) ( $GLOBALS['basic_firewall_early']['outcome'] ?? 'none' ) );
 header( 'X-Early-Reason: ' . (string) ( $GLOBALS['basic_firewall_early']['reason'] ?? 'none' ) );
 header( 'X-Early-Evaluated: ' . ( empty( $GLOBALS['basic_firewall_early']['evaluated'] ) ? 'no' : 'yes' ) );
+header( 'X-Early-Autoloader: ' . (string) ( $GLOBALS['basic_firewall_early']['autoloader']['source'] ?? 'none' ) );
+header( 'X-Early-Autoloader-File: ' . (string) ( $GLOBALS['basic_firewall_early']['autoloader']['file'] ?? '' ) );
+header( 'X-Early-Autoloader-Named: ' . (string) ( $GLOBALS['basic_firewall_early']['autoloader']['named'] ?? '' ) );
+header( 'X-Early-Custom-Loaded: ' . ( empty( $GLOBALS['basic_firewall_test_custom_autoloader'] ) ? 'no' : 'yes' ) );
 
 echo 'SERVED BY WORDPRESS';

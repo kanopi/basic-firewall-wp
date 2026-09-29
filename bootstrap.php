@@ -222,10 +222,7 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 		 */
 		$autoload = basic_firewall_resolve_autoloader( $options );
 
-		$GLOBALS['basic_firewall_early']['autoloader'] = array(
-			'source' => $autoload['source'],
-			'file'   => $autoload['file'],
-		);
+		$GLOBALS['basic_firewall_early']['autoloader'] = $autoload;
 
 		if ( 'unreadable' === $autoload['source'] ) {
 			$GLOBALS['basic_firewall_early']['reason'] = 'autoloader-unreadable';
@@ -807,26 +804,30 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 	 * screens should say. `none` is nothing named, nothing found and nothing
 	 * loaded.
 	 *
+	 * `named` is `option` or `constant` whenever the site named one, used or
+	 * not, so a report of an unreadable file can say which line to correct.
+	 *
 	 * @param array<string, mixed> $options Bootstrap options.
 	 *
-	 * @return array{source: string, file: string|null}
+	 * @return array{source: string, file: string|null, named: string|null}
 	 */
 	function basic_firewall_resolve_autoloader( array $options ) {
-		$own = rtrim( (string) $options['plugin_path'], '/' ) . '/vendor/autoload.php';
+		$own   = rtrim( (string) $options['plugin_path'], '/' ) . '/vendor/autoload.php';
+		$named = basic_firewall_named_autoloader( $options );
 
 		if ( is_readable( $own ) ) {
 			return array(
 				'source' => 'plugin',
 				'file'   => $own,
+				'named'  => null === $named ? null : $named['source'],
 			);
 		}
-
-		$named = basic_firewall_named_autoloader( $options );
 
 		if ( null !== $named ) {
 			return array(
 				'source' => is_readable( $named['file'] ) ? $named['source'] : 'unreadable',
 				'file'   => $named['file'],
+				'named'  => $named['source'],
 			);
 		}
 
@@ -837,6 +838,7 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 					return array(
 						'source' => 'site',
 						'file'   => $candidate,
+						'named'  => null,
 					);
 				}
 			}
@@ -845,6 +847,7 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 		return array(
 			'source' => null === basic_firewall_library_prefix() ? 'none' : 'loaded',
 			'file'   => null,
+			'named'  => null,
 		);
 	}
 

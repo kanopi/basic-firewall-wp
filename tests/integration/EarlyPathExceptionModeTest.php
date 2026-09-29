@@ -66,6 +66,13 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 	private static string $base = '';
 
 	/**
+	 * A scratch directory holding the bare plugin copy and the site autoloader.
+	 *
+	 * @var string
+	 */
+	private static string $scratch = '';
+
+	/**
 	 * The bootstrap's globals as the test process had them.
 	 *
 	 * @var array{early: mixed, outcome: mixed}
@@ -93,12 +100,16 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 		$port    = (int) substr( $name, (int) strrpos( $name, ':' ) + 1 );
 		$fixture = __DIR__ . '/fixtures/wp-config-early-path.php';
 
+		self::make_scratch_install();
+
 		$env = getenv();
 		$env = array_merge(
 			is_array( $env ) ? $env : array(),
 			array(
-				'BFW_EARLY_PLUGIN_PATH'  => dirname( __DIR__, 2 ),
-				'BFW_EARLY_PRIVATE_PATH' => Plugin::instance()->paths()->base(),
+				'BFW_EARLY_PLUGIN_PATH'       => dirname( __DIR__, 2 ),
+				'BFW_EARLY_PRIVATE_PATH'      => Plugin::instance()->paths()->base(),
+				'BFW_EARLY_BARE_PLUGIN_PATH'  => self::$scratch . '/plugin',
+				'BFW_EARLY_CUSTOM_AUTOLOADER' => self::$scratch . '/mu-plugins/vendor/autoload.php',
 			)
 		);
 
@@ -148,7 +159,48 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 
 		self::$server = null;
 
+		if ( '' !== self::$scratch ) {
+			// phpcs:disable WordPress.WP.AlternativeFunctions -- a test's own scratch files.
+			@unlink( self::$scratch . '/plugin/src' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- a symlink, or nothing if it was never made.
+			@unlink( self::$scratch . '/mu-plugins/vendor/autoload.php' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- as above.
+			@rmdir( self::$scratch . '/mu-plugins/vendor' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- as above.
+			@rmdir( self::$scratch . '/mu-plugins' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- as above.
+			@rmdir( self::$scratch . '/plugin' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- as above.
+			@rmdir( self::$scratch ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- as above.
+			// phpcs:enable WordPress.WP.AlternativeFunctions
+
+			self::$scratch = '';
+		}
+
 		parent::tearDownAfterClass();
+	}
+
+	/**
+	 * Lay out a site-level Composer install whose vendor-dir is under mu-plugins.
+	 *
+	 * `plugin/` is the plugin as Composer installs it into a site: its source,
+	 * and no vendor/ of its own, because the library is in the site's tree.
+	 * Its `src` is a link to the real one, so the bootstrap loads the same
+	 * responder and dispatcher it always does.
+	 *
+	 * `mu-plugins/vendor/autoload.php` is the site's autoloader, at a path the
+	 * bootstrap cannot guess. It records that it was loaded and hands on to
+	 * this working copy's real autoloader, which carries the library.
+	 */
+	private static function make_scratch_install(): void {
+		$scratch = sys_get_temp_dir() . '/bfw-early-autoloader-' . bin2hex( random_bytes( 4 ) );
+
+		// phpcs:disable WordPress.WP.AlternativeFunctions -- a test's own scratch files, outside WordPress.
+		mkdir( $scratch . '/plugin', 0700, true );
+		mkdir( $scratch . '/mu-plugins/vendor', 0700, true );
+		symlink( dirname( __DIR__, 2 ) . '/src', $scratch . '/plugin/src' );
+		file_put_contents(
+			$scratch . '/mu-plugins/vendor/autoload.php',
+			"<?php\n\$GLOBALS['basic_firewall_test_custom_autoloader'] = true;\nreturn require " . var_export( dirname( __DIR__, 2 ) . '/vendor/autoload.php', true ) . ";\n" // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_var_export -- writing a PHP literal, not debugging.
+		);
+		// phpcs:enable WordPress.WP.AlternativeFunctions
+
+		self::$scratch = $scratch;
 	}
 
 	/**
@@ -453,6 +505,185 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 	}
 
 	/**
+	 * A vendor-dir the bootstrap cannot guess, named by the option, is evaluated early.
+	 *
+	 * The case in #26: the plugin has no vendor/ of its own, and the site's
+	 * tree is under mu-plugins. It used to end in `no-autoloader`, every
+	 * time, and be evaluated after advanced-cache.php.
+	 */
+	public function test_an_autoloader_named_by_the_option_is_evaluated(): void {
+		$this->given_rule( 'block', 'block' );
+
+		$response = $this->request( '/bfw-early-match', array( 'X-Bfw-Test-Plugin' => 'bare' ) );
+
+		$this->assertSame( 'no-autoloader', $response['reason'], 'The bare copy found an autoloader without being told, so the tests below prove nothing.' );
+		$this->assertSame( 200, $response['status'] );
+
+		$response = $this->request(
+			'/bfw-early-match',
+			array(
+				'X-Bfw-Test-Plugin'     => 'bare',
+				'X-Bfw-Test-Autoloader' => 'option',
+			)
+		);
+
+		$this->assertSame( 403, $response['status'], 'The autoloader the snippet named was not used to evaluate the request.' );
+
+		// A refusal ends the request before the fixture's report headers, so
+		// which autoloader was used is read off one the rule lets through.
+		$allowed = $this->request_with_autoloader( 'bare', 'option' );
+
+		$this->assertSame( 'yes', $allowed['evaluated'] );
+		$this->assertSame( 'option', $allowed['autoloader'] );
+		$this->assertSame( 'yes', $allowed['custom'] );
+	}
+
+	/**
+	 * BASIC_FIREWALL_AUTOLOADER names it once per environment, to the same effect.
+	 */
+	public function test_an_autoloader_named_by_the_constant_is_evaluated(): void {
+		$this->given_rule( 'block', 'block' );
+
+		$response = $this->request(
+			'/bfw-early-match',
+			array(
+				'X-Bfw-Test-Plugin'     => 'bare',
+				'X-Bfw-Test-Autoloader' => 'constant',
+			)
+		);
+
+		$this->assertSame( 403, $response['status'], 'The autoloader BASIC_FIREWALL_AUTOLOADER named was not used.' );
+
+		$allowed = $this->request_with_autoloader( 'bare', 'constant' );
+
+		$this->assertSame( 'constant', $allowed['autoloader'] );
+		$this->assertSame( 'yes', $allowed['custom'] );
+	}
+
+	/**
+	 * The option beats the constant, as every other bootstrap option does.
+	 */
+	public function test_the_option_beats_the_constant(): void {
+		$this->given_rule( 'block', 'block' );
+
+		$response = $this->request(
+			'/bfw-early-match',
+			array(
+				'X-Bfw-Test-Plugin'     => 'bare',
+				'X-Bfw-Test-Autoloader' => 'both',
+			)
+		);
+
+		$this->assertSame( 403, $response['status'], 'A constant naming a missing file overrode the snippet\'s own autoloader.' );
+		$this->assertSame( 'option', $this->request_with_autoloader( 'bare', 'both' )['autoloader'] );
+	}
+
+	/**
+	 * A named autoloader that is not there is said out loud, not guessed past.
+	 *
+	 * Falling through to the guessed locations would report `no-autoloader`
+	 * about a site that did name one, or run the firewall from a tree nobody
+	 * chose. The request goes on unevaluated, for the mu-plugin -- and the
+	 * reason names the file, on every screen that reports it.
+	 */
+	public function test_an_unreadable_autoloader_is_reported_and_not_evaluated(): void {
+		$this->given_rule( 'block', 'block' );
+
+		foreach ( array(
+			'missing'          => 'option',
+			'missing-constant' => 'constant',
+		) as $scenario => $source ) {
+			$response = $this->request(
+				'/bfw-early-match',
+				array(
+					'X-Bfw-Test-Plugin'     => 'bare',
+					'X-Bfw-Test-Autoloader' => $scenario,
+				)
+			);
+
+			$this->assertSame( 200, $response['status'], 'A request was refused with no library to refuse it.' );
+			$this->assertStringContainsString( self::SERVED, $response['body'] );
+			$this->assertSame( 'autoloader-unreadable', $response['reason'] );
+			$this->assertSame( 'no', $response['evaluated'], 'The request was marked evaluated, so the mu-plugin would not evaluate it either.' );
+			$this->assertSame( 'unreadable', $response['autoloader'] );
+			$this->assertStringEndsWith( '/not-here/autoload.php', $response['autoloader_file'] );
+			$this->assertSame( $source, $response['autoloader_named'] );
+
+			// What the status screens make of it.
+			$GLOBALS['basic_firewall_early'] = array(
+				'called'      => true,
+				'credentials' => true,
+				'evaluated'   => false,
+				'reason'      => 'autoloader-unreadable',
+				'responder'   => true,
+				'autoloader'  => array(
+					'source' => 'unreadable',
+					'file'   => $response['autoloader_file'],
+					'named'  => $response['autoloader_named'],
+				),
+			);
+
+			$check = Site_Health::check( 'evaluation' );
+
+			$this->assertSame( 'critical', $check['status'], 'Site Health did not report an early path that evaluates nothing.' );
+			$this->assertStringContainsString( esc_html( $response['autoloader_file'] ), $check['description'], 'The report does not say which file could not be read.' );
+			$this->assertStringContainsString( 'basic_firewall_evaluate(', $check['description'], 'The report does not show the snippet to correct.' );
+
+			$text = Site_Health::early_reason_text( 'autoloader-unreadable' );
+
+			$this->assertStringContainsString( $response['autoloader_file'], $text );
+			$this->assertStringContainsString( 'constant' === $source ? 'BASIC_FIREWALL_AUTOLOADER' : "'autoloader' option", $text, 'The report does not say where the path was named.' );
+		}
+	}
+
+	/**
+	 * A site that required its own autoloader above the snippet is evaluated with it.
+	 *
+	 * Nothing for the bootstrap to require, and nothing named -- but the
+	 * library is loadable, so there is no reason to give up.
+	 */
+	public function test_a_library_loaded_before_the_snippet_is_evaluated(): void {
+		$this->given_rule( 'block', 'block' );
+
+		$response = $this->request(
+			'/bfw-early-match',
+			array(
+				'X-Bfw-Test-Plugin'     => 'bare',
+				'X-Bfw-Test-Autoloader' => 'preloaded',
+			)
+		);
+
+		$this->assertSame( 403, $response['status'], 'A library wp-config.php had already loaded was not used.' );
+
+		$allowed = $this->request_with_autoloader( 'bare', 'preloaded' );
+
+		$this->assertSame( 'loaded', $allowed['autoloader'] );
+		$this->assertSame( 'yes', $allowed['evaluated'] );
+	}
+
+	/**
+	 * The plugin's own vendor/ still wins over an autoloader the site names.
+	 *
+	 * A release zip carries the library scoped, and its compiled file names
+	 * the scoped classes: built from any other copy, the firewall cannot read
+	 * its own configuration. So a site naming its autoloader -- for a vendor
+	 * tree that happens to carry kanopi/firewall for some other reason --
+	 * must not change which copy a release build runs.
+	 */
+	public function test_the_plugins_own_vendor_wins_over_a_named_autoloader(): void {
+		$this->given_rule( 'block', 'block' );
+
+		foreach ( array( 'option', 'constant' ) as $scenario ) {
+			$this->assertSame( 403, $this->request( '/bfw-early-match', array( 'X-Bfw-Test-Autoloader' => $scenario ) )['status'] );
+
+			$allowed = $this->request_with_autoloader( '', $scenario );
+
+			$this->assertSame( 'plugin', $allowed['autoloader'], 'A named autoloader was preferred to the plugin\'s own vendor/.' );
+			$this->assertSame( 'no', $allowed['custom'], 'The site\'s autoloader was loaded although the plugin\'s own was there.' );
+		}
+	}
+
+	/**
 	 * Install one URL rule matching /bfw-early-match, and compile it.
 	 *
 	 * @param string               $response Rule response.
@@ -540,12 +771,34 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 	}
 
 	/**
+	 * Request a path no rule matches, as a given install.
+	 *
+	 * @param string $plugin     `bare` for the copy with no vendor/, or empty for this one.
+	 * @param string $autoloader The fixture's autoloader scenario.
+	 *
+	 * @return array{status: int, body: string, type: string, cache: string, location: string, retry: string, stashed: string, outcome: string, reason: string, evaluated: string, autoloader: string, autoloader_file: string, autoloader_named: string, custom: string}
+	 */
+	private function request_with_autoloader( string $plugin, string $autoloader ): array {
+		$response = $this->request(
+			'/bfw-early-other',
+			array(
+				'X-Bfw-Test-Plugin'     => $plugin,
+				'X-Bfw-Test-Autoloader' => $autoloader,
+			)
+		);
+
+		$this->assertSame( 200, $response['status'], 'A request no rule matches was refused.' );
+
+		return $response;
+	}
+
+	/**
 	 * Make a request of the fixture.
 	 *
 	 * @param string                $path    Path to request.
 	 * @param array<string, string> $headers Request headers.
 	 *
-	 * @return array{status: int, body: string, type: string, cache: string, location: string, retry: string, stashed: string, outcome: string, reason: string, evaluated: string}
+	 * @return array{status: int, body: string, type: string, cache: string, location: string, retry: string, stashed: string, outcome: string, reason: string, evaluated: string, autoloader: string, autoloader_file: string, autoloader_named: string, custom: string}
 	 */
 	private function request( string $path, array $headers = array() ): array {
 		$response = wp_remote_get(
@@ -562,16 +815,20 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 		}
 
 		return array(
-			'status'    => (int) wp_remote_retrieve_response_code( $response ),
-			'body'      => (string) wp_remote_retrieve_body( $response ),
-			'type'      => (string) wp_remote_retrieve_header( $response, 'content-type' ),
-			'cache'     => (string) wp_remote_retrieve_header( $response, 'cache-control' ),
-			'location'  => (string) wp_remote_retrieve_header( $response, 'location' ),
-			'retry'     => (string) wp_remote_retrieve_header( $response, 'retry-after' ),
-			'stashed'   => (string) wp_remote_retrieve_header( $response, 'x-early-stashed' ),
-			'outcome'   => (string) wp_remote_retrieve_header( $response, 'x-early-outcome' ),
-			'reason'    => (string) wp_remote_retrieve_header( $response, 'x-early-reason' ),
-			'evaluated' => (string) wp_remote_retrieve_header( $response, 'x-early-evaluated' ),
+			'status'           => (int) wp_remote_retrieve_response_code( $response ),
+			'body'             => (string) wp_remote_retrieve_body( $response ),
+			'type'             => (string) wp_remote_retrieve_header( $response, 'content-type' ),
+			'cache'            => (string) wp_remote_retrieve_header( $response, 'cache-control' ),
+			'location'         => (string) wp_remote_retrieve_header( $response, 'location' ),
+			'retry'            => (string) wp_remote_retrieve_header( $response, 'retry-after' ),
+			'stashed'          => (string) wp_remote_retrieve_header( $response, 'x-early-stashed' ),
+			'outcome'          => (string) wp_remote_retrieve_header( $response, 'x-early-outcome' ),
+			'reason'           => (string) wp_remote_retrieve_header( $response, 'x-early-reason' ),
+			'evaluated'        => (string) wp_remote_retrieve_header( $response, 'x-early-evaluated' ),
+			'autoloader'       => (string) wp_remote_retrieve_header( $response, 'x-early-autoloader' ),
+			'autoloader_file'  => (string) wp_remote_retrieve_header( $response, 'x-early-autoloader-file' ),
+			'autoloader_named' => (string) wp_remote_retrieve_header( $response, 'x-early-autoloader-named' ),
+			'custom'           => (string) wp_remote_retrieve_header( $response, 'x-early-custom-loaded' ),
 		);
 	}
 }
