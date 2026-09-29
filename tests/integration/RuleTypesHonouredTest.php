@@ -996,6 +996,80 @@ final class RuleTypesHonouredTest extends Honoured_Settings {
 	}
 
 	/**
+	 * A field named with a capital counts each value it holds.
+	 *
+	 * Before 2.33.2, kanopi/firewall lower-cased every key component, so
+	 * `post.userName` read `username`, found nothing, and every request shared
+	 * the empty-string counter: a per-account limit of two refused the third
+	 * account to try, whoever it was. The plugin refused to store such a key
+	 * for that reason. 2.33.2 keeps the case of a POST, cookie or query name,
+	 * and the plugin now stores it as typed.
+	 *
+	 * The control line is what 2.33.1 actually looked up for `post.userName`:
+	 * `post.username`, against a form that posts `userName`. It still shares
+	 * one counter, which is the failure the fix removes.
+	 */
+	public function test_rate_limit_key_keeps_the_case_of_a_field_name(): void {
+		// A file each, so the two limits cannot share a counter by sharing a store.
+		$storage = fn ( string $name ): array => array(
+			'backend' => 'file',
+			'file'    => $this->scratch . '/' . $name . '.data',
+		);
+
+		$firewall = $this->build(
+			array(
+				'rules' => array(
+					$this->rule(
+						'accounts-as-typed',
+						'rate_limit',
+						array(
+							'paths'   => array( '/rl-case 2 60 post.userName' ),
+							'storage' => $storage( 'ratelimit-as-typed' ),
+						)
+					),
+					$this->rule(
+						'accounts-lowered',
+						'rate_limit',
+						array(
+							'paths'   => array( '/rl-lowered 2 60 post.username' ),
+							'storage' => $storage( 'ratelimit-lowered' ),
+						)
+					),
+				),
+			)
+		);
+
+		$typed   = $this->plugin_named( $firewall, 'accounts-as-typed' );
+		$lowered = $this->plugin_named( $firewall, 'accounts-lowered' );
+
+		$this->assertSame( array( 'post.userName' ), ( (array) self::property( $typed, 'config' ) )[0]['key'] ?? null, 'The key lost its case on the way to the library.' );
+		$this->assertSame( array( 'post.userName' ), self::invoke( $typed, 'keyComponents', ( (array) self::property( $typed, 'config' ) )[0] ), 'The library lower-cased the field name: kanopi/firewall 2.33.2 or later is required.' );
+
+		$attempt = static function ( $plugin, string $path, string $account, string $ip ): bool {
+			$request = Request::create( $path, 'POST', array( 'userName' => $account ), array(), array(), array( 'REMOTE_ADDR' => $ip ) );
+
+			return (bool) $plugin->evaluate( $request );
+		};
+
+		$accounts = array(
+			'alice' => '203.0.113.71',
+			'bob'   => '203.0.113.72',
+			'carol' => '203.0.113.73',
+		);
+
+		$as_typed = array();
+		$as_lower = array();
+
+		foreach ( $accounts as $account => $ip ) {
+			$as_typed[] = $attempt( $typed, '/rl-case', $account, $ip );
+			$as_lower[] = $attempt( $lowered, '/rl-lowered', $account, $ip );
+		}
+
+		$this->assertSame( array( false, false, false ), $as_typed, 'Three accounts, one attempt each, under a limit of two: one was refused, so they shared a counter.' );
+		$this->assertSame( array( false, false, true ), $as_lower, 'The lower-cased name 2.33.1 looked up reads nothing and shares one counter.' );
+	}
+
+	/**
 	 * Counters go to the table the plugin means, and to Redis where asked.
 	 *
 	 * The compiler wrote `storage-table`. The library reads `storage_table`, so

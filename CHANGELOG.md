@@ -24,6 +24,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   snippet is present but not evaluating, and prints the snippet when the
   reason is a missing or unreadable autoloader.
 
+### Changed
+
+- **Requires and bundles `kanopi/firewall` 2.33.2** (was ^2.33.1). The release
+  zip bundles 2.33.2, namespace-scoped.
+
 ### Fixed
 
 - **A custom Composer `vendor-dir` left the early path doing nothing** (#26).
@@ -38,6 +43,25 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - The `no-autoloader` reason in Site Health and on the Status screen says how
   to fix it, and both print the snippet beside it rather than a rebuild button
   that cannot help.
+- **A rate limit can count a form field, cookie or query parameter whose name
+  has capitals in it.** Before 2.33.2 the library lower-cased every key
+  component, so `post.userName` read a field called `username`, found nothing,
+  and put every request in one counter; the rule screen refused such a key for
+  that reason. 2.33.2 keeps the case of the name after `post.`, `cookie.` and
+  `query.`, and the plugin now stores and compiles it as typed. The prefix and
+  a header name are still lower-cased, exactly as the library does it, and the
+  refusal and its message are gone.
+
+  **No stored limit changes counter, and there is no upgrade step.** Every
+  path to the library runs the rate limit validator — the rule screen, the
+  importer and the settings service on the way in, and the compiler again on
+  the way out, for anything written straight into the option — which
+  lower-cased every key and refused a capitalised POST, cookie or query name.
+  So every key the library has ever been handed is lower case, and 2.33.2
+  hashes it to exactly the counter it used before. The only difference is that
+  a rule written straight into the option with such a name, which the compiler
+  used to skip and report, now compiles. Check that a field name in a key matches the form's spelling exactly:
+  `post.username` against a form posting `userName` still reads nothing.
 
 ## [1.0.0-rc.1]
 

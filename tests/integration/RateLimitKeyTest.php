@@ -12,6 +12,7 @@ namespace Kanopi\BasicFirewall\Tests\integration;
 use Kanopi\BasicFirewall\Admin\Screen\Rule_Edit_Screen;
 use Kanopi\BasicFirewall\Health\Site_Health;
 use Kanopi\BasicFirewall\Plugin;
+use Symfony\Component\Yaml\Yaml;
 
 /**
  * A rate limit that counts an account, and what it has to be kept beside.
@@ -22,10 +23,11 @@ use Kanopi\BasicFirewall\Plugin;
  * its own it leaves brute force unprotected and the block list empty. The screen
  * says so when it is saved, and Site Health for as long as it stays that way.
  *
- * The refusals pinned here are the keys that would do worse than nothing: a
- * component the library cannot resolve, or a field name it lower-cases out of
- * existence, puts every request in one bucket -- one visitor spending the
- * allowance for the whole site.
+ * The refusal pinned here is the key that would do worse than nothing: a
+ * component the library cannot resolve puts every request in one bucket -- one
+ * visitor spending the allowance for the whole site. A field name keeps the
+ * case it was typed in, because since kanopi/firewall 2.33.2 that is how the
+ * library reads it.
  *
  * @covers \Kanopi\BasicFirewall\RuleType\Types\Rate_Limit
  * @covers \Kanopi\BasicFirewall\Admin\Screen\Rule_Edit_Screen
@@ -93,14 +95,43 @@ final class RateLimitKeyTest extends Settings_Snapshot {
 	}
 
 	/**
-	 * A form field named with capitals is refused.
+	 * A form field named with capitals is stored, and compiled, as typed.
+	 *
+	 * Screen to option to compiled file: the field name after `post.` keeps
+	 * its case, because kanopi/firewall 2.33.2 reads it that way; a header
+	 * name and a prefix are still lower-cased, exactly as the library does, so
+	 * a key that already worked counts into the same counter it always did.
 	 */
-	public function test_a_capitalised_field_name_is_refused(): void {
+	public function test_a_capitalised_field_name_keeps_its_case(): void {
 		$this->given_rules( array() );
 
-		$this->assertFalse( $this->submit( 'accounts', '/my-account 5 300 post.userName' ) );
-		$this->assertSame( array(), $this->stored_rules() );
-		$this->assertStringContainsString( 'capital letters', $this->notices() );
+		$this->assertTrue( $this->submit( 'accounts', '/my-account 5 300 post.userName, header.User-Agent, POST.x' ) );
+
+		$stored = $this->stored_rules();
+		$key    = array( 'post.userName', 'header.user-agent', 'post.x' );
+
+		$this->assertSame( $key, $stored[0]['settings']['paths'][0]['key'] ?? null, 'Stored.' );
+		$this->assertStringNotContainsString( 'capital letters', $this->notices() );
+
+		Plugin::instance()->compiled()->rebuild();
+
+		$compiled = (array) Yaml::parseFile( Plugin::instance()->paths()->compiled_file() );
+		$limits   = array();
+
+		foreach ( (array) ( $compiled['plugins'] ?? array() ) as $rule ) {
+			foreach ( (array) ( $rule['config'] ?? array() ) as $limit ) {
+				if ( is_array( $limit ) && '/my-account' === ( $limit['path'] ?? null ) ) {
+					$limits[] = $limit;
+				}
+			}
+		}
+
+		$this->assertSame( $key, $limits[0]['key'] ?? null, 'Compiled.' );
+
+		$type = Plugin::instance()->rule_types()->get( 'rate_limit' );
+
+		$this->assertNotNull( $type );
+		$this->assertStringContainsString( 'counting post.userName, header.user-agent, post.x', implode( ' ', $type->summarize( $stored[0]['settings'] ) ), 'Listed.' );
 	}
 
 	/**
