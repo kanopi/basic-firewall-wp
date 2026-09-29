@@ -277,7 +277,7 @@ final class Refresher {
 				'name'     => $definition->name,
 				'upstream' => $definition->displayUpstream(),
 				'ttl'      => (string) $cache->ttl( $definition ),
-				'on_error' => $definition->mustAbortOnError() && 'abort' !== $definition->onError ? 'abort (required)' : $definition->onError,
+				'on_error' => $definition->required ? 'abort (required)' : $definition->onError, // phpcs:ignore WordPress.NamingConventions.ValidVariableName.UsedPropertyNotSnakeCase -- the library's property.
 				'cached'   => $cached ? 'yes' : 'no',
 				'entries'  => $cached ? (string) (int) ( $meta['entry_count'] ?? 0 ) : '',
 				'fetched'  => $cached ? $fetched : '',
