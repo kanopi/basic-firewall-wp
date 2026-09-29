@@ -164,6 +164,24 @@ final class Abuse_Ipdb extends Rule_Type_Base {
 
 	/**
 	 * {@inheritDoc}
+	 *
+	 * The key is marked secret so the rule screen never puts it back into the
+	 * page: blank keeps the stored key, and a box beside the field removes it.
+	 * Rendered with its value, it sat in the page source, the browser's form
+	 * cache and every screenshot of the screen.
+	 */
+	public function settings_help(): array {
+		return array(
+			'api_key' => array(
+				'label'       => __( 'AbuseIPDB API key', 'basic-firewall' ),
+				'secret'      => true,
+				'description' => __( 'From your AbuseIPDB account. Every lookup is made with it, and a rejected or exhausted key fails open: the rule matches nothing.', 'basic-firewall' ),
+			),
+		);
+	}
+
+	/**
+	 * {@inheritDoc}
 	 */
 	public function secret_settings(): array {
 		return array( 'api_key' );

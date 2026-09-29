@@ -208,10 +208,12 @@ does not work as well as what does.
 - An import keeps a stored credential the document left out only while the
   host, port, account or URL it belongs with is unchanged; otherwise it is
   blanked and the preview says so. Credentials follow their rule by identifier.
-- A rate limit rule's Redis password and DSN are never rendered into its edit
-  form; blank keeps the stored value and a box removes it. Limits and counter
-  storage have their own controls, so saving the form unchanged stores what was
-  there.
+- A rule's credentials are never rendered into its edit form: a rate limit
+  rule's Redis password and DSN, a geolocation or ASN rule's MaxMind license
+  key, an AbuseIPDB rule's API key, and any setting a contributed rule type
+  declares secret. Blank keeps the stored value and a box removes it. Limits
+  and counter storage have their own controls, so saving the form unchanged
+  stores what was there.
 - The Storage screen and each database log handler on the Logging screen offer
   every way a connection can be given — WordPress's credentials, a DSN or
   individual parameters, and for storage a preset — and render the DSN and

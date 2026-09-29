@@ -377,6 +377,19 @@ final class Rule_Edit_Screen extends Screen {
 	private static function secret_fields( Rule_Type $type ): array {
 		$found = array();
 
+		/*
+		 * A setting the type declares a credential is treated as one whether
+		 * or not its presentation says so. secret_settings() is what the
+		 * exporter strips, and a type -- a contributed one especially -- that
+		 * declares a key there but forgets `secret` in settings_help() would
+		 * otherwise have that key rendered into the page with its value.
+		 * Only the paths this screen renders as a plain field: a wildcard
+		 * path belongs to the list editor, which keeps its own.
+		 */
+		foreach ( self::declared_secret_fields( $type ) as $path => $segments ) {
+			$found[ $path ] = $segments;
+		}
+
 		foreach ( $type->settings_help() as $key => $field ) {
 			if ( ! is_array( $field ) ) {
 				continue;
@@ -390,6 +403,52 @@ final class Rule_Edit_Screen extends Screen {
 				if ( is_array( $child_field ) && ! empty( $child_field['secret'] ) ) {
 					$found[ $key . '.' . $child ] = array( (string) $key, (string) $child );
 				}
+			}
+		}
+
+		return $found;
+	}
+
+	/**
+	 * The declared credentials this screen renders as a single field.
+	 *
+	 * A top-level setting whose default is a scalar other than a boolean, or a
+	 * field of a nested map the type describes field by field -- the two
+	 * shapes render_setting_rows() puts on the page as one control.
+	 *
+	 * @param Rule_Type $type The rule type.
+	 *
+	 * @return array<string, list<string>> Dotted path => its segments.
+	 */
+	private static function declared_secret_fields( Rule_Type $type ): array {
+		$defaults = $type->default_settings();
+		$help     = $type->settings_help();
+		$found    = array();
+
+		foreach ( $type->secret_settings() as $path ) {
+			$path = (string) $path;
+
+			if ( str_contains( $path, '*' ) ) {
+				continue;
+			}
+
+			$segments = explode( '.', $path );
+
+			if ( 1 === count( $segments ) && array_key_exists( $path, $defaults ) && is_scalar( $defaults[ $path ] ) && ! is_bool( $defaults[ $path ] ) ) {
+				$found[ $path ] = $segments;
+
+				continue;
+			}
+
+			if (
+				2 === count( $segments )
+				&& is_array( $defaults[ $segments[0] ] ?? null )
+				&& array_key_exists( $segments[1], $defaults[ $segments[0] ] )
+				&& is_scalar( $defaults[ $segments[0] ][ $segments[1] ] )
+				&& ! is_bool( $defaults[ $segments[0] ][ $segments[1] ] )
+				&& isset( $help[ $segments[0] ]['fields'][ $segments[1] ] )
+			) {
+				$found[ $path ] = $segments;
 			}
 		}
 
@@ -1460,7 +1519,9 @@ final class Rule_Edit_Screen extends Screen {
 			return;
 		}
 
-		if ( ! empty( $field['secret'] ) ) {
+		// A declared credential is never rendered with its value, flagged or
+		// not; see secret_fields(), which reads it back the same way.
+		if ( ! empty( $field['secret'] ) || ( $secret && is_scalar( $initial ) ) ) {
 			$this->render_secret_row( $name, $label, $value, $field, $show_when );
 
 			return;
@@ -1514,16 +1575,6 @@ final class Rule_Edit_Screen extends Screen {
 		}
 
 		$description = wp_kses_post( (string) ( $field['description'] ?? '' ) );
-
-		if ( $secret ) {
-			/*
-			 * Warned at the point the key is typed, not in a readme. A literal
-			 * key here is stored in the options table and travels in a database
-			 * export; a token names a variable instead.
-			 */
-			/* translators: %s: the value described in the sentence. */
-			$description = trim( $description . ' ' . __( 'This is a credential. Prefer a token — <code>%env(MY_VARIABLE)%</code> — over the value itself: a token is exported and backed up safely, and a rotated value is picked up without a rebuild. Exports strip a literal value and say so.', 'basic-firewall' ) );
-		}
 
 		$this->row(
 			$label,

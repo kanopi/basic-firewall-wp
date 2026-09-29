@@ -1071,7 +1071,10 @@ A **Geolocation** rule reads from one of two places, chosen on the rule under
   redistributed, so the plugin never ships one. Give the path to the `.mmdb`
   file: relative resolves inside the private directory, absolute is used as
   given. A path to a file that is not there yet saves with a warning, because the
-  download job may not have run; until it does, the rule matches nothing.
+  download job may not have run; until it does, the rule matches nothing. The
+  MaxMind license key, kept for whatever downloads the database, is typed and
+  never shown, like the AbuseIPDB rule's API key: the field is always empty,
+  blank keeps what is stored, and *Remove the stored value* clears it.
   **The database has to be the right kind.** Geolocation looks every field up —
   country included — in a City database (GeoLite2-City or GeoIP2-City); ASN needs
   GeoLite2-ASN. The reader refuses any other kind on every lookup, so a Country
