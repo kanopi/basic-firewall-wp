@@ -77,6 +77,12 @@
  *         'private_path' => '/absolute/path/to/basic-firewall-private-abc123',
  *     ) );
  *
+ * A site that installed the plugin with Composer and moved its `vendor-dir`
+ * somewhere other than beside the WordPress root adds the autoloader's path,
+ * which the status screens also fill in when they can see it:
+ *
+ *         'autoloader'   => ABSPATH . 'wp-content/mu-plugins/vendor/autoload.php',
+ *
  * Not on a multisite network: see basic_firewall_is_multisite(). There the
  * call returns without evaluating, and the mu-plugin evaluates each site
  * against its own rules.
@@ -207,15 +213,35 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 			return true;
 		}
 
-		$autoload = basic_firewall_autoloader( $options );
+		/*
+		 * `autoloader` -- which autoloader this path used, and where it came
+		 * from, so the status screens can say which file a failure is about.
+		 * A site whose Composer vendor-dir is somewhere this file cannot guess
+		 * names it in the snippet, and a name that does not resolve is worth
+		 * saying out loud; see basic_firewall_resolve_autoloader().
+		 */
+		$autoload = basic_firewall_resolve_autoloader( $options );
 
-		if ( null === $autoload ) {
+		$GLOBALS['basic_firewall_early']['autoloader'] = array(
+			'source' => $autoload['source'],
+			'file'   => $autoload['file'],
+		);
+
+		if ( 'unreadable' === $autoload['source'] ) {
+			$GLOBALS['basic_firewall_early']['reason'] = 'autoloader-unreadable';
+
+			return true;
+		}
+
+		if ( 'none' === $autoload['source'] ) {
 			$GLOBALS['basic_firewall_early']['reason'] = 'no-autoloader';
 
 			return true;
 		}
 
-		require_once $autoload;
+		if ( null !== $autoload['file'] ) {
+			require_once $autoload['file'];
+		}
 
 		$prefix = basic_firewall_library_prefix();
 
@@ -523,6 +549,11 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 			'private_path'       => null,
 			// Absolute path to the plugin directory.
 			'plugin_path'        => __DIR__,
+			// Absolute path to the site's Composer autoloader, for a site
+			// whose vendor-dir is not beside the WordPress root. The plugin's
+			// own vendor/ still wins; see basic_firewall_resolve_autoloader().
+			// BASIC_FIREWALL_AUTOLOADER says the same once per environment.
+			'autoloader'         => null,
 			// Whether to run at all.
 			'enabled'            => ! ( defined( 'BASIC_FIREWALL_ENABLED' ) && false === BASIC_FIREWALL_ENABLED ),
 			// Addresses permitted to declare the client address.
@@ -728,26 +759,123 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 	/**
 	 * Locate the Composer autoloader.
 	 *
+	 * Kept for anything that called it before the resolver existed. It answers
+	 * with the file basic_firewall_resolve_autoloader() would require, or null
+	 * when that would require nothing.
+	 *
 	 * @param array<string, mixed> $options Bootstrap options.
 	 *
 	 * @return string|null
 	 */
 	function basic_firewall_autoloader( array $options ) {
-		$candidates = array(
-			// The release zip, and a plugin-local composer install.
-			$options['plugin_path'] . '/vendor/autoload.php',
-		);
+		$resolved = basic_firewall_resolve_autoloader( basic_firewall_options( $options ) );
+
+		return 'unreadable' === $resolved['source'] ? null : $resolved['file'];
+	}
+
+	/**
+	 * Decide which Composer autoloader this path requires, if any.
+	 *
+	 * In this order, and the order is the point:
+	 *
+	 * 1. `plugin` -- the plugin's own `vendor/autoload.php`. The release zip
+	 *    carries the library there, scoped under this plugin's prefix, and
+	 *    the compiled file it writes names the prefixed classes. It wins over
+	 *    anything a site names, for the reason the scoped copy wins in
+	 *    basic_firewall_library_prefix(): a firewall built from some other
+	 *    copy cannot read its own configuration.
+	 * 2. `option` -- the `autoloader` the snippet passes. A site whose
+	 *    Composer `vendor-dir` is somewhere this file cannot guess -- say
+	 *    `web/wp-content/mu-plugins/vendor` -- says where here.
+	 * 3. `constant` -- BASIC_FIREWALL_AUTOLOADER, for the same thing said once
+	 *    per environment. The option beats it because it is the more local of
+	 *    the two, which is how every other option here treats its constant:
+	 *    trusted_proxies and secret_directories default to theirs, and a
+	 *    value passed in the call replaces it.
+	 * 4. `site` -- the Composer layouts this file can guess: a vendor
+	 *    directory beside the WordPress root, where Bedrock and most
+	 *    `composer create-project` sites keep it.
+	 * 5. `loaded` -- nothing to require, but the library is already loadable,
+	 *    because wp-config.php required the site's autoloader above the
+	 *    snippet. Evaluated with that rather than given up on.
+	 *
+	 * A named autoloader that cannot be read is `unreadable`, and nothing
+	 * after it is tried. Falling through to a guessed location would run the
+	 * firewall from a vendor tree nobody chose -- or, more likely, run it from
+	 * nowhere and report `no-autoloader` about a site that did name one -- and
+	 * a path somebody wrote down being wrong is exactly what the status
+	 * screens should say. `none` is nothing named, nothing found and nothing
+	 * loaded.
+	 *
+	 * @param array<string, mixed> $options Bootstrap options.
+	 *
+	 * @return array{source: string, file: string|null}
+	 */
+	function basic_firewall_resolve_autoloader( array $options ) {
+		$own = rtrim( (string) $options['plugin_path'], '/' ) . '/vendor/autoload.php';
+
+		if ( is_readable( $own ) ) {
+			return array(
+				'source' => 'plugin',
+				'file'   => $own,
+			);
+		}
+
+		$named = basic_firewall_named_autoloader( $options );
+
+		if ( null !== $named ) {
+			return array(
+				'source' => is_readable( $named['file'] ) ? $named['source'] : 'unreadable',
+				'file'   => $named['file'],
+			);
+		}
 
 		// A site-level Composer install, where the plugin is a dependency.
 		if ( defined( 'ABSPATH' ) ) {
-			$candidates[] = dirname( ABSPATH, 1 ) . '/vendor/autoload.php';
-			$candidates[] = ABSPATH . '../vendor/autoload.php';
+			foreach ( array( dirname( ABSPATH, 1 ) . '/vendor/autoload.php', ABSPATH . '../vendor/autoload.php' ) as $candidate ) {
+				if ( is_readable( $candidate ) ) {
+					return array(
+						'source' => 'site',
+						'file'   => $candidate,
+					);
+				}
+			}
 		}
 
-		foreach ( $candidates as $candidate ) {
-			if ( is_readable( $candidate ) ) {
-				return $candidate;
-			}
+		return array(
+			'source' => null === basic_firewall_library_prefix() ? 'none' : 'loaded',
+			'file'   => null,
+		);
+	}
+
+	/**
+	 * The autoloader the site named, and how it named it, or null for none.
+	 *
+	 * An empty or non-string value is not a name: a snippet passing
+	 * `'autoloader' => ''` does not hide a constant, and a constant defined
+	 * as something other than a path is treated as not defined.
+	 *
+	 * @param array<string, mixed> $options Bootstrap options.
+	 *
+	 * @return array{source: string, file: string}|null
+	 */
+	function basic_firewall_named_autoloader( array $options ) {
+		$option = $options['autoloader'] ?? null;
+
+		if ( is_string( $option ) && '' !== trim( $option ) ) {
+			return array(
+				'source' => 'option',
+				'file'   => trim( $option ),
+			);
+		}
+
+		$constant = defined( 'BASIC_FIREWALL_AUTOLOADER' ) ? constant( 'BASIC_FIREWALL_AUTOLOADER' ) : null;
+
+		if ( is_string( $constant ) && '' !== trim( $constant ) ) {
+			return array(
+				'source' => 'constant',
+				'file'   => trim( $constant ),
+			);
 		}
 
 		return null;
