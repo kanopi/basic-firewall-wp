@@ -1027,6 +1027,25 @@ final class Config_Compiler {
 				}
 			}
 
+			/*
+			 * A MaxMind database of the wrong type is reported the same way.
+			 * The reader throws on every lookup and the library swallows it,
+			 * so the rule matches nothing while loading cleanly -- which is
+			 * exactly what the Status screen and Site Health are for.
+			 */
+			if ( method_exists( $type, 'reader_database_problem' ) ) {
+				$mismatch = $type->reader_database_problem( (array) ( $rule['settings'] ?? array() ) );
+
+				if ( is_string( $mismatch ) ) {
+					$this->problems[] = sprintf(
+						/* translators: 1: rule identifier, 2: what is wrong with its database. */
+						__( 'Rule "%1$s": %2$s', 'basic-firewall' ),
+						(string) ( $rule['id'] ?? '?' ),
+						$mismatch
+					);
+				}
+			}
+
 			$compiled[] = $type->compile( $rule );
 		}
 

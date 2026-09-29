@@ -1060,6 +1060,12 @@ A **Geolocation** rule reads from one of two places, chosen on the rule under
   file: relative resolves inside the private directory, absolute is used as
   given. A path to a file that is not there yet saves with a warning, because the
   download job may not have run; until it does, the rule matches nothing.
+  **The database has to be the right kind.** Geolocation looks every field up —
+  country included — in a City database (GeoLite2-City or GeoIP2-City); ASN needs
+  GeoLite2-ASN. The reader refuses any other kind on every lookup, so a Country
+  database behind a geolocation rule would match nobody. The database's own type
+  is checked, and the wrong one is reported on the rule, on the Status screen and
+  in Site Health.
 - **The lookup your CDN already did**, read from a request header. Nothing to
   license and no lookup cost — but a geo header is a claim, not a fact. Anything
   that can reach the site directly can send `CF-IPCountry: US`, so the firewall

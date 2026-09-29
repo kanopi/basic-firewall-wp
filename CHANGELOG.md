@@ -34,6 +34,10 @@ does not work as well as what does.
     address. That catches a botnet against one account, misses one client
     walking a list of usernames, and never bans — so the screen and Site Health
     warn when one has no address-keyed limit beside it.
+  - A geolocation or ASN rule checks the type of the MaxMind database it is
+    given — City for geolocation, GeoLite2-ASN for ASN — and a database of the
+    wrong kind, which the reader refuses on every lookup, is reported on the
+    rule, on the Status screen and in Site Health.
   - The edge signal type matches what the CDN worked out that the site cannot:
     a JA3 or JA4 TLS fingerprint, or the bot score, from Cloudflare, Fastly or a
     custom CDN. Believed only behind a trusted proxy.

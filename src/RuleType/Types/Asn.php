@@ -200,6 +200,13 @@ final class Asn extends Condition_Rule_Type_Base {
 
 	/**
 	 * {@inheritDoc}
+	 */
+	protected function reader_lookup(): string {
+		return 'asn';
+	}
+
+	/**
+	 * {@inheritDoc}
 	 *
 	 * Along with the referenced lists' credentials, which the parent names.
 	 */
