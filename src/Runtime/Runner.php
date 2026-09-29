@@ -196,8 +196,14 @@ final class Runner {
 		 * Request, for the application downstream to act on. WordPress has no
 		 * idea that object exists -- so without this, `mark` is a response type
 		 * the rule screen offers and nothing on the site can ever observe.
+		 *
+		 * Through Request_Factory, as the wp-config.php path does, so that a
+		 * directly requested file -- wp-login.php, a wp-admin screen -- is
+		 * matched, counted and logged on its own path rather than on `/`. That
+		 * includes a logged-in request deferred to `plugins_loaded`, which is
+		 * evaluated here.
 		 */
-		$request = $request ?? Request::createFromGlobals();
+		$request = $request ?? Request_Factory::from_globals();
 
 		try {
 			$allowed = $firewall->evaluate( $request );
