@@ -286,6 +286,8 @@ final class RuleTypesHonouredTest extends Honoured_Settings {
 						'url'      => 'https://example.com/list-' . $index . '.' . ( '' === $format ? 'txt' : $format ),
 						'format'   => $format,
 						'variable' => 'ip_address' === $type ? '' : $this->source_variable( $type ),
+						// An ASN list compared by number compiles to a guarded pattern; it has to construct too.
+						'operator' => 'asn' === $type ? 'equals' : 'contains',
 					)
 				);
 			}

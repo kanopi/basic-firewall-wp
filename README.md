@@ -888,6 +888,18 @@ identical code, including negation and the operator names this plugin uses. Set
 **Template** by hand if you want something the two selects cannot express, such
 as an AND group; it wins over the selects.
 
+**A list of autonomous system numbers** compared with *is equal to*, *is one of*
+or *is not equal to* is matched number by number: each entry becomes the pattern
+`^16509$` run against the visitor's number, because the library compares a
+number strictly and a text list's entries are strings — compared as written,
+such a list would match nothing. **Write each entry as digits alone.** An entry
+is admitted into that pattern only if it is nothing but digits, so a published
+list cannot smuggle in `.*`; the cost is that an entry written `AS16509` is
+skipped rather than matched, since the prefix cannot be taken off an entry the
+library fills in after the rule is compiled. The rule screen says so beside the
+list. A JSON list of integers works as it is, and for names use *contains* on
+`asn_org`.
+
 One difference from the IP rule is worth knowing: **a relative file reference is
 resolved to an absolute path at compile time.** The library resolves
 `storage.config.*` and log paths against the directory holding the config file,

@@ -34,6 +34,10 @@ does not work as well as what does.
     address. That catches a botnet against one account, misses one client
     walking a list of usernames, and never bans — so the screen and Site Health
     warn when one has no address-keyed limit beside it.
+  - An ASN rule's referenced list of numbers matches with *is equal to*, *is
+    one of* and *is not equal to*, each entry compared as a whole number. An
+    entry has to be digits alone to be used; one written `AS16509` is skipped,
+    and the rule screen says so.
   - A geolocation or ASN rule checks the type of the MaxMind database it is
     given — City for geolocation, GeoLite2-ASN for ASN — and a database of the
     wrong kind, which the reader refuses on every lookup, is reported on the

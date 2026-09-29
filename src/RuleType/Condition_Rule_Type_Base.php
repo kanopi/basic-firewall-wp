@@ -482,6 +482,16 @@ abstract class Condition_Rule_Type_Base extends Rule_Type_Base {
 	}
 
 	/**
+	 * Anything particular to this type about matching a list's entries.
+	 *
+	 * Shown under "Match each entry against" on the rule screen. Empty when
+	 * there is nothing beyond what that row already says.
+	 */
+	public function source_note(): string {
+		return '';
+	}
+
+	/**
 	 * Turn one referenced entry into a condition.
 	 *
 	 * Built as a structured map rather than the `variable@operator:{value}`

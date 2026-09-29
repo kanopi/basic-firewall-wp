@@ -1127,7 +1127,10 @@ final class Rule_Edit_Screen extends Screen {
 				. ' ' . self::select( $name( 'operator' ), Condition_Rule_Type_Base::OPERATORS, (string) $source['operator'] )
 				. ' ' . self::checkbox( $name( 'negate' ), ! empty( $source['negate'] ), __( 'Invert', 'basic-firewall' ) ),
 				wp_kses_post(
-					__( 'Each line of the list becomes one condition. A list of crawler names matched with <strong>user agent header</strong> and <strong>contains</strong> is the usual arrangement — and the reason a list is worth referencing at all, since the names change weekly and the rule does not.', 'basic-firewall' )
+					trim(
+						__( 'Each line of the list becomes one condition. A list of crawler names matched with <strong>user agent header</strong> and <strong>contains</strong> is the usual arrangement — and the reason a list is worth referencing at all, since the names change weekly and the rule does not.', 'basic-firewall' )
+						. ' ' . esc_html( $type->source_note() )
+					)
 				)
 			);
 		}

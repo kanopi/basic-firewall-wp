@@ -568,9 +568,40 @@ trait Has_Sources {
 
 			// Everything the form has no field for: where, header_row,
 			// delimiter, comment, a nested template map.
-			$compiled[] = array_merge( $entry, $advanced );
+			$entry = array_merge( $entry, $advanced );
+
+			/*
+			 * Records the type's template needs to be able to trust, added to
+			 * whatever `where` the advanced block declared. The library ANDs a
+			 * `where` list, so this only ever narrows what the list contributes.
+			 */
+			$guard = $this->source_record_guard( $source );
+
+			if ( array() !== $guard ) {
+				$where          = $entry['where'] ?? array();
+				$entry['where'] = array_merge( is_array( $where ) && array_is_list( $where ) ? $where : array( $where ), $guard );
+			}
+
+			$compiled[] = $entry;
 		}
 
 		return $compiled;
+	}
+
+	/**
+	 * Conditions every record of a list must meet before the template sees it.
+	 *
+	 * None by default. A type whose template puts the record somewhere it
+	 * would be read as more than a value -- inside a regular expression, say
+	 * -- declares here what a record has to look like.
+	 *
+	 * @param array<string, mixed> $source The referenced list, with defaults.
+	 *
+	 * @return list<array<string, mixed>> Structured conditions on the record, read as `value`.
+	 */
+	protected function source_record_guard( array $source ): array {
+		unset( $source );
+
+		return array();
 	}
 }
