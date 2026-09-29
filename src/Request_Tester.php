@@ -12,10 +12,13 @@ namespace Kanopi\BasicFirewall;
 use Kanopi\BasicFirewall\Cache\Cache_Backend;
 use Kanopi\BasicFirewall\Compiler\Library_Map;
 use Kanopi\BasicFirewall\Logging\Log_Reader;
+use Kanopi\BasicFirewall\Logging\Redaction;
 use Kanopi\Firewall\Exception\ChallengeRequiredException;
 use Kanopi\Firewall\Exception\FirewallBlockedException;
 use Kanopi\Firewall\Exception\FirewallRedirectException;
 use Kanopi\Firewall\Firewall;
+use Kanopi\Firewall\Plugins\RateLimit;
+use Kanopi\Firewall\Utility\Config;
 use Monolog\Handler\TestHandler;
 use Monolog\Level;
 use Symfony\Component\HttpFoundation\Request;
@@ -36,7 +39,7 @@ use Symfony\Component\HttpFoundation\Request;
  * | Mode becomes `exception`       | Blocking mode writes a response and calls exit(), which would take the admin page down with it |
  * | The panic file is ignored      | It is applied over the mode above, so `block` in it would end the admin page too -- and the question here is what the rules decide, not what an incident has them doing |
  * | Storage becomes in-memory      | Otherwise the tested address is blocked for real and gains an offense |
- * | Rate limit counters in-memory  | Otherwise a test spends a real visitor's request budget |
+ * | Rate limit counters in-memory  | Otherwise a test spends a real visitor's request budget, and enough tests limit them for real |
  * | Log handlers are replaced      | The run's records go to the screen, not into your firewall log |
  *
  * Rules are evaluated whether or not the firewall is currently enabled, which
@@ -60,8 +63,12 @@ final class Request_Tester {
 
 		$capture = new TestHandler( Level::Debug );
 
+		// The run's log is shown on screen, which is somewhere else a session
+		// token should not appear.
+		Redaction::apply( (array) Plugin::instance()->settings()->get( 'logging.redact_extra', array() ) );
+
 		try {
-			$firewall = Firewall::create( array( $compiled ), $this->overrides( $capture ) );
+			$firewall = Firewall::create( array( $compiled ), $this->overrides( $capture, $compiled ) );
 		} catch ( \Throwable $e ) {
 			return $this->failure(
 				sprintf(
@@ -236,11 +243,12 @@ final class Request_Tester {
 	/**
 	 * The overrides that make a test leave no trace.
 	 *
-	 * @param TestHandler $capture Collects the run's log records.
+	 * @param TestHandler $capture  Collects the run's log records.
+	 * @param string      $compiled The compiled file the run evaluates against.
 	 *
 	 * @return array<string, mixed>
 	 */
-	private function overrides( TestHandler $capture ): array {
+	private function overrides( TestHandler $capture, string $compiled ): array {
 		$overrides = array(
 			// Throw rather than respond-and-exit, which would end the admin page.
 			'[global][mode]'       => 'exception',
@@ -253,6 +261,8 @@ final class Request_Tester {
 			'[logger]'             => array( array( 'class' => $capture ) ),
 		);
 
+		$overrides += self::rate_limit_overrides( $compiled );
+
 		/*
 		 * And the caches, aimed wherever the site chose. Without this a test
 		 * falls back to the library's filesystem pool and writes a second copy
@@ -260,6 +270,59 @@ final class Request_Tester {
 		 * precisely to avoid that.
 		 */
 		return $overrides + Cache_Backend::overrides();
+	}
+
+	/**
+	 * Point every rate limit's counters at memory for the run.
+	 *
+	 * A rate limit keeps its counters in its own storage, not the block list's,
+	 * so overriding `[storage]` left them alone: each test of a rate-limited
+	 * path spent a request of the real client's allowance, in the real file,
+	 * table or Redis. Test an address a few times and it was limited for real
+	 * -- exactly the side effect this class exists to rule out.
+	 *
+	 * The indices come from the configuration the library will actually load,
+	 * presets included, because a preset's rate limit counts as much as one
+	 * of ours and its plugins are appended after them. Loading it here costs a
+	 * read of the parse cache the firewall is about to read anyway.
+	 *
+	 * Every rate limit, whatever configured it, including one with no storage
+	 * of its own: the library's default for that is a file.
+	 *
+	 * @param string $compiled The compiled file.
+	 *
+	 * @return array<string, mixed>
+	 */
+	public static function rate_limit_overrides( string $compiled ): array {
+		try {
+			/*
+			 * The same list Firewall::create() loads, the library's defaults
+			 * first, so the indices are the ones the overrides will land on and
+			 * the parse cache entry is the one it is about to use.
+			 */
+			$defaults = dirname( (string) ( new \ReflectionClass( Firewall::class ) )->getFileName() ) . '/../config/config.yml';
+			$config   = Config::load( array( $defaults, $compiled ) );
+		} catch ( \Throwable $e ) {
+			// Firewall::create() will fail on the same file and say why.
+			return array();
+		}
+
+		$overrides = array();
+
+		foreach ( (array) ( $config['plugins'] ?? array() ) as $delta => $plugin ) {
+			$class = is_array( $plugin ) ? ltrim( (string) ( $plugin['plugin'] ?? '' ), '\\' ) : '';
+
+			if ( '' === $class || ! is_a( $class, RateLimit::class, true ) ) {
+				continue;
+			}
+
+			$overrides[ sprintf( '[plugins][%s][metadata][storage]', $delta ) ] = array(
+				'type'   => Library_Map::RATE_LIMIT_STORAGE['memory'],
+				'config' => array(),
+			);
+		}
+
+		return $overrides;
 	}
 
 	/**

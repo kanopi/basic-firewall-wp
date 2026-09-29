@@ -154,8 +154,6 @@ final class Logging_Screen extends Screen {
 		$settings = $this->plugin()->settings();
 		$all      = $settings->all();
 
-		$all['logging']['to_wordpress'] = '' !== $this->posted( 'to_wordpress' );
-		$all['logging']['wp_level']     = $this->posted( 'wp_level', 'warning' );
 		$all['logging']['redact_extra'] = array_values(
 			array_filter(
 				array_map( 'trim', self::split_lines( $this->posted_textarea( 'redact_extra' ) ) )
@@ -279,26 +277,24 @@ final class Logging_Screen extends Screen {
 			esc_html__( '+ Add handler', 'basic-firewall' )
 		);
 
-		printf( '<h2>%s</h2>', esc_html__( 'Cross-cutting', 'basic-firewall' ) );
+		/*
+		 * Where "send events to WordPress" used to be. WordPress has no log
+		 * to send them to, and nothing ever did; the actions are what a site
+		 * wanting firewall events inside WordPress actually has.
+		 */
+		printf(
+			'<p class="description" style="max-width:48rem">%s</p>',
+			wp_kses_post( __( 'WordPress has no log of its own for these to go to. Every decision is also announced as the <code>basic_firewall_decision</code> action, so an activity log plugin — or a few lines of your own — can record them inside WordPress.', 'basic-firewall' ) )
+		);
+
+		printf( '<h2>%s</h2>', esc_html__( 'Redaction', 'basic-firewall' ) );
 
 		echo '<table class="form-table" role="presentation"><tbody>';
 
 		$this->row(
-			__( 'Also send events to WordPress', 'basic-firewall' ),
-			self::checkbox( 'to_wordpress', (bool) $settings->get( 'logging.to_wordpress', false ), __( 'Forward firewall events to WordPress', 'basic-firewall' ) ),
-			__( 'Applies to the normal evaluation path only — the wp-config.php path runs too early for WordPress to exist. Removing every handler is allowed and is not the same as logging nothing, but only events from requests rejected before WordPress boots are lost, and those are the ones a file handler exists to catch.', 'basic-firewall' )
-		);
-
-		$this->row(
-			__( 'Minimum level forwarded', 'basic-firewall' ),
-			self::select( 'wp_level', $levels, (string) $settings->get( 'logging.wp_level', 'warning' ) ),
-			__( 'Keep this at warning or above. Debug forwards a row per request.', 'basic-firewall' )
-		);
-
-		$this->row(
 			__( 'Additional variables to redact', 'basic-firewall' ),
 			self::textarea( 'redact_extra', implode( "\n", (array) $settings->get( 'logging.redact_extra', array() ) ), 4 ),
-			__( 'At debug level the firewall records the value a condition matched, so a rule inspecting a header or cookie would write session tokens into the log. A sensible set is redacted already — the <code>cookie</code>, <code>authorization</code>, <code>x-api-key</code>, <code>x-auth-token</code> and <code>x-csrf-token</code> headers, plus every individual cookie. Add your own by name, one per line, with a trailing <code>.*</code> for a prefix. Redaction affects the log only: evaluation always sees the real value, so it can never change whether a request is blocked.', 'basic-firewall' )
+			__( 'At debug level the firewall records the value a condition matched, so a rule inspecting a header or cookie would write session tokens into the log. A sensible set is redacted already — the <code>cookie</code>, <code>authorization</code>, <code>x-api-key</code>, <code>x-auth-token</code> and <code>x-csrf-token</code> headers, plus every individual cookie. Add your own the way the firewall names them — <code>header.x-session-id</code>, <code>query.token</code> — one per line, with a trailing <code>.*</code> for a prefix, such as <code>query.*</code>. They are added to that set, never in place of it, and apply on both evaluation paths. Redaction affects the log only: evaluation always sees the real value, so it can never change whether a request is blocked.', 'basic-firewall' )
 		);
 
 		echo '</tbody></table>';

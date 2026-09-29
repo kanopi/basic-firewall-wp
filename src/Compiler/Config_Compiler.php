@@ -12,6 +12,7 @@ namespace Kanopi\BasicFirewall\Compiler;
 use Kanopi\BasicFirewall\Cache\Cache_Backend;
 use Kanopi\BasicFirewall\Database_Credentials;
 use Kanopi\BasicFirewall\Library_Capabilities;
+use Kanopi\BasicFirewall\Logging\Redaction;
 use Kanopi\BasicFirewall\Install\Challenge_Secret;
 use Kanopi\BasicFirewall\Plugin;
 use Kanopi\BasicFirewall\RuleType\Condition_Rule_Type_Base;
@@ -21,6 +22,7 @@ use Kanopi\BasicFirewall\RuleType\Rule_Type_Base;
 use Kanopi\BasicFirewall\RuleType\Types\Edge_Signal;
 use Kanopi\BasicFirewall\RuleType\Types\User_Agent;
 use Kanopi\BasicFirewall\Runtime\Lockdown;
+use Kanopi\BasicFirewall\Runtime\Role_Bypass;
 use Kanopi\BasicFirewall\Support\Schema;
 use Kanopi\Firewall\Utility\Schedule;
 use Symfony\Component\Yaml\Yaml;
@@ -45,6 +47,21 @@ use Symfony\Component\Yaml\Yaml;
  * that is a requirement rather than a nicety.
  */
 final class Config_Compiler {
+
+	/**
+	 * The runtime sidecar's contents when nothing in it differs from a default.
+	 *
+	 * The bootstrap assumes exactly this when the sidecar is absent, which is
+	 * why the file is not written at all in that case. runtime() returns its
+	 * keys in this order, so the two compare strictly.
+	 *
+	 * @var array<string, mixed>
+	 */
+	public const RUNTIME_DEFAULTS = array(
+		'enabled'     => true,
+		'redact'      => array(),
+		'defer_login' => false,
+	);
 
 	/**
 	 * Paths in the compiled array where live credentials must be injected.
@@ -158,7 +175,71 @@ final class Config_Compiler {
 			$compiled['challenge'] = $this->compile_challenge( $challenge, $rules );
 		}
 
-		return $this->apply_advanced_yaml( $compiled, (string) $settings->get( 'advanced_yaml', '' ) );
+		$compiled = $this->apply_advanced_yaml( $compiled, (string) $settings->get( 'advanced_yaml', '' ) );
+
+		return $this->apply_enabled( $compiled, (bool) $settings->get( 'enabled', true ) );
+	}
+
+	/**
+	 * Compile "Enable the firewall" unticked as a firewall that evaluates nothing.
+	 *
+	 * The runner checks the setting before it calls the library, but the
+	 * wp-config.php path cannot: it runs before there are options to read, and
+	 * the compiled file is all it has. Leaving the setting out of the file
+	 * meant a site switched off in the admin went on being enforced on every
+	 * request that path answered -- which, on a site with a page cache, is most
+	 * of them.
+	 *
+	 * So it is written twice. Here, as `mode: disabled` with the panic file
+	 * dropped, so the file on its own says "evaluate nothing" to anything that
+	 * reads it; and in the runtime sidecar, which the bootstrap reads before it
+	 * builds a firewall at all, so a mode pinned by BASIC_FIREWALL_MODE does not
+	 * switch back on a firewall somebody switched off. Last, after the advanced
+	 * YAML, so a `mode:` typed there cannot undo it either.
+	 *
+	 * @param array<string, mixed> $compiled The compiled configuration.
+	 * @param bool                 $enabled  Whether the firewall is enabled.
+	 *
+	 * @return array<string, mixed>
+	 */
+	private function apply_enabled( array $compiled, bool $enabled ): array {
+		if ( $enabled ) {
+			return $compiled;
+		}
+
+		$global = is_array( $compiled['global'] ?? null ) ? $compiled['global'] : array();
+
+		$global['mode'] = 'disabled';
+		unset( $global['panic_file'] );
+
+		$compiled['global'] = $global;
+
+		return $compiled;
+	}
+
+	/**
+	 * What the wp-config.php path needs to know that the compiled file cannot say.
+	 *
+	 * The library's configuration has no key for these, and that path has no
+	 * options to read them from, so they travel in a sidecar beside the
+	 * compiled file -- see Compiled_Config_Cache::write_runtime(). Nothing here
+	 * is a secret.
+	 *
+	 * @return array<string, mixed>
+	 */
+	public function runtime(): array {
+		$settings = Plugin::instance()->settings();
+
+		return array(
+			'enabled'     => (bool) $settings->get( 'enabled', true ),
+
+			// Names the log redacts as well as the library's own; see Redaction.
+			'redact'      => Redaction::clean( (array) $settings->get( 'logging.redact_extra', array() ) ),
+
+			// A role is exempt, so a request carrying a login cookie is left
+			// for the runner, which can validate it; see Role_Bypass.
+			'defer_login' => array() !== Role_Bypass::clean( (array) $settings->get( 'global.bypass_roles', array() ) ),
+		);
 	}
 
 	/**

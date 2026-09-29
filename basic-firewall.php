@@ -168,15 +168,17 @@ function basic_firewall_activate() {
 /**
  * Deactivation entry point.
  *
+ * @param bool $network_wide Whether the plugin is being network-deactivated.
+ *
  * @return void
  */
-function basic_firewall_deactivate() {
+function basic_firewall_deactivate( $network_wide = false ) {
 	if ( ! basic_firewall_php_is_supported() ) {
 		return;
 	}
 
 	require_once BASIC_FIREWALL_DIR . 'loader.php';
-	call_user_func( array( 'Kanopi\\BasicFirewall\\Install\\Activator', 'deactivate' ) );
+	call_user_func( array( 'Kanopi\\BasicFirewall\\Install\\Activator', 'deactivate' ), (bool) $network_wide );
 }
 
 basic_firewall_boot();

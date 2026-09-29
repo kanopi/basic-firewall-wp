@@ -464,6 +464,77 @@ final class HttpEvaluationTest extends TestCase {
 	}
 
 	/**
+	 * A member of an exempt role is let through, and nobody else is.
+	 *
+	 * Over HTTP because the whole point is where each request is decided: a
+	 * login cookie is left unevaluated by the wp-config.php path (when the
+	 * site has the snippet) and by the mu-plugin at muplugins_loaded, and the
+	 * runner validates it at plugins_loaded. A forged cookie must come out of
+	 * that the same as no cookie at all.
+	 */
+	public function test_an_exempt_role_is_not_evaluated_and_a_forged_cookie_is(): void {
+		require_once ABSPATH . 'wp-admin/includes/user.php';
+
+		$this->given_rules(
+			array(
+				array(
+					'id'       => 'e2e_bypass',
+					'type'     => 'url',
+					'label'    => 'End-to-end role bypass',
+					'enabled'  => true,
+					'response' => 'block',
+					'weight'   => 0,
+					// Nobody is written to the block list, so one request's
+					// refusal is not the next request's answer.
+					'record'   => 'no',
+					'settings' => array(
+						'match_type' => 'any',
+						'conditions' => array(
+							array(
+								'variable' => 'path',
+								'operator' => 'equals',
+								'value'    => '/bfw-e2e-bypass',
+							),
+						),
+					),
+				),
+			)
+		);
+
+		Plugin::instance()->settings()->set( 'global.bypass_roles', array( 'editor' ) );
+
+		$editor     = wp_insert_user(
+			array(
+				'user_login' => 'bfw-e2e-editor-' . wp_generate_password( 6, false ),
+				'user_pass'  => wp_generate_password(),
+				'role'       => 'editor',
+			)
+		);
+		$subscriber = wp_insert_user(
+			array(
+				'user_login' => 'bfw-e2e-subscriber-' . wp_generate_password( 6, false ),
+				'user_pass'  => wp_generate_password(),
+				'role'       => 'subscriber',
+			)
+		);
+
+		$this->assertIsInt( $editor );
+		$this->assertIsInt( $subscriber );
+
+		$as = static fn ( string $value ): array => array( 'Cookie' => LOGGED_IN_COOKIE . '=' . rawurlencode( $value ) );
+
+		try {
+			$this->assertSame( 403, $this->request( '/bfw-e2e-bypass' )['status'], 'The rule does not refuse anybody, so this test proves nothing.' );
+			$this->assertNotSame( 403, $this->request( '/bfw-e2e-bypass', $as( wp_generate_auth_cookie( $editor, time() + 600, 'logged_in' ) ) )['status'], 'A member of an exempt role was refused.' );
+			$this->assertSame( 403, $this->request( '/bfw-e2e-bypass', $as( wp_generate_auth_cookie( $subscriber, time() + 600, 'logged_in' ) ) )['status'], 'A member of a role that is not exempt went unevaluated.' );
+			$this->assertSame( 403, $this->request( '/bfw-e2e-bypass', $as( 'admin|' . ( time() + 600 ) . '|forged|forged' ) )['status'], 'A forged login cookie went unevaluated.' );
+		} finally {
+			wp_delete_user( $editor );
+			wp_delete_user( $subscriber );
+		}
+	}
+
+	/**
 	 * A rate limit rejects once the allowance is spent, and not before.
 	 *
 	 * Worth doing over HTTP specifically: the request tester cannot exercise a

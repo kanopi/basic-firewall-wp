@@ -19,6 +19,15 @@
 
 $basic_firewall_plugin = (string) getenv( 'BFW_EARLY_PLUGIN_PATH' );
 
+/*
+ * A network's wp-config.php defines these above the snippet. A request header
+ * stands in for that here, so one server can play both kinds of site.
+ */
+if ( isset( $_SERVER['HTTP_X_BFW_TEST_NETWORK'] ) ) {
+	define( 'MULTISITE', true ); // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals -- WordPress's own constant, as a network's wp-config.php defines it.
+	define( 'SUBDOMAIN_INSTALL', false ); // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals -- as above.
+}
+
 require_once $basic_firewall_plugin . '/bootstrap.php';
 
 basic_firewall_evaluate(
@@ -31,5 +40,7 @@ basic_firewall_evaluate(
 // What the bootstrap left for the runner, for a test to assert on.
 header( 'X-Early-Stashed: ' . ( empty( $GLOBALS['basic_firewall_outcome'] ) ? 'no' : 'yes' ) );
 header( 'X-Early-Outcome: ' . (string) ( $GLOBALS['basic_firewall_early']['outcome'] ?? 'none' ) );
+header( 'X-Early-Reason: ' . (string) ( $GLOBALS['basic_firewall_early']['reason'] ?? 'none' ) );
+header( 'X-Early-Evaluated: ' . ( empty( $GLOBALS['basic_firewall_early']['evaluated'] ) ? 'no' : 'yes' ) );
 
 echo 'SERVED BY WORDPRESS';

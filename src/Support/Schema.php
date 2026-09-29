@@ -53,7 +53,7 @@ final class Schema {
 	/**
 	 * Current schema version. Bumped whenever an upgrade routine is added.
 	 */
-	public const VERSION = 7;
+	public const VERSION = 8;
 
 	/**
 	 * The full settings tree.
@@ -868,17 +868,6 @@ final class Schema {
 						'type'    => 'string',
 						'default' => '',
 					),
-				),
-				'to_wordpress' => array(
-					'type'    => 'bool',
-					'label'   => 'Also send firewall events to WordPress',
-					'default' => false,
-				),
-				'wp_level'     => array(
-					'type'    => 'string',
-					'label'   => 'Minimum severity forwarded to WordPress',
-					'default' => 'warning',
-					'choices' => array( 'debug', 'info', 'notice', 'warning', 'error', 'critical', 'alert', 'emergency' ),
 				),
 			),
 		);

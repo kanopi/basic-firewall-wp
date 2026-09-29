@@ -95,6 +95,31 @@ final class LifecycleTest extends TestCase {
 	}
 
 	/**
+	 * Deactivating removes the runtime on a single site, and keeps settings.
+	 *
+	 * On a network the loader is left while another site still runs the
+	 * plugin; on a single site there is no other site, so it goes. The
+	 * harness puts the loader and the compiled file back.
+	 */
+	public function test_deactivation_removes_the_runtime_on_a_single_site(): void {
+		if ( is_multisite() ) {
+			$this->markTestSkipped( 'A single-site assertion.' );
+		}
+
+		if ( ! file_exists( WPMU_PLUGIN_DIR . '/basic-firewall-loader.php' ) ) {
+			$this->markTestSkipped( 'The loader is not installed on this site, so there is nothing to remove.' );
+		}
+
+		$settings = get_option( Schema::OPTION );
+
+		Activator::deactivate();
+
+		$this->assertFileDoesNotExist( WPMU_PLUGIN_DIR . '/basic-firewall-loader.php', 'Deactivating on a single site left the loader evaluating requests.' );
+		$this->assertFileDoesNotExist( Plugin::instance()->paths()->compiled_file() );
+		$this->assertSame( $settings, get_option( Schema::OPTION ), 'Deactivating touched the settings.' );
+	}
+
+	/**
 	 * The wp-config.php snippet gets a check of its own.
 	 *
 	 * Separate from the evaluation point on purpose: that test folds the
@@ -294,5 +319,42 @@ final class LifecycleTest extends TestCase {
 
 		$this->assertSame( Schema::VERSION, (int) get_option( Schema::VERSION_OPTION ) );
 		$this->assertNull( Upgrader::failure() );
+	}
+
+	/**
+	 * The "send events to WordPress" settings are gone, from the option too.
+	 *
+	 * Nothing ever forwarded anything. Routine 8 rewrites the option, and
+	 * the settings service drops the keys wherever a document is read or
+	 * written, so an old export cannot bring them back.
+	 */
+	public function test_retired_logging_settings_are_dropped(): void {
+		$document                            = (array) get_option( Schema::OPTION, Schema::defaults() );
+		$document['logging']                 = (array) ( $document['logging'] ?? array() );
+		$document['logging']['to_wordpress'] = true;
+		$document['logging']['wp_level']     = 'error';
+		$document['logging']['redact_extra'] = array( 'header.x-kept' );
+
+		update_option( Schema::OPTION, $document, false );
+		update_option( Schema::VERSION_OPTION, 7, false );
+		Plugin::instance()->settings()->flush();
+
+		$this->assertArrayNotHasKey( 'to_wordpress', Plugin::instance()->settings()->get( 'logging' ), 'A retired setting is still read, and so still exported.' );
+
+		Upgrader::maybe_upgrade();
+
+		$stored = (array) get_option( Schema::OPTION );
+
+		$this->assertSame( Schema::VERSION, (int) get_option( Schema::VERSION_OPTION ) );
+		$this->assertArrayNotHasKey( 'to_wordpress', (array) $stored['logging'], 'The upgrade left the retired setting in the option.' );
+		$this->assertArrayNotHasKey( 'wp_level', (array) $stored['logging'] );
+		$this->assertSame( array( 'header.x-kept' ), $stored['logging']['redact_extra'], 'The upgrade took a live setting with it.' );
+
+		// And a document carrying them, as an old export does, stores without them.
+		$document['logging']['to_wordpress'] = true;
+
+		Plugin::instance()->settings()->replace( $document );
+
+		$this->assertArrayNotHasKey( 'to_wordpress', (array) ( (array) get_option( Schema::OPTION ) )['logging'] );
 	}
 }

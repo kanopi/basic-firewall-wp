@@ -29,6 +29,7 @@ its habit of writing down what does not work.
 - [During an incident](#during-an-incident)
 - [wp-config.php options](#wp-configphp-options)
 - [WP-CLI commands](#wp-cli-commands)
+- [Exempting a role](#exempting-a-role)
 - [Multisite](#multisite)
 - [Uninstalling](#uninstalling)
 - [Building a release](#building-a-release)
@@ -128,7 +129,11 @@ at all. Define `DISABLE_WP_CRON` and add a real cron entry hitting
 or invalid, the request is allowed through and the problem is reported in Site
 Health. A firewall misconfiguration will never be the reason your site is
 unreachable — which also means a broken firewall enforces nothing, and the only
-thing standing between you and not noticing is that the failure is loud.
+thing standing between you and not noticing is that the failure is loud. That
+includes a failure partway through evaluating a request, on either path: in
+`exception` mode anything the library throws that is not a verdict lets the
+request through and is reported as critical, with the exception, under the
+compiled configuration check.
 
 ## Installation
 
@@ -168,6 +173,13 @@ No shell, no build step. It ships with the library vendored **and
 namespace-scoped**, which makes it immune to a collision with any other plugin
 that bundles `kanopi/firewall`. `wp basic-firewall status` reports
 `Collision safe: yes (scoped)`.
+
+Immune because both evaluation paths always run the scoped copy. When another
+copy is already loaded — a Bedrock site's own Composer autoloader, required from
+`wp-config.php`, or another plugin — the plugin still registers its own
+autoloader and builds the firewall, its `Request` and its trusted proxies from
+the prefixed classes. The build proves this on every release by booting the
+scoped zip with an unscoped copy loaded first.
 
 ### With Composer
 
@@ -286,6 +298,12 @@ path reads them from needs a WordPress that does not exist yet. The sidecar
 holds path strings only — the credentials are read from the constants per
 request and never touch disk, on either path.
 
+A rebuild that fails — an unwritable directory, a configuration that will not
+compile — leaves the previous compiled file in force, and so leaves the
+injection paths and both sidecars describing that file. The Compiled screen and
+Site Health report the failure; nothing that file needs is taken away from it
+in the meantime.
+
 ### `exception` mode before WordPress
 
 In every other mode the library sends its own response and exits. In `exception`
@@ -333,6 +351,15 @@ mode. The one thing that goes unanswered then is a solved challenge, which
 grants nothing — the visitor is simply challenged again. Delete the compiled
 file, or the snippet, to stop it.
 
+**Unticking "Enable the firewall" switches this path off too.** The setting is
+an option like any other, so the compiler carries it to where the bootstrap can
+see it: the compiled file says `mode: disabled` with no panic file, and a small
+`runtime.json` beside it says `"enabled": false`, which the bootstrap reads
+before it builds a firewall at all. So a mode pinned with `BASIC_FIREWALL_MODE`
+chooses how a running firewall answers, and never switches back on one that was
+switched off. `runtime.json` is written only when something in it differs from
+the defaults, so most sites never have one.
+
 ## The private directory, and why WordPress makes this hard
 
 Drupal has a private file system: a directory outside the web root, served only
@@ -373,8 +400,18 @@ location ~* /basic-firewall-private-[a-f0-9]+/ { deny all; return 404; }
 Or move the directory out of the web root entirely, which is strictly better:
 
 ```php
+// wp-content/mu-plugins/basic-firewall-path.php
 add_filter( 'basic_firewall_private_path', fn() => '/var/private/basic-firewall' );
 ```
+
+**Add the filter from an mu-plugin.** The firewall settles its directory once per
+request, at `muplugins_loaded`, before any ordinary plugin or the theme has
+loaded, so a filter added from one of those is never consulted — every request
+goes on using the default directory. It is settled once on purpose: an answer
+that changed partway through a request would have the admin write a compiled
+file the firewall never reads. Site Health notices a filter added too late and
+names both directories. The `wp-config.php` path takes the directory from the
+snippet's `private_path` instead, so update that too.
 
 ### How stored paths resolve
 
@@ -566,6 +603,11 @@ for next time* or *Served, and marked*. Both of those serve the request by
 design, and reporting them as *Allowed* — which is what the screen says when no
 rule matched at all — would tell somebody testing their honeypot that it does
 not work at the moment it has just caught them.
+
+**Testing leaves nothing behind.** A test run writes no block, no offense and
+no log line, and every rate limit — a preset's as well as your own — counts in
+memory for the run, so testing a limited path as often as you like never spends
+a real client's allowance.
 
 ### Giving a rule opening hours
 
@@ -1474,6 +1516,12 @@ The firewall logs through Monolog, not through WordPress, because it runs before
 WordPress's logger exists. Blocks — and, in log-only mode, would-be blocks — are
 recorded at `warning`.
 
+There is no "send events to WordPress" option: WordPress has no log to send them
+to. Every decision is announced as an action instead — see
+[Reacting to a decision](#reacting-to-a-decision) — which is what an activity
+log plugin, or a few lines of your own, can record. (An earlier build showed
+such an option and never acted on it; upgrading removes the stored setting.)
+
 Keep logs in the private directory. A log under a public directory is
 downloadable by anyone and discloses exactly which addresses you are blocking.
 
@@ -1483,6 +1531,19 @@ shell; a table answers the questions that actually get asked — which rule has
 blocked the most clients this week, whether a rule has matched anything at all
 since it was added, what the firewall did to an address before its owner
 complained.
+
+### What is kept out of the log
+
+At `debug` the library records the value each condition compared, so a rule
+reading a header or a cookie would write it into the log. It redacts a sensible
+set on its own — the `cookie`, `authorization`, `proxy-authorization`,
+`x-api-key`, `x-auth-token`, `x-csrf-token` and `x-session-token` headers, and
+every cookie. **Additional variables to redact** on the Logging screen adds to
+that set, never replaces it: one name per line the way the firewall names it —
+`header.x-session-id`, `query.token` — or a prefix ending in `.*`, such as
+`query.*`. The names apply on both evaluation paths (the `wp-config.php` path
+reads them from `runtime.json`) and to the Test screen's log. Redaction changes
+what is written, never what is evaluated.
 
 ### Off the request path
 
@@ -1872,6 +1933,53 @@ Agreeing to a destructive command is opt-in through `BFW_CLI_DESTRUCTIVE=1`, so
 running it against a site you care about does not empty its block list. CI opts
 in, because its site goes away with the runner.
 
+## Exempting a role
+
+The **General** screen can exempt roles from evaluation. No rule runs for a
+member of an exempt role, and nothing is logged for them. It is the tool for a
+rule set that is right but keeps catching editors doing legitimate work, and it
+is off by default: while no role is ticked, both evaluation paths are exactly
+what they would be without the feature.
+
+**Prefer something narrower.** An allow rule scoped to an office range, or
+observing the one rule that misfires, leaves the rest of the firewall at full
+strength. A role exemption does not: anyone who can grant the role can exempt
+themselves, and an account takeover is unfiltered from then on. Site Health
+reports a configured exemption for that reason.
+
+### Why it needs a second evaluation point
+
+Roles do not exist where the firewall runs. The `wp-config.php` path runs before
+WordPress does, and the mu-plugin runs at `muplugins_loaded`, before the
+functions that check a login cookie are loaded — which is exactly what makes
+refusing a request cheap. So, like the Drupal module with its session cookie,
+the plugin splits on a question it *can* answer that early: does the request
+carry a WordPress login cookie?
+
+| Request | Where it is evaluated |
+| --- | --- |
+| No login cookie | Where it always was. It cannot belong to anyone. |
+| Login cookie present | At `plugins_loaded`, once the cookie can be validated. |
+
+The cookie is *validated* then, not just read — without making anybody the
+current user, so plugins that authenticate another way still get their say. A
+forged, expired or logged-out cookie belongs to nobody, and the request is
+evaluated like any other, just later. Naming a cookie buys an attacker a later
+evaluation, never a skipped one.
+
+### What it costs
+
+- **A page cache that serves logged-in visitors.** A request with a login cookie
+  is left for WordPress, so on the `wp-config.php` path it reaches
+  `advanced-cache.php` unevaluated. WP Super Cache, W3 Total Cache, Batcache,
+  WP Rocket and LiteSpeed Cache do not serve cached pages to requests carrying
+  a login cookie by default, so it goes on to the runner. A cache configured to
+  serve them would serve those requests without the firewall seeing them.
+- **Code that answers a request while plugins are loading** — before
+  `plugins_loaded` — sees a cookie-bearing request before the firewall does.
+- **Cookie logins only.** An application password or token is checked by
+  WordPress later still, so those requests are evaluated as usual.
+
 ## Multisite
 
 Per-site. Each site gets its own settings, its own block list, its own counters
@@ -1891,15 +1999,31 @@ The one shared piece is the mu-plugin loader, because mu-plugins is shared. Ever
 site of a network runs the same copy of the plugin and so wants the same loader:
 whichever site refreshes it first leaves the others finding it current, and a
 refresh that cannot write the directory is recorded as a network option rather
-than against the site that noticed.
+than against the site that noticed. Deactivating on one site leaves it in place
+while any other site still runs the plugin.
 
 There is no network-wide settings screen. Configuring 200 sites means
 `wp site list --field=url` and a loop.
 
+**The `wp-config.php` path is for single sites.** One `wp-config.php` serves
+every site of a network, and it runs before WordPress has worked out which site
+a request is for — so it cannot know whose rules to apply. When it sees
+`MULTISITE` or `SUBDOMAIN_INSTALL` defined above it (or the snippet passes
+`'multisite' => true`), the bootstrap returns without evaluating and without
+marking the request, and the mu-plugin evaluates each site against its own
+rules. The Status screen prints no snippet on a network, and Site Health says
+to remove one that is there, since it only costs a function call. The trade is
+the one the snippet exists to avoid: a page cache in front of the network
+serves cache hits before the firewall sees them, so anything that must see
+every request belongs at the CDN or the web server.
+
 ## Uninstalling
 
 Deactivating is reversible: it removes the mu-plugin loader and the compiled
-file and keeps everything else. **Delete** is not. It removes, on every site of
+file and keeps everything else. On a network the loader is shared, so
+deactivating on one site leaves it for the sites still running the plugin — it
+checks per site whether the plugin is active there — and it goes when the last
+site deactivates, or on network deactivation. **Delete** is not. It removes, on every site of
 a network:
 
 - every `basic_firewall_*` option and transient, the scheduled events, and the
@@ -2129,11 +2253,6 @@ Listed rather than omitted, so you know they were considered.
   release is how a library update reaches sites and coupling that to a review
   queue is the wrong dependency. `readme.txt` is maintained so the decision stays
   cheap to reverse. See `DECISIONS.md` section 4.
-- **A role-based bypass matching the module's second evaluation point.** Roles
-  are exempted on the General screen, but the module's trick of deferring
-  cookie-bearing requests past the page cache to a second evaluation point is not
-  ported — WordPress has no equivalent policy to lean on, and the bypass that
-  Drupal's version introduced is not one worth reimplementing blind.
 - **Editing preset rules.** Presets are included by reference so they update with
   the library. To carve out an exception, add an allow rule with a lower weight.
 - **Per-user rate limits.** Not expressible; see

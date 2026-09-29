@@ -652,6 +652,26 @@ final class Site_Health {
 			);
 		}
 
+		$late = $paths->late_filter();
+
+		if ( null !== $late ) {
+			/*
+			 * Ahead of the reachability probe, because it changes what that
+			 * probe is about: whoever added the filter believes the files live
+			 * where it says, and they do not.
+			 */
+			return self::recommended(
+				__( 'The basic_firewall_private_path filter is added too late to take effect', 'basic-firewall' ),
+				'<p>' . sprintf(
+					/* translators: 1: directory the filter names, 2: directory in use. */
+					esc_html__( 'The filter names %1$s, but the firewall is using %2$s. It settles the directory at muplugins_loaded, before any ordinary plugin or theme loads, so a filter added from one of those is never consulted.', 'basic-firewall' ),
+					'<code>' . esc_html( $late ) . '</code>',
+					'<code>' . esc_html( $paths->base() ) . '</code>'
+				) . '</p>'
+				. '<p>' . esc_html__( 'Move the add_filter() call into a file in wp-content/mu-plugins, then rebuild the firewall. Until then every request reads and writes the directory in use, so the site is protected — just not where you asked.', 'basic-firewall' ) . '</p>'
+			);
+		}
+
 		$probe = $paths->probe_reachability();
 
 		if ( 'exposed' === $probe['status'] ) {
@@ -757,6 +777,10 @@ final class Site_Health {
 	 * @return array{status: string, label: string, description: string, actions: string}
 	 */
 	private static function check_bootstrap(): array {
+		if ( is_multisite() ) {
+			return self::check_bootstrap_on_a_network();
+		}
+
 		if ( self::early_path_active() ) {
 			return self::ok(
 				__( 'wp-config.php calls the firewall', 'basic-firewall' ),
@@ -790,6 +814,34 @@ final class Site_Health {
 			__( 'wp-config.php does not appear to call the firewall', 'basic-firewall' ),
 			$description
 			. '<p>' . esc_html__( 'wp-config.php itself could not be read to confirm this, so this is based only on the snippet not having run.', 'basic-firewall' ) . '</p>'
+		);
+	}
+
+	/**
+	 * The snippet on a multisite network, where it does nothing.
+	 *
+	 * The bootstrap steps aside on a network, because it runs before
+	 * WordPress knows which site a request is for and each site has its own
+	 * rules. So its absence is the healthy state, and its presence is worth a
+	 * word: somebody added it expecting the protection it gives a single site,
+	 * and on a network it gives none.
+	 *
+	 * @return array{status: string, label: string, description: string, actions: string}
+	 */
+	private static function check_bootstrap_on_a_network(): array {
+		$why = '<p>' . esc_html__( 'On a multisite network the firewall evaluates from its mu-plugin, once WordPress has worked out which site a request is for, so each site is held to its own rules. The wp-config.php path runs before that is known, so it steps aside on a network rather than apply one site\'s rules to all of them.', 'basic-firewall' ) . '</p>';
+
+		if ( self::early_path_active() || true === self::snippet_is_in_wp_config() ) {
+			return self::recommended(
+				__( 'wp-config.php calls the firewall, which does nothing on a multisite network', 'basic-firewall' ),
+				$why
+				. '<p>' . esc_html__( 'The call returns without evaluating anything, so it costs a little on every request and protects nothing. Remove the require_once line and the basic_firewall_evaluate() call from wp-config.php. A page cache in front of the network still serves cache hits without the firewall seeing them.', 'basic-firewall' ) . '</p>'
+			);
+		}
+
+		return self::ok(
+			__( 'Each site of the network evaluates against its own rules', 'basic-firewall' ),
+			$why
 		);
 	}
 
@@ -831,10 +883,13 @@ final class Site_Health {
 	private static function check_evaluation(): array {
 		$mu_installed = is_readable( WPMU_PLUGIN_DIR . '/basic-firewall-loader.php' );
 		$mu_error     = get_option( Activator::MU_FAILURE_OPTION, '' );
-		$early        = self::early_path_active();
 		$cache        = self::detect_page_cache();
 
-		if ( $early && ! self::early_report()['evaluated'] && 'disabled' !== self::early_report()['reason'] ) {
+		// On a network the bootstrap steps aside, so it is never where this
+		// runs; check_bootstrap() says what to do about a snippet left in.
+		$early = self::early_path_active() && ! is_multisite();
+
+		if ( $early && ! self::early_report()['evaluated'] && ! in_array( self::early_report()['reason'], array( 'disabled', 'switched-off', 'deferred-login' ), true ) ) {
 			/*
 			 * The snippet is there and running, and this request still was not
 			 * evaluated by it. Reported rather than folded into the healthy
@@ -843,12 +898,18 @@ final class Site_Health {
 			 * request -- which is the exact configuration somebody added the
 			 * snippet to avoid, and a page cache defeats it entirely.
 			 *
-			 * `disabled` is excluded on purpose. BASIC_FIREWALL_ENABLED stops
-			 * both paths, so the sentence below -- that the mu-plugin is
+			 * `disabled` and `switched-off` are excluded on purpose.
+			 * BASIC_FIREWALL_ENABLED and the "Enable the firewall" setting both
+			 * stop both paths, so the sentence below -- that the mu-plugin is
 			 * covering for this one -- would be false, and the operating mode
-			 * test already reports that state and names the constant. Two
-			 * checks describing one cause, one of them wrongly, is worse than
-			 * the check that was missing.
+			 * test already reports that state. Two checks describing one
+			 * cause, one of them wrongly, is worse than the check that was
+			 * missing.
+			 *
+			 * `deferred-login` too: a role is exempt and this request -- an
+			 * admin screen, almost always -- carries a login cookie, so it was
+			 * handed to the runner on purpose. Requests without one are
+			 * evaluated by the snippet as usual.
 			 */
 			return self::critical(
 				__( 'The wp-config.php snippet is present but is not evaluating requests', 'basic-firewall' ),
@@ -927,6 +988,23 @@ final class Site_Health {
 
 		if ( null !== $stale ) {
 			return $stale;
+		}
+
+		if ( null !== $cache && is_multisite() ) {
+			/*
+			 * The same gap, without the snippet as the answer: on a network
+			 * the wp-config.php path steps aside, so recommending it would be
+			 * recommending a line that does nothing.
+			 */
+			return self::recommended(
+				__( 'A page cache is serving requests before the firewall sees them', 'basic-firewall' ),
+				'<p>' . sprintf(
+					/* translators: %s: the detected cache. */
+					esc_html__( '%s serves cached pages from advanced-cache.php, which WordPress loads before any plugin — including the firewall\'s mu-plugin loader. A cache hit is therefore never evaluated.', 'basic-firewall' ),
+					esc_html( $cache )
+				) . '</p>'
+				. '<p>' . esc_html__( 'On a single site the wp-config.php snippet closes this gap. On a multisite network it cannot: it runs before WordPress knows which site a request is for, so it steps aside and each site is evaluated from the mu-plugin. Put anything that must see every request in front of the cache — at the CDN or the web server.', 'basic-firewall' ) . '</p>'
+			);
 		}
 
 		if ( null !== $cache ) {
@@ -1084,6 +1162,12 @@ final class Site_Health {
 		switch ( $reason ) {
 			case 'disabled':
 				return __( 'BASIC_FIREWALL_ENABLED is defined as false in wp-config.php, which switches the firewall off on both paths.', 'basic-firewall' );
+			case 'deferred-login':
+				return __( 'A role is exempt from the firewall and this request carries a WordPress login cookie, so it was left for the mu-plugin, which can check whose it is. Requests without one are evaluated before WordPress as usual.', 'basic-firewall' );
+			case 'multisite':
+				return __( 'This is a multisite network, where the wp-config.php path steps aside and each site is evaluated from the mu-plugin against its own rules.', 'basic-firewall' );
+			case 'switched-off':
+				return __( '"Enable the firewall" is unticked on the General screen, which switches the firewall off on both paths.', 'basic-firewall' );
 			case 'no-compiled-file':
 				return __( 'There is no compiled configuration at the path the snippet names. Either the private_path argument is wrong, or the firewall has never been built — the early path cannot build it, because that needs WordPress.', 'basic-firewall' );
 			case 'no-autoloader':
@@ -1288,6 +1372,7 @@ final class Site_Health {
 					esc_html__( 'No rule runs for members of: %s. Anyone who can grant one of those roles can exempt themselves, and an account takeover is unfiltered from that point on. An allow rule scoped to an address range leaves the rest of the firewall at full strength.', 'basic-firewall' ),
 					esc_html( implode( ', ', array_map( 'strval', $bypass ) ) )
 				)
+				. ' ' . esc_html__( 'To tell who a request belongs to, every request carrying a WordPress login cookie is evaluated once WordPress has validated it, after plugins load, rather than before — including on the wp-config.php path. A page cache that serves pages to logged-in visitors would serve those requests before the firewall sees them; the common ones do not by default.', 'basic-firewall' )
 			);
 		}
 
@@ -1355,7 +1440,7 @@ final class Site_Health {
 			}
 		}
 
-		if ( 'database' === $backend && self::early_path_active() && ! self::early_path_reaches_database() ) {
+		if ( 'database' === $backend && self::early_path_active() && ! is_multisite() && ! self::early_path_reaches_database() ) {
 			/*
 			 * The module's one documented fail-open -- but checked rather than
 			 * assumed. In WordPress the early path can reach the database, so
@@ -1479,10 +1564,10 @@ final class Site_Health {
 
 		$enabled = array_filter( $handlers, static fn ( $h ): bool => is_array( $h ) && ! empty( $h['enabled'] ) );
 
-		if ( array() === $enabled && ! (bool) Plugin::instance()->settings()->get( 'logging.to_wordpress', false ) ) {
+		if ( array() === $enabled ) {
 			return self::recommended(
 				__( 'The firewall is not logging anywhere', 'basic-firewall' ),
-				esc_html__( 'No log handler is enabled and events are not being forwarded to WordPress, so there is no record of what the firewall has blocked. That is a supported configuration, but it means the log-only workflow — watch for a few days, then switch to blocking — is not available to you.', 'basic-firewall' )
+				esc_html__( 'No log handler is enabled, so there is no record of what the firewall has blocked beyond whatever listens to the basic_firewall_decision action. That is a supported configuration, but it means the log-only workflow — watch for a few days, then switch to blocking — is not available to you.', 'basic-firewall' )
 			);
 		}
 

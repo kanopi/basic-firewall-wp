@@ -50,6 +50,28 @@ if ( null === $basic_firewall_wp_load ) {
 	exit( 1 );
 }
 
+/*
+ * One run at a time against a site.
+ *
+ * These suites change the live site and put it back afterwards: the lifecycle
+ * and uninstall tests delete every basic_firewall_* option and restore them
+ * at tearDown, and every settings test snapshots the option first. Two runs
+ * at once -- the integration and end-to-end suites started side by side --
+ * interleave those windows. A snapshot taken while another process has the
+ * options deleted reads "no option", and restoring that snapshot deletes the
+ * site's real settings for good. Measured, too: a concurrent run hung, and
+ * the one killed to end it left the site configured with a test fixture.
+ *
+ * So each run holds an exclusive lock, per site, for as long as it lives,
+ * and a second run waits for the first to finish instead of racing it.
+ */
+$basic_firewall_lock = fopen( sys_get_temp_dir() . '/basic-firewall-tests-' . md5( $basic_firewall_wp_load ) . '.lock', 'c' ); // phpcs:ignore WordPress.WP.AlternativeFunctions -- a lock file for the test process.
+
+if ( false !== $basic_firewall_lock && ! flock( $basic_firewall_lock, LOCK_EX | LOCK_NB ) ) {
+	fwrite( STDERR, "Another test run is using this site; waiting for it to finish.\n" ); // phpcs:ignore WordPress.WP.AlternativeFunctions -- a CLI test bootstrap.
+	flock( $basic_firewall_lock, LOCK_EX );
+}
+
 // The firewall must not evaluate the test runner's own "request".
 if ( ! defined( 'BASIC_FIREWALL_EVALUATED' ) ) {
 	define( 'BASIC_FIREWALL_EVALUATED', true );

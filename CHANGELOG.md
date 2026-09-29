@@ -66,7 +66,9 @@ does not work as well as what does.
   General, Storage, Rules, Logging, Challenge, Presets, Advanced, Log, Blocked,
   Compiled, Export, Import and Test — and the rule editor, reached from Rules,
   with its type chooser. The Test screen evaluates a made-up request against the
-  live rules without recording anything.
+  live rules without recording anything: no block, no offense, no log line,
+  and no rate limit counter — every rate limit, presets' included, counts in
+  memory for the run.
 - **Block list storage** in files, the database or Redis. Redis stores each
   block with a TTL, so expiry costs nothing. Database tables carry the site's
   table prefix, so sites on a network do not share a block list.
@@ -79,7 +81,8 @@ does not work as well as what does.
 - **Logging** through Monolog, because it runs before WordPress's logger
   exists: a file, rotating files, the PHP error log or a database table, which
   the Log screen reads back. Any handler can send after the visitor has their
-  response.
+  response. Names added under **Additional variables to redact** are redacted
+  on both paths as well as the library's own set.
 - **Challenges**: arithmetic, ALTCHA proof of work, Cloudflare Turnstile and
   Google reCAPTCHA.
 - **Presets** from the library, included by reference so they update with it.
@@ -89,7 +92,10 @@ does not work as well as what does.
   CIDR blocks or `start-end` ranges), before any rule is consulted, and records none of them — so lifting it does not leave a
   block list full of customers. A panic file changes the operating mode on the
   next request, on both paths, without a deploy. `BASIC_FIREWALL_ENABLED` and
-  `BASIC_FIREWALL_MODE` in `wp-config.php` need no database at all.
+  `BASIC_FIREWALL_MODE` in `wp-config.php` need no database at all. Unticking
+  **Enable the firewall** stops both paths as well: it is compiled as
+  `mode: disabled` and mirrored into a `runtime.json` sidecar the
+  `wp-config.php` path reads, so a pinned mode cannot switch it back on.
 - **Fifteen WP-CLI subcommands** under `wp basic-firewall`: `status`, `rules`,
   `rebuild`, `sources`, `refresh-sources`, `check`, `block`, `unblock`,
   `blocked`, `clear-blocked`, `clear-cache`, `warm-cache`, `find-reference`,
@@ -131,10 +137,21 @@ does not work as well as what does.
 - **Schema upgrades** that are numbered, idempotent and advance one routine at a
   time, so an upgrade interrupted by a timeout resumes rather than corrupting
   settings. A failure is reported in Site Health, never fatal.
+- **Exempting a role.** Members of roles ticked on the General screen are not
+  evaluated. A request carrying a WordPress login cookie is evaluated at
+  `plugins_loaded` instead, on both paths, once the cookie can be validated; a
+  forged one is evaluated like any other request. Off by default, and while it
+  is off nothing about either path changes.
+- **Multisite, per site.** Each site of a network has its own settings,
+  compiled file, block list, counters and logs, and is evaluated from the
+  mu-plugin against its own rules. The `wp-config.php` path steps aside on a
+  network, since it runs before the site is known; Site Health says to remove
+  a snippet left in.
 - **A release zip** that vendors the library namespace-scoped, so it cannot
   collide with another plugin bundling `kanopi/firewall`, and needs no Composer
-  on the server. The build proves the scoped classes resolve before zipping,
-  and CI installs the zip on a clean WordPress and makes it refuse a request
+  on the server. Both evaluation paths run the scoped copy even when another
+  copy of the library was loaded first. The build proves the scoped classes
+  resolve, and boots the zip beside an unscoped copy, before zipping, and CI installs the zip on a clean WordPress and makes it refuse a request
   before publishing it to GitHub Releases on a version tag. It installs with
   one WP-CLI command from `releases/latest/download/basic-firewall.zip`, a URL
   that always means the current release. Composer installation works too,

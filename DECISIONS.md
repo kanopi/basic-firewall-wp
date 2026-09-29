@@ -134,6 +134,16 @@ already per-site:
 | Compiled config, file storage, logs, counters | `wp_upload_dir()`, which is `uploads/sites/N/` |
 | Database tables | `$wpdb->prefix`, which carries the blog id |
 
+**The `wp-config.php` path steps aside on a network.** It runs before
+`ms-settings.php` has decided which site a request is for, and each site has its
+own compiled file in its own private directory — so it can only guess, and it
+used to guess the first directory its glob found, applying one site's rules to
+every site and marking the request evaluated so the right ones never ran.
+Keying the private directory by host would work for subdomain and mapped-domain
+networks and not for subdirectory ones without reimplementing site lookup, so
+the bootstrap refuses instead and the mu-plugin evaluates per site. Page cache
+hits on a network are therefore not evaluated, and the README says so.
+
 The module has to apply Drupal's table prefix by hand because the library reaches
 the database through Doctrine DBAL rather than the CMS layer. The same is true
 here, and for the same reason: `$wpdb->prefix` must be applied explicitly, and
@@ -273,3 +283,28 @@ firewall can touch a host edge cache.** On Pantheon, WP Engine or Kinsta,
 requests served by the platform's own cache layer never reach PHP, and nothing
 in this plugin evaluates them. Saying otherwise would be the most consequential
 lie the readme could tell.
+
+---
+
+## 7. Role exemptions — implement, or remove?
+
+**Decision: implement, by deferring cookie-bearing requests, on both paths.**
+
+**Why.** The setting shipped on the General screen, and Site Health warned about
+it, while nothing exempted anybody. Removing it was the honest fallback; porting
+the module's design turned out to fit both evaluation paths without pretending.
+Neither can know a role — one runs before WordPress, the other before the
+pluggable functions — but both can see whether a request carries a WordPress
+login cookie. Those requests, and only while a role is exempt, are left
+unmarked for the runner's `plugins_loaded` hook, which validates the cookie
+with `wp_validate_auth_cookie()` and exempts a member of an exempt role. A
+forged cookie validates as nobody and is evaluated, later. The `wp-config.php`
+path learns that a role is exempt from `runtime.json`, since it has no options.
+
+**What it costs**, written into the README rather than discovered: a
+cookie-bearing request reaches `advanced-cache.php` unevaluated, which matters
+only for a page cache configured to serve logged-in visitors (the common ones do
+not by default); code that ends the request while plugins load sees it first;
+and it is cookie logins only. The module can prove its equivalent of the first
+point from core's cache policy. WordPress has no such policy, so this one is a
+default the site can change, and the README says so.

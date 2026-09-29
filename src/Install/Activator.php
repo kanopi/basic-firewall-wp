@@ -80,9 +80,22 @@ final class Activator {
 	 * administrator turns the firewall off, and it has to be reversible without
 	 * losing the rule set -- so nothing here touches settings, the block list,
 	 * the log table or the capabilities. Uninstall is where data goes.
+	 *
+	 * @param bool $network_wide Whether the plugin is being network-deactivated.
 	 */
-	public static function deactivate(): void {
-		self::remove_mu_plugin();
+	public static function deactivate( bool $network_wide = false ): void {
+		/*
+		 * The loader is shared by every site of a network, because mu-plugins
+		 * is, so it goes only when no site is left to use it. Deactivating on
+		 * one site used to delete it from under all of them: every other site
+		 * dropped from muplugins_loaded to plugins_loaded, silently, and on a
+		 * cached network that is the difference between evaluating a request
+		 * and not. The loader checks is_plugin_active() per site anyway, so
+		 * leaving it for the others costs the deactivated site nothing.
+		 */
+		if ( $network_wide || ! self::active_on_another_site() ) {
+			self::remove_mu_plugin();
+		}
 
 		wp_clear_scheduled_hook( 'basic_firewall_refresh_sources' );
 		wp_clear_scheduled_hook( 'basic_firewall_prune_logs' );
@@ -120,6 +133,49 @@ final class Activator {
 		if ( null !== $error ) {
 			update_option( self::MU_FAILURE_OPTION, $error, false );
 		}
+	}
+
+	/**
+	 * Whether any other site of this network still runs the plugin.
+	 *
+	 * Network-activated counts, since that covers every site. Otherwise each
+	 * site's own `active_plugins` is read directly rather than by switching to
+	 * it, which is all is_plugin_active() would do after a switch and costs
+	 * one query a site instead of a full switch. Deactivation is rare enough
+	 * that a large network paying for that is the right trade against leaving
+	 * its other sites without their earliest evaluation point.
+	 */
+	private static function active_on_another_site(): bool {
+		if ( ! is_multisite() ) {
+			return false;
+		}
+
+		$basename = plugin_basename( BASIC_FIREWALL_FILE );
+
+		if ( array_key_exists( $basename, (array) get_site_option( 'active_sitewide_plugins', array() ) ) ) {
+			return true;
+		}
+
+		$current = get_current_blog_id();
+
+		foreach ( get_sites(
+			array(
+				'fields'   => 'ids',
+				'number'   => 0,
+				'archived' => 0,
+				'deleted'  => 0,
+			)
+		) as $site_id ) {
+			if ( (int) $site_id === $current ) {
+				continue;
+			}
+
+			if ( in_array( $basename, (array) get_blog_option( (int) $site_id, 'active_plugins', array() ), true ) ) {
+				return true;
+			}
+		}
+
+		return false;
 	}
 
 	/**

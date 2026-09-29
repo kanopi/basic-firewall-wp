@@ -1171,10 +1171,25 @@ if ( ! function_exists( 'basic_firewall_uninstall_site' ) ) {
 			return;
 		}
 
-		$entries = glob( rtrim( $dir, '/' ) . '/{,.}[!.,!..]*', GLOB_BRACE );
+		/*
+		 * scandir() rather than glob(). Matching dotfiles with glob() needs
+		 * GLOB_BRACE, which is not defined on musl libc -- Alpine, and so a
+		 * good share of container images -- before PHP 8.5, and an undefined
+		 * constant is a fatal error: uninstall stopped at the first directory
+		 * it tried to empty, having deleted the options and none of the files.
+		 */
+		$names = scandir( $dir );
 
-		if ( false === $entries ) {
+		if ( false === $names ) {
 			return;
+		}
+
+		$entries = array();
+
+		foreach ( $names as $name ) {
+			if ( '.' !== $name && '..' !== $name ) {
+				$entries[] = rtrim( $dir, '/' ) . '/' . $name;
+			}
 		}
 
 		foreach ( $entries as $entry ) {

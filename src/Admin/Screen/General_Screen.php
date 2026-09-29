@@ -487,6 +487,8 @@ final class General_Screen extends Screen {
 
 		echo '</fieldset><p class="description">';
 		echo esc_html__( 'No rule runs for a member of an exempt role, and nothing is logged for them. Off by default: while this is empty the request path is identical to having no exemption feature at all.', 'basic-firewall' );
+		echo ' ';
+		echo esc_html__( 'Roles are not known where the firewall runs — before WordPress has checked anybody\'s login — so once a role is exempt, a request carrying a WordPress login cookie is evaluated after plugins load, when the cookie can be checked, on both evaluation paths. A cookie that does not check out is evaluated like any other request, just later. A page cache that serves pages to logged-in visitors would serve those requests before the firewall sees them; the common ones do not by default.', 'basic-firewall' );
 		echo '</p></td></tr></tbody></table>';
 	}
 }

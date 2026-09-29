@@ -85,9 +85,10 @@ final class Plugin {
 		$this->registered = true;
 
 		/*
-		 * Upgrade routines run before anything else reads settings, so that a
-		 * document written by an older release is migrated before it is used
-		 * rather than after something has already misread it.
+		 * Upgrade routines run before the admin, WP-CLI or cron reads
+		 * settings, so that a document written by an older release is migrated
+		 * before it is used rather than after something has already misread
+		 * it. Checked here; run at `init` -- see Upgrader::maybe_upgrade().
 		 */
 		add_action( 'plugins_loaded', array( Upgrader::class, 'maybe_upgrade' ), 1 );
 

@@ -76,6 +76,10 @@
  *     basic_firewall_evaluate( array(
  *         'private_path' => '/absolute/path/to/basic-firewall-private-abc123',
  *     ) );
+ *
+ * Not on a multisite network: see basic_firewall_is_multisite(). There the
+ * call returns without evaluating, and the mu-plugin evaluates each site
+ * against its own rules.
  */
 
 if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
@@ -146,10 +150,59 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 			return true;
 		}
 
+		/*
+		 * Not on a multisite network. One wp-config.php serves every site of
+		 * it, and at this point WordPress has not yet worked out which site a
+		 * request is for -- that is ms-settings.php, well after this line. But
+		 * each site has its own settings, its own compiled file and its own
+		 * private directory, and the glob below finds whichever came first:
+		 * so this path used to evaluate every site's traffic against one
+		 * site's rules, and by marking the request evaluated it stopped the
+		 * mu-plugin applying the right ones.
+		 *
+		 * So it steps aside, and does not mark the request, and the mu-plugin
+		 * evaluates each site against its own rules. Site Health on a network
+		 * says the snippet is doing nothing and can go.
+		 */
+		if ( basic_firewall_is_multisite( $options ) ) {
+			$GLOBALS['basic_firewall_early']['reason'] = 'multisite';
+
+			return true;
+		}
+
 		$compiled = basic_firewall_compiled_path( $options );
 
 		if ( null === $compiled ) {
 			$GLOBALS['basic_firewall_early']['reason'] = 'no-compiled-file';
+
+			return true;
+		}
+
+		$runtime = basic_firewall_runtime( $options );
+
+		/*
+		 * "Enable the firewall" unticked in the admin. The runner reads that
+		 * setting from an option; this path has no options, so the compiler
+		 * mirrors it into the runtime sidecar. Checked before anything is
+		 * loaded, and before BASIC_FIREWALL_MODE gets a say: a mode pinned in
+		 * wp-config.php chooses how the firewall answers, not whether a
+		 * firewall somebody switched off runs at all.
+		 */
+		if ( false === $runtime['enabled'] ) {
+			$GLOBALS['basic_firewall_early']['reason'] = 'switched-off';
+
+			return true;
+		}
+
+		/*
+		 * A role is exempt, and this request carries a WordPress login cookie.
+		 * Whose it is cannot be known until WordPress validates it, so the
+		 * request is left unmarked for the runner, which evaluates it -- or,
+		 * for a member of an exempt role, does not -- once it can. Anything
+		 * without the cookie is evaluated here as usual; see Role_Bypass.
+		 */
+		if ( $runtime['defer_login'] && basic_firewall_carries_login_cookie( $options ) ) {
+			$GLOBALS['basic_firewall_early']['reason'] = 'deferred-login';
 
 			return true;
 		}
@@ -164,8 +217,9 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 
 		require_once $autoload;
 
-		if ( ! class_exists( 'Kanopi\\Firewall\\Firewall' )
-			&& ! class_exists( 'Kanopi\\BasicFirewall\\Vendor\\Kanopi\\Firewall\\Firewall' ) ) {
+		$prefix = basic_firewall_library_prefix();
+
+		if ( null === $prefix ) {
 			$GLOBALS['basic_firewall_early']['reason'] = 'library-missing';
 
 			return true;
@@ -174,6 +228,7 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 		basic_firewall_define_cache_constants( $options );
 		basic_firewall_enable_file_secrets( $options );
 		basic_firewall_set_trusted_proxies( $options );
+		basic_firewall_apply_redaction( $options, $runtime['redact'] );
 
 		/*
 		 * Marks the request as dealt with, so the mu-plugin does not evaluate it
@@ -185,9 +240,7 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 
 		$GLOBALS['basic_firewall_early']['evaluated'] = true;
 
-		$class = class_exists( 'Kanopi\\Firewall\\Firewall' )
-			? 'Kanopi\\Firewall\\Firewall'
-			: 'Kanopi\\BasicFirewall\\Vendor\\Kanopi\\Firewall\\Firewall';
+		$class = $prefix . 'Kanopi\\Firewall\\Firewall';
 
 		$request = null;
 
@@ -211,9 +264,7 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 			 * there is something listening. Without this, a mark applied on the
 			 * early path is invisible to the entire site.
 			 */
-			$request_class = 'Kanopi\\Firewall\\Firewall' === $class
-				? 'Symfony\\Component\\HttpFoundation\\Request'
-				: 'Kanopi\\BasicFirewall\\Vendor\\Symfony\\Component\\HttpFoundation\\Request';
+			$request_class = $prefix . 'Symfony\\Component\\HttpFoundation\\Request';
 
 			$request = call_user_func( array( $request_class, 'createFromGlobals' ) );
 
@@ -279,6 +330,13 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 		$kind = basic_firewall_outcome_kind( $outcome );
 
 		if ( null === $kind ) {
+			/*
+			 * Failed open, and said so. The runner takes this up once
+			 * WordPress loads, so Site Health reports the failure rather
+			 * than a firewall that evaluated this request and allowed it.
+			 */
+			$GLOBALS['basic_firewall_early']['failure'] = get_class( $outcome ) . ': ' . $outcome->getMessage();
+
 			return true;
 		}
 
@@ -397,6 +455,61 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 	}
 
 	/**
+	 * The namespace prefix of the library copy this path runs, or null for none.
+	 *
+	 * **The scoped copy first.** A release build carries the library under the
+	 * plugin's own prefix, and the compiled file it writes names the prefixed
+	 * classes. This used to reach for the unscoped name whenever it existed --
+	 * which it does on any site whose wp-config.php loads a site-level
+	 * Composer autoloader carrying kanopi/firewall for some other reason. The
+	 * firewall was then built from the other copy, trusted proxies were set on
+	 * the other copy's Request, and the request was handed to a firewall that
+	 * could not read its own configuration: a fatal, or a fail-open nobody saw.
+	 *
+	 * One answer, asked once and used for every class this file names, so the
+	 * firewall, the Request and the helpers always come from the same copy.
+	 *
+	 * @return string|null `Kanopi\BasicFirewall\Vendor\` for a scoped build,
+	 *                     an empty string for an unscoped one.
+	 */
+	function basic_firewall_library_prefix() {
+		foreach ( array( 'Kanopi\\BasicFirewall\\Vendor\\', '' ) as $prefix ) {
+			if ( class_exists( $prefix . 'Kanopi\\Firewall\\Firewall' ) ) {
+				return $prefix;
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * Whether this is a multisite network, as far as wp-config.php has said.
+	 *
+	 * `MULTISITE` is what WordPress itself reads, and the network setup screen
+	 * tells an administrator to define it -- with `SUBDOMAIN_INSTALL` -- above
+	 * the line this file is required from. Either is enough, and so is the
+	 * snippet saying so, for a network that defines them somewhere this file
+	 * cannot see yet.
+	 *
+	 * @param array<string, mixed> $options Bootstrap options.
+	 *
+	 * @return bool
+	 */
+	function basic_firewall_is_multisite( array $options ) {
+		if ( ! empty( $options['multisite'] ) ) {
+			return true;
+		}
+
+		// Read as constant(), not is_multisite(): that is a WordPress function,
+		// and there is no WordPress yet.
+		if ( defined( 'MULTISITE' ) && constant( 'MULTISITE' ) ) {
+			return true;
+		}
+
+		return defined( 'SUBDOMAIN_INSTALL' );
+	}
+
+	/**
 	 * Fill in the bootstrap options.
 	 *
 	 * @param array<string, mixed> $options Caller-supplied options.
@@ -418,6 +531,9 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 			'secret_directories' => defined( 'BASIC_FIREWALL_SECRET_DIRECTORIES' ) ? BASIC_FIREWALL_SECRET_DIRECTORIES : array(),
 			// Runtime overrides, as Symfony property-access paths.
 			'overrides'          => array(),
+			// True on a multisite network, where this path steps aside for
+			// the mu-plugin. MULTISITE and SUBDOMAIN_INSTALL say so as well.
+			'multisite'          => false,
 		);
 
 		return array_merge( $defaults, $options );
@@ -445,6 +561,127 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 		 * evaluation rather than try to recover.
 		 */
 		return is_readable( $compiled ) ? $compiled : null;
+	}
+
+	/**
+	 * What the compiler left for this path in the runtime sidecar.
+	 *
+	 * The settings the library's configuration has no key for, which the
+	 * runner reads from options and this path cannot. An absent or unreadable
+	 * sidecar means every default -- the compiler writes one only when
+	 * something differs -- and so does anything in it of the wrong type, so a
+	 * damaged file never switches a feature on.
+	 *
+	 * @param array<string, mixed> $options Bootstrap options.
+	 *
+	 * @return array{enabled: bool, redact: list<string>, defer_login: bool}
+	 */
+	function basic_firewall_runtime( array $options ) {
+		$runtime = array(
+			'enabled'     => true,
+			'redact'      => array(),
+			'defer_login' => false,
+		);
+
+		$compiled = basic_firewall_compiled_path( $options );
+
+		if ( null === $compiled ) {
+			return $runtime;
+		}
+
+		$sidecar = dirname( $compiled ) . '/runtime.json';
+
+		if ( ! is_readable( $sidecar ) ) {
+			return $runtime;
+		}
+
+		$decoded = json_decode( (string) file_get_contents( $sidecar ), true ); // phpcs:ignore WordPress.WP.AlternativeFunctions -- a local file, and WP_Filesystem does not exist on this path.
+
+		if ( ! is_array( $decoded ) ) {
+			return $runtime;
+		}
+
+		if ( false === ( $decoded['enabled'] ?? true ) ) {
+			$runtime['enabled'] = false;
+		}
+
+		if ( true === ( $decoded['defer_login'] ?? false ) ) {
+			$runtime['defer_login'] = true;
+		}
+
+		foreach ( is_array( $decoded['redact'] ?? null ) ? $decoded['redact'] : array() as $name ) {
+			if ( is_string( $name ) && '' !== $name ) {
+				$runtime['redact'][] = $name;
+			}
+		}
+
+		return $runtime;
+	}
+
+	/**
+	 * Whether this request carries something named like a WordPress login cookie.
+	 *
+	 * Asked of the plugin's own Role_Bypass, loaded by hand, so the two paths
+	 * cannot disagree about which requests wait for the runner. If it cannot
+	 * be loaded the answer is no, and the request is evaluated here as it
+	 * would be with no role exempt -- a missed exemption, never a missed
+	 * evaluation.
+	 *
+	 * @param array<string, mixed> $options Bootstrap options.
+	 *
+	 * @return bool
+	 */
+	function basic_firewall_carries_login_cookie( array $options ) {
+		$class = 'Kanopi\\BasicFirewall\\Runtime\\Role_Bypass';
+
+		if ( ! class_exists( $class, false ) ) {
+			$file = rtrim( (string) $options['plugin_path'], '/' ) . '/src/Runtime/Role_Bypass.php';
+
+			if ( ! is_readable( $file ) ) {
+				return false;
+			}
+
+			require_once $file;
+		}
+
+		// phpcs:ignore WordPress.Security.ValidatedSanitizedInput -- only the cookie names are read, and only compared.
+		return class_exists( $class, false ) && (bool) call_user_func( array( $class, 'carries_login_cookie' ), $_COOKIE );
+	}
+
+	/**
+	 * Redact the site's own names from the log, as well as the library's.
+	 *
+	 * The same class the runner uses, loaded by hand for the reason
+	 * Decision_Dispatcher is. One that cannot be loaded leaves the library's
+	 * defaults in place, which is less redaction and never a failed request.
+	 *
+	 * @param array<string, mixed> $options Bootstrap options.
+	 * @param list<string>         $names   Names from the runtime sidecar.
+	 *
+	 * @return void
+	 */
+	function basic_firewall_apply_redaction( array $options, array $names ) {
+		if ( array() === $names ) {
+			return;
+		}
+
+		$class = 'Kanopi\\BasicFirewall\\Logging\\Redaction';
+
+		try {
+			if ( ! class_exists( $class, false ) ) {
+				$file = rtrim( (string) $options['plugin_path'], '/' ) . '/src/Logging/Redaction.php';
+
+				if ( ! is_readable( $file ) ) {
+					return;
+				}
+
+				require_once $file;
+			}
+
+			call_user_func( array( $class, 'apply' ), $names );
+		} catch ( \Throwable $e ) {
+			return;
+		}
 	}
 
 	/**
@@ -744,7 +981,15 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 			return;
 		}
 
-		foreach ( array( 'Symfony\\Component\\HttpFoundation\\Request', 'Kanopi\\BasicFirewall\\Vendor\\Symfony\\Component\\HttpFoundation\\Request' ) as $request_class ) {
+		/*
+		 * The Request of the copy the firewall is built from, and only that
+		 * one. Setting it on the other copy's class leaves the firewall's own
+		 * Request trusting nobody, so every visitor behind the proxy shares one
+		 * address.
+		 */
+		$prefix = basic_firewall_library_prefix();
+
+		foreach ( null === $prefix ? array() : array( $prefix . 'Symfony\\Component\\HttpFoundation\\Request' ) as $request_class ) {
 			if ( ! class_exists( $request_class ) ) {
 				continue;
 			}
@@ -864,14 +1109,17 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 
 		/*
 		 * Assembled rather than written out, so that neither PHP-Scoper nor a
-		 * static analyser resolves it to one particular class: on a scoped build
-		 * only the second name exists, on an unscoped one only the first.
+		 * static analyser resolves it to one particular class: the prefix in
+		 * front of it is decided at runtime.
 		 */
 		$token_class = implode( '\\', array( 'Kanopi', 'Firewall', 'Utility', 'TokenSubstitute' ) );
-		$vendor      = implode( '\\', array( 'Kanopi', 'BasicFirewall', 'Vendor' ) );
+		$prefix      = basic_firewall_library_prefix();
 
-		foreach ( array( $token_class, $vendor . '\\' . $token_class ) as $class ) {
-			if ( ! class_exists( $class ) || ! method_exists( $class, 'enableUnsafeProcessors' ) ) {
+		// The copy the firewall is built from; see basic_firewall_library_prefix().
+		foreach ( null === $prefix ? array() : array( $prefix . $token_class ) as $class ) {
+			$enable = array( $class, 'enableUnsafeProcessors' );
+
+			if ( ! class_exists( $class ) || ! is_callable( $enable ) ) {
 				continue;
 			}
 
@@ -890,7 +1138,7 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 				 * why this is wrapped: a typo in the allowlist must not be the
 				 * reason the firewall does not start.
 				 */
-				call_user_func( array( $class, 'enableUnsafeProcessors' ), array( 'file' ), $clean );
+				call_user_func( $enable, array( 'file' ), $clean );
 			} catch ( \Throwable $e ) {
 				// An allowlist that does not resolve is treated as not having
 				// opted in, rather than as permission for everything.

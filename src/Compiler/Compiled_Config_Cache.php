@@ -69,7 +69,7 @@ TXT;
 		$problems = $paths->ensure();
 
 		if ( array() !== $problems ) {
-			$this->record_meta( array(), false, $problems );
+			$this->record_failure( $problems );
 
 			return array(
 				'written'  => false,
@@ -91,7 +91,7 @@ TXT;
 				),
 			);
 
-			$this->record_meta( array(), false, $problems );
+			$this->record_failure( $problems );
 
 			return array(
 				'written'  => false,
@@ -110,7 +110,7 @@ TXT;
 				$path
 			);
 
-			$this->record_meta( $compiler->connection_paths(), false, $problems, $compiler );
+			$this->record_failure( $problems );
 
 			return array(
 				'written'  => false,
@@ -119,7 +119,8 @@ TXT;
 			);
 		}
 
-		$this->record_meta( $compiler->connection_paths(), true, $problems, $compiler );
+		$this->record_meta( $compiler, $problems );
+		$this->write_runtime( $compiler->runtime() );
 
 		/**
 		 * Fires after the compiled configuration has been written.
@@ -184,14 +185,41 @@ TXT;
 	}
 
 	/**
-	 * Record what the compile produced.
+	 * Record a rebuild that did not replace the compiled file.
 	 *
-	 * @param list<string>         $connection_paths Where credentials must be injected.
-	 * @param bool                 $written          Whether the file was written.
-	 * @param list<string>         $problems         Problems encountered.
-	 * @param Config_Compiler|null $compiler         The compile, when there was one.
+	 * The file on disk is still the last one that was written, and the
+	 * runtime goes on reading it -- so the injection paths, the cache pool
+	 * paths and both sidecars have to go on describing *that* file. This used
+	 * to overwrite them with an empty list, or with the lists of the compile
+	 * that failed to land: a site on database storage then evaluated the old
+	 * file with no credentials injected, and its storage failed open, until
+	 * somebody noticed the rebuild error and fixed its cause.
+	 *
+	 * Only `written` and `problems` change, and `failed_at` is added, so the
+	 * screens still report the failure; `compiled_at` goes on saying when the
+	 * file in force was written.
+	 *
+	 * @param list<string> $problems Why the rebuild failed.
 	 */
-	private function record_meta( array $connection_paths, bool $written, array $problems, ?Config_Compiler $compiler = null ): void {
+	private function record_failure( array $problems ): void {
+		$meta = $this->meta();
+
+		$meta['written']   = false;
+		$meta['problems']  = $problems;
+		$meta['failed_at'] = time();
+
+		update_option( self::META_OPTION, $meta, false );
+	}
+
+	/**
+	 * Record a compile whose file was written.
+	 *
+	 * @param Config_Compiler $compiler The compile.
+	 * @param list<string>    $problems Problems encountered.
+	 */
+	private function record_meta( Config_Compiler $compiler, array $problems ): void {
+		$connection_paths = $compiler->connection_paths();
+
 		$this->write_connection_paths( $connection_paths );
 
 		update_option(
@@ -205,9 +233,9 @@ TXT;
 				 * connection paths: the object cache does not exist on the
 				 * wp-config.php path, so nothing there could use them.
 				 */
-				'cache_pool_paths'   => null === $compiler ? array() : $compiler->cache_pool_paths(),
-				'verify_cache_paths' => null === $compiler ? array() : $compiler->verify_cache_paths(),
-				'written'            => $written,
+				'cache_pool_paths'   => $compiler->cache_pool_paths(),
+				'verify_cache_paths' => $compiler->verify_cache_paths(),
+				'written'            => true,
 				'problems'           => $problems,
 				'compiled_at'        => time(),
 				'plugin_version'     => BASIC_FIREWALL_VERSION,
@@ -243,6 +271,38 @@ TXT;
 		}
 
 		$json = wp_json_encode( array_values( $connection_paths ) );
+
+		if ( is_string( $json ) ) {
+			$this->write_atomically( $path, $json );
+		}
+	}
+
+	/**
+	 * Mirror what the wp-config.php path needs into the runtime sidecar.
+	 *
+	 * Only after the compiled file itself was written, so the two always
+	 * describe the same configuration. Removed when everything in it is a
+	 * default, which is what the bootstrap assumes when the file is absent --
+	 * so most sites never have one and never pay to read it.
+	 *
+	 * A failure to write is not fatal, and not silent either: the compiled
+	 * file carries `mode: disabled` for a firewall switched off, so the part
+	 * that matters most still holds without this file.
+	 *
+	 * @param array<string, mixed> $runtime See Config_Compiler::runtime().
+	 */
+	private function write_runtime( array $runtime ): void {
+		$path = Plugin::instance()->paths()->runtime_file();
+
+		if ( Config_Compiler::RUNTIME_DEFAULTS === $runtime ) {
+			if ( file_exists( $path ) ) {
+				wp_delete_file( $path );
+			}
+
+			return;
+		}
+
+		$json = wp_json_encode( $runtime );
 
 		if ( is_string( $json ) ) {
 			$this->write_atomically( $path, $json );
@@ -369,10 +429,10 @@ TXT;
 			wp_delete_file( $path );
 		}
 
-		$sidecar = Plugin::instance()->paths()->connection_paths_file();
-
-		if ( file_exists( $sidecar ) ) {
-			wp_delete_file( $sidecar );
+		foreach ( array( Plugin::instance()->paths()->connection_paths_file(), Plugin::instance()->paths()->runtime_file() ) as $sidecar ) {
+			if ( file_exists( $sidecar ) ) {
+				wp_delete_file( $sidecar );
+			}
 		}
 
 		delete_option( self::META_OPTION );

@@ -12,6 +12,7 @@ namespace Kanopi\BasicFirewall\Runtime;
 use Kanopi\BasicFirewall\Cache\Cache_Backend;
 use Kanopi\BasicFirewall\Database_Credentials;
 use Kanopi\BasicFirewall\Library_Loader;
+use Kanopi\BasicFirewall\Logging\Redaction;
 use Kanopi\BasicFirewall\Plugin;
 use Kanopi\Firewall\Firewall;
 use Symfony\Component\HttpFoundation\Request;
@@ -41,11 +42,25 @@ final class Runner {
 	public const MARK_SERVER_KEY = 'HTTP_X_FIREWALL_MARK';
 
 	/**
-	 * Why evaluation did not happen, or null.
+	 * Why evaluation did not happen, as a message key, or null.
+	 *
+	 * A key rather than a translated sentence, as in Library_Loader. The
+	 * runner fails at `muplugins_loaded`, long before `init`, and calling
+	 * __() there makes WordPress 6.7 and later report "translation loading
+	 * was triggered too early" -- on every request, for as long as whatever
+	 * stopped the firewall goes unfixed. The sentence is built when it is
+	 * read, which is always an admin screen, Site Health or WP-CLI.
 	 *
 	 * @var string|null
 	 */
 	private static ?string $failure = null;
+
+	/**
+	 * What the failure message is about: an error message, usually.
+	 *
+	 * @var string
+	 */
+	private static string $failure_detail = '';
 
 	/**
 	 * Marks the firewall applied to this request.
@@ -53,6 +68,13 @@ final class Runner {
 	 * @var list<string>
 	 */
 	private static array $marks = array();
+
+	/**
+	 * Whether this request was exempt, as a member of an exempt role.
+	 *
+	 * @var bool
+	 */
+	private static bool $exempt = false;
 
 	/**
 	 * Evaluate the current request.
@@ -84,6 +106,7 @@ final class Runner {
 			 * anything it could not answer has been waiting to be answered.
 			 */
 			$this->adopt_early_marks();
+			$this->adopt_early_failure();
 
 			return $this->answer_early_outcome();
 		}
@@ -92,8 +115,31 @@ final class Runner {
 			return true;
 		}
 
+		/*
+		 * An exempt role. Only the current request, because only its cookies
+		 * are there to read. See Role_Bypass for why this splits on a cookie.
+		 */
+		$bypass = null === $request ? $this->bypass_decision( $_COOKIE ) : 'evaluate';
+
+		if ( 'defer' === $bypass ) {
+			/*
+			 * Not yet: the login cookie cannot be validated before the
+			 * pluggable functions load. Left unmarked, so the runner's
+			 * `plugins_loaded` hook evaluates it -- or exempts it -- then.
+			 */
+			return true;
+		}
+
+		if ( 'exempt' === $bypass ) {
+			define( 'BASIC_FIREWALL_EVALUATED', true );
+
+			self::$exempt = true;
+
+			return true;
+		}
+
 		if ( ! Library_Loader::is_usable() ) {
-			self::$failure = Library_Loader::failure() ?? __( 'The firewall library is not available.', 'basic-firewall' );
+			self::$failure = 'library';
 
 			return true;
 		}
@@ -103,7 +149,7 @@ final class Runner {
 		$compiled = Plugin::instance()->paths()->compiled_file();
 
 		if ( ! is_readable( $compiled ) ) {
-			self::$failure = __( 'There is no compiled configuration, so no rules were evaluated. Rebuild the firewall.', 'basic-firewall' );
+			self::$failure = 'no-compiled-file';
 
 			return true;
 		}
@@ -117,6 +163,9 @@ final class Runner {
 		 * address, and one visitor's offense blocks the lot.
 		 */
 		Trusted_Proxies::apply();
+
+		// Before the firewall exists, so nothing is logged unredacted first.
+		$this->apply_redaction();
 
 		try {
 			/*
@@ -133,11 +182,8 @@ final class Runner {
 			 * and then failed open on. Traffic is treated the same as it would
 			 * have been; the difference is that somebody finds out.
 			 */
-			self::$failure = sprintf(
-				/* translators: %s: error message. */
-				__( 'The firewall could not start, so no rules were evaluated: %s', 'basic-firewall' ),
-				$e->getMessage()
-			);
+			self::$failure        = 'could-not-start';
+			self::$failure_detail = $e->getMessage();
 
 			return true;
 		}
@@ -162,8 +208,32 @@ final class Runner {
 		} catch ( \Throwable $e ) {
 			// A blocking exception is the library's way of saying "rejected" in
 			// exception mode. The responder decides what the visitor sees.
-			return ( new Outcome_Responder() )->respond( $e, $request );
+			$allowed = ( new Outcome_Responder() )->respond( $e, $request );
+
+			/*
+			 * The responder ends the request for every verdict, so reaching
+			 * here means what was thrown was not one: the firewall failed
+			 * partway through evaluating, and the request goes on unfiltered.
+			 * That is the fail-open this class promises, and it used to be a
+			 * silent one -- nothing recorded it, so Site Health reported a
+			 * healthy firewall on the request it had just waved through.
+			 */
+			if ( $allowed ) {
+				self::record_evaluation_failure( $e );
+			}
+
+			return $allowed;
 		}
+	}
+
+	/**
+	 * Record that evaluation itself failed, rather than deciding anything.
+	 *
+	 * @param \Throwable $e What the firewall threw.
+	 */
+	private static function record_evaluation_failure( \Throwable $e ): void {
+		self::$failure        = 'evaluation-failed';
+		self::$failure_detail = get_class( $e ) . ': ' . $e->getMessage();
 	}
 
 	/**
@@ -208,6 +278,22 @@ final class Runner {
 			'outcome' => $stash['outcome'],
 			'request' => ( $stash['request'] ?? null ) instanceof Request ? $stash['request'] : null,
 		);
+	}
+
+	/**
+	 * Take up an evaluation failure the wp-config.php path recorded.
+	 *
+	 * The bootstrap fails open on anything the firewall throws that is not a
+	 * verdict, as this class does, and leaves what it caught in its report so
+	 * the failure is not lost with the request it happened on.
+	 */
+	private function adopt_early_failure(): void {
+		$failure = $GLOBALS['basic_firewall_early']['failure'] ?? null;
+
+		if ( is_string( $failure ) && '' !== $failure && null === self::$failure ) {
+			self::$failure        = 'evaluation-failed';
+			self::$failure_detail = $failure;
+		}
 	}
 
 	/**
@@ -299,6 +385,38 @@ final class Runner {
 	}
 
 	/**
+	 * What the role exemption says about the current request.
+	 *
+	 * `evaluate` for a request no exemption applies to -- no role is exempt,
+	 * or it carries no login cookie -- which is every request on a site that
+	 * never configured one. `defer` when it carries a login cookie and the
+	 * cookie cannot be validated yet, at `muplugins_loaded`. `exempt` when it
+	 * validates, for a member of an exempt role.
+	 *
+	 * @param array<mixed> $cookies The request's cookies.
+	 */
+	private function bypass_decision( array $cookies ): string {
+		$roles = Role_Bypass::clean( (array) Plugin::instance()->settings()->get( 'global.bypass_roles', array() ) );
+
+		if ( array() === $roles || ! Role_Bypass::carries_login_cookie( $cookies ) ) {
+			return 'evaluate';
+		}
+
+		if ( ! Role_Bypass::can_authenticate() ) {
+			return 'defer';
+		}
+
+		return Role_Bypass::exempts( $roles ) ? 'exempt' : 'evaluate';
+	}
+
+	/**
+	 * Whether this request went unevaluated as a member of an exempt role.
+	 */
+	public static function exempted(): bool {
+		return self::$exempt;
+	}
+
+	/**
 	 * Whether the firewall should run at all.
 	 *
 	 * The constant is checked first and needs no database access, which is what
@@ -310,6 +428,17 @@ final class Runner {
 		}
 
 		return (bool) Plugin::instance()->settings()->get( 'enabled', true );
+	}
+
+	/**
+	 * Redact the site's own names from the log, as well as the library's.
+	 *
+	 * The library has no configuration key for these, so they are handed to
+	 * it directly -- here from settings, and on the wp-config.php path from
+	 * the runtime sidecar. See Redaction.
+	 */
+	private function apply_redaction(): void {
+		Redaction::apply( (array) Plugin::instance()->settings()->get( 'logging.redact_extra', array() ) );
 	}
 
 	/**
@@ -535,9 +664,38 @@ final class Runner {
 
 	/**
 	 * Why the last evaluation did not happen, or null.
+	 *
+	 * Translated here, when it is read, rather than when it happened; see
+	 * $failure.
 	 */
 	public static function failure(): ?string {
-		return self::$failure;
+		switch ( self::$failure ) {
+			case null:
+				return null;
+
+			case 'library':
+				return Library_Loader::failure() ?? __( 'The firewall library is not available.', 'basic-firewall' );
+
+			case 'no-compiled-file':
+				return __( 'There is no compiled configuration, so no rules were evaluated. Rebuild the firewall.', 'basic-firewall' );
+
+			case 'evaluation-failed':
+				return sprintf(
+					/* translators: %s: exception class and message. */
+					__( 'The firewall failed while evaluating the request, and let it through unfiltered: %s', 'basic-firewall' ),
+					self::$failure_detail
+				);
+
+			case 'could-not-start':
+				return sprintf(
+					/* translators: %s: error message. */
+					__( 'The firewall could not start, so no rules were evaluated: %s', 'basic-firewall' ),
+					self::$failure_detail
+				);
+
+			default:
+				return self::$failure;
+		}
 	}
 
 	/**
@@ -546,7 +704,9 @@ final class Runner {
 	 * @internal
 	 */
 	public static function reset(): void {
-		self::$failure = null;
-		self::$marks   = array();
+		self::$failure        = null;
+		self::$failure_detail = '';
+		self::$marks          = array();
+		self::$exempt         = false;
 	}
 }

@@ -26,6 +26,27 @@ use Kanopi\BasicFirewall\Support\Validator;
 final class Settings {
 
 	/**
+	 * Settings earlier builds stored, which nothing reads any more.
+	 *
+	 * The validator keeps keys it does not know -- a rule type from another
+	 * plugin stores things the schema has never heard of -- so a retired
+	 * setting would otherwise ride along forever: in the option, in every
+	 * export, and back in with every import of an old export. They are dropped
+	 * whenever the document is read or written instead, and the upgrade
+	 * routine that retired them rewrites the option once.
+	 *
+	 * `logging.to_wordpress` and `logging.wp_level` offered to forward events
+	 * to WordPress, which has no log to forward them to, and nothing ever
+	 * did. Decisions reach WordPress as the `basic_firewall_decision` actions.
+	 *
+	 * @var list<string>
+	 */
+	public const RETIRED = array(
+		'logging.to_wordpress',
+		'logging.wp_level',
+	);
+
+	/**
 	 * In-request cache of the validated document.
 	 *
 	 * @var array<string, mixed>|null
@@ -56,10 +77,38 @@ final class Settings {
 		}
 
 		$validator    = new Validator();
-		$this->cache  = $validator->validate( $stored );
+		$this->cache  = $validator->validate( self::drop_retired( $stored ) );
 		$this->errors = $validator->errors();
 
 		return $this->cache;
+	}
+
+	/**
+	 * Remove every retired setting from a document. See RETIRED.
+	 *
+	 * @param array<string, mixed> $values Settings document.
+	 *
+	 * @return array<string, mixed>
+	 */
+	public static function drop_retired( array $values ): array {
+		foreach ( self::RETIRED as $path ) {
+			$segments = explode( '.', $path );
+			$leaf     = array_pop( $segments );
+			$cursor   = &$values;
+
+			foreach ( $segments as $segment ) {
+				if ( ! isset( $cursor[ $segment ] ) || ! is_array( $cursor[ $segment ] ) ) {
+					unset( $cursor );
+					continue 2;
+				}
+
+				$cursor = &$cursor[ $segment ];
+			}
+
+			unset( $cursor[ $leaf ], $cursor );
+		}
+
+		return $values;
 	}
 
 	/**
@@ -98,6 +147,7 @@ final class Settings {
 	 * @return list<array{path: string, message: string}>
 	 */
 	public function replace( array $values ): array {
+		$values = self::drop_retired( $values );
 		$values = self::drop_empty_log_handlers( $values );
 		$values = self::normalise_rule_settings( $values );
 

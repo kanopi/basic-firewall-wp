@@ -119,9 +119,7 @@ final class Outcome_Responder {
 		 */
 		$message = $this->escape( $outcome->getMessage() );
 
-		// Translated when WordPress is there to translate it; on the
-		// wp-config.php path it is not, and English is better than nothing.
-		$title = function_exists( '__' ) ? __( 'Request blocked', 'basic-firewall' ) : 'Request blocked';
+		$title = self::can_translate() ? __( 'Request blocked', 'basic-firewall' ) : 'Request blocked';
 
 		// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
 		echo $this->document( $title, $message );
@@ -241,8 +239,8 @@ final class Outcome_Responder {
 			 * temporary refusal saying so, rather than the page the rule was
 			 * written to stand in front of.
 			 */
-			$title = function_exists( '__' ) ? __( 'Verification required', 'basic-firewall' ) : 'Verification required';
-			$text  = function_exists( '__' )
+			$title = self::can_translate() ? __( 'Verification required', 'basic-firewall' ) : 'Verification required';
+			$text  = self::can_translate()
 				? __( 'This request needs a verification step that could not be shown. Please try again shortly.', 'basic-firewall' )
 				: 'This request needs a verification step that could not be shown. Please try again shortly.';
 
@@ -411,6 +409,20 @@ final class Outcome_Responder {
 		}
 
 		return isset( $parts['query'] ) && '' !== $parts['query'] ? $path . '?' . $parts['query'] : $path;
+	}
+
+	/**
+	 * Whether a string can be translated without WordPress complaining.
+	 *
+	 * Not merely whether __() exists. On the wp-config.php path it does not;
+	 * on the mu-plugin path it does, but a refusal there is answered at
+	 * `muplugins_loaded`, before `init`, and translating then makes WordPress
+	 * 6.7 and later report "translation loading was triggered too early" on
+	 * every refused request. English is what either path had before a
+	 * translation could load, so it is what they get.
+	 */
+	private static function can_translate(): bool {
+		return function_exists( '__' ) && function_exists( 'did_action' ) && did_action( 'init' ) > 0;
 	}
 
 	/**
