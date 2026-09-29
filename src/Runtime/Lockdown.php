@@ -10,7 +10,6 @@ declare( strict_types = 1 );
 namespace Kanopi\BasicFirewall\Runtime;
 
 use Symfony\Component\HttpFoundation\IpUtils;
-use Symfony\Component\HttpFoundation\Request;
 
 /**
  * Reads, checks and matches the addresses a lockdown keeps serving.
@@ -259,11 +258,11 @@ final class Lockdown {
 	 * "your address is 172.20.0.5" while the firewall matches the address in
 	 * X-Forwarded-For would have them allowlist the wrong thing. So the trusted
 	 * proxies are applied first, exactly as they are before a request is
-	 * evaluated.
+	 * evaluated, and the request is built the way the firewall builds it.
 	 */
 	public static function client_address(): string {
 		Trusted_Proxies::apply();
 
-		return (string) Request::createFromGlobals()->getClientIp();
+		return (string) Request_Factory::from_globals()->getClientIp();
 	}
 }

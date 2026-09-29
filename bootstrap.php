@@ -286,10 +286,15 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 			 * Stashing it in a global lets the plugin announce it later, once
 			 * there is something listening. Without this, a mark applied on the
 			 * early path is invisible to the entire site.
+			 *
+			 * Built by the plugin's request factory, from the Request class of
+			 * the copy the firewall came from, so a directly requested file
+			 * such as wp-login.php is matched on its own path rather than on
+			 * `/`. See basic_firewall_request().
 			 */
 			$request_class = $prefix . 'Symfony\\Component\\HttpFoundation\\Request';
 
-			$request = call_user_func( array( $request_class, 'createFromGlobals' ) );
+			$request = basic_firewall_request( $request_class, $options );
 
 			$allowed = $firewall->evaluate( $request );
 
@@ -313,6 +318,45 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 			 */
 			return basic_firewall_answer_outcome( $e, $request, $options );
 		}
+	}
+
+	/**
+	 * The current request, as the firewall should see it.
+	 *
+	 * WordPress serves pages from files other than index.php -- wp-login.php,
+	 * xmlrpc.php, every wp-admin screen -- and for those Symfony reads the
+	 * requested file as the front controller and reports the path as `/`, so
+	 * no path rule or rate limit could ever match one. The plugin's
+	 * Request_Factory corrects that in the request's own copy of the server
+	 * values, and is the same class the mu-plugin builds its request with, so
+	 * the two paths cannot see one request differently.
+	 *
+	 * Loaded by hand for the reason Decision_Dispatcher is: the release
+	 * build's autoloader carries the vendored tree and not this plugin's own
+	 * `src/`. A copy of the plugin without the factory still evaluates, on the
+	 * request exactly as Symfony builds it.
+	 *
+	 * @param string               $request_class The Request class of the copy the firewall is built from.
+	 * @param array<string, mixed> $options       Bootstrap options.
+	 *
+	 * @return object
+	 */
+	function basic_firewall_request( $request_class, array $options ) {
+		$class = 'Kanopi\\BasicFirewall\\Runtime\\Request_Factory';
+
+		if ( ! class_exists( $class, false ) ) {
+			$file = rtrim( (string) $options['plugin_path'], '/' ) . '/src/Runtime/Request_Factory.php';
+
+			if ( is_readable( $file ) ) {
+				require_once $file;
+			}
+		}
+
+		if ( class_exists( $class, false ) ) {
+			return call_user_func( array( $class, 'from_globals_of' ), $request_class );
+		}
+
+		return call_user_func( array( $request_class, 'createFromGlobals' ) );
 	}
 
 	/**

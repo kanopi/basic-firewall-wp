@@ -1,6 +1,6 @@
 <?php
 /**
- * Stands in for wp-config.php, for EarlyPathExceptionModeTest.
+ * Stands in for wp-config.php, for EarlyPathExceptionModeTest and DirectFileRequestTest.
  *
  * @package Kanopi\BasicFirewall
  */
@@ -89,6 +89,9 @@ header( 'X-Early-Evaluated: ' . ( empty( $GLOBALS['basic_firewall_early']['evalu
 header( 'X-Early-Autoloader: ' . (string) ( $GLOBALS['basic_firewall_early']['autoloader']['source'] ?? 'none' ) );
 header( 'X-Early-Autoloader-File: ' . (string) ( $GLOBALS['basic_firewall_early']['autoloader']['file'] ?? '' ) );
 header( 'X-Early-Autoloader-Named: ' . (string) ( $GLOBALS['basic_firewall_early']['autoloader']['named'] ?? '' ) );
+// PHP_SELF as WordPress will read it, to prove the firewall left it alone:
+// WordPress sets $pagenow from it.
+header( 'X-Early-Php-Self: ' . (string) ( $_SERVER['PHP_SELF'] ?? '' ) ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput -- echoed to a test, in a fixture with no WordPress to sanitize with.
 header( 'X-Early-Custom-Loaded: ' . ( empty( $GLOBALS['basic_firewall_test_custom_autoloader'] ) ? 'no' : 'yes' ) );
 
 echo 'SERVED BY WORDPRESS';

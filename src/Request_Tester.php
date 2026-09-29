@@ -13,6 +13,7 @@ use Kanopi\BasicFirewall\Cache\Cache_Backend;
 use Kanopi\BasicFirewall\Compiler\Library_Map;
 use Kanopi\BasicFirewall\Logging\Log_Reader;
 use Kanopi\BasicFirewall\Logging\Redaction;
+use Kanopi\BasicFirewall\Runtime\Request_Factory;
 use Kanopi\Firewall\Exception\ChallengeRequiredException;
 use Kanopi\Firewall\Exception\FirewallBlockedException;
 use Kanopi\Firewall\Exception\FirewallRedirectException;
@@ -335,15 +336,7 @@ final class Request_Tester {
 		$method = strtoupper( (string) ( $described['method'] ?? 'GET' ) );
 		$body   = (string) ( $described['body'] ?? '' );
 
-		$request = Request::create(
-			'' === $path ? '/' : $path,
-			$method,
-			array(),
-			array(),
-			array(),
-			array(),
-			'' === $body ? null : $body
-		);
+		$request = self::site_request( '' === $path ? '/' : $path, $method, '' === $body ? null : $body );
 
 		$ip = trim( (string) ( $described['ip'] ?? '' ) );
 
@@ -369,6 +362,41 @@ final class Request_Tester {
 		}
 
 		return $request;
+	}
+
+	/**
+	 * A made-up request for a path on this site, built as a live one would be.
+	 *
+	 * Built as a web server would describe the same request to this site,
+	 * then corrected by Request_Factory exactly as a live request is. So
+	 * `/wp-login.php` is tested as the direct request for wp-login.php it
+	 * would be in production, and the answer here is the answer there. Site
+	 * Health builds its regression check the same way.
+	 *
+	 * @param string      $path   Path relative to the site, with any query.
+	 * @param string      $method HTTP method.
+	 * @param string|null $body   Request body.
+	 */
+	public static function site_request( string $path, string $method = 'GET', ?string $body = null ): Request {
+		$server = Request_Factory::server_for( $path, self::site_path(), ABSPATH );
+
+		$request = Request::create( $server['REQUEST_URI'], $method, array(), array(), array(), $server, $body );
+
+		Request_Factory::normalise( $request );
+
+		return $request;
+	}
+
+	/**
+	 * The site's own path on its host: empty, or `/blog` for a site served there.
+	 *
+	 * From the WordPress address, because that is where ABSPATH is served from
+	 * and so where the web server says the front controller is.
+	 */
+	private static function site_path(): string {
+		$path = wp_parse_url( site_url( '/' ), PHP_URL_PATH );
+
+		return is_string( $path ) ? rtrim( $path, '/' ) : '';
 	}
 
 	/**

@@ -590,6 +590,30 @@ always does, which on a block rule is every visitor.
 - **`port` compares as a number** with *is equal to*, *is not equal to* and *is
   one of*, because the library holds it as one and compares strictly.
 
+#### `path` is the path that was requested
+
+Most of a WordPress site is served through `index.php`, but not all of it:
+`wp-login.php`, `xmlrpc.php`, `wp-cron.php`, every `/wp-admin/*.php` screen and
+any custom endpoint in the site's root are run directly by the web server. The
+library works out `path` the way a front-controller application would, and for
+a directly run file that used to leave `/` — so a `/wp-login.php` rate limit
+counted nothing, a rule on `/wp-admin` matched no screen, and a negated path
+condition matched all of them.
+
+The plugin now builds the request it hands the library so that a direct request
+looks like one routed through `index.php`: `path` is `/wp-login.php`,
+`/wp-admin/edit.php` or `/xmlrpc.php`, on both evaluation paths, in rate limit
+patterns, in the log's `path` and in block records. WordPress's own view of the
+request is not touched. On a site installed in a subdirectory, `path` is
+relative to it, as it already was for pages: `/blog/wp-login.php` is
+`/wp-login.php`. Where WordPress's own files sit in a subdirectory of the site
+— the WordPress Address differs from the Site Address — a directly run file's
+`path` is relative to that directory: `/wp/wp-login.php` is `/wp-login.php`,
+so rules and presets written for `/wp-login.php` and `/wp-admin` apply
+unchanged. The Test screen builds its request the same way, and a Site
+Health check (*Basic Firewall request path*) fails if a direct `wp-login.php`
+request ever resolves to `/` again.
+
 ### Responses
 
 Six, evaluated in this order. Within a group, lower weights run first.
