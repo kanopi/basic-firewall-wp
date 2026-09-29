@@ -583,6 +583,11 @@ design, and reporting them as *Allowed* — which is what the screen says when n
 rule matched at all — would tell somebody testing their honeypot that it does
 not work at the moment it has just caught them.
 
+**Testing leaves nothing behind.** A test run writes no block, no offense and
+no log line, and every rate limit — a preset's as well as your own — counts in
+memory for the run, so testing a limited path as often as you like never spends
+a real client's allowance.
+
 ### Giving a rule opening hours
 
 Any rule can declare when it is awake, under **When this rule is awake** on the

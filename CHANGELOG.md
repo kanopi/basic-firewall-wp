@@ -66,7 +66,9 @@ does not work as well as what does.
   General, Storage, Rules, Logging, Challenge, Presets, Advanced, Log, Blocked,
   Compiled, Export, Import and Test — and the rule editor, reached from Rules,
   with its type chooser. The Test screen evaluates a made-up request against the
-  live rules without recording anything.
+  live rules without recording anything: no block, no offense, no log line,
+  and no rate limit counter — every rate limit, presets' included, counts in
+  memory for the run.
 - **Block list storage** in files, the database or Redis. Redis stores each
   block with a TTL, so expiry costs nothing. Database tables carry the site's
   table prefix, so sites on a network do not share a block list.
