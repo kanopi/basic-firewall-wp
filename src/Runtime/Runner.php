@@ -70,6 +70,13 @@ final class Runner {
 	private static array $marks = array();
 
 	/**
+	 * Whether this request was exempt, as a member of an exempt role.
+	 *
+	 * @var bool
+	 */
+	private static bool $exempt = false;
+
+	/**
 	 * Evaluate the current request.
 	 *
 	 * Never throws. Returns true when the request may continue -- which includes
@@ -105,6 +112,29 @@ final class Runner {
 		}
 
 		if ( ! $this->is_enabled() ) {
+			return true;
+		}
+
+		/*
+		 * An exempt role. Only the current request, because only its cookies
+		 * are there to read. See Role_Bypass for why this splits on a cookie.
+		 */
+		$bypass = null === $request ? $this->bypass_decision( $_COOKIE ) : 'evaluate';
+
+		if ( 'defer' === $bypass ) {
+			/*
+			 * Not yet: the login cookie cannot be validated before the
+			 * pluggable functions load. Left unmarked, so the runner's
+			 * `plugins_loaded` hook evaluates it -- or exempts it -- then.
+			 */
+			return true;
+		}
+
+		if ( 'exempt' === $bypass ) {
+			define( 'BASIC_FIREWALL_EVALUATED', true );
+
+			self::$exempt = true;
+
 			return true;
 		}
 
@@ -352,6 +382,38 @@ final class Runner {
 	 */
 	public static function is_marked( string $mark ): bool {
 		return in_array( $mark, self::$marks, true );
+	}
+
+	/**
+	 * What the role exemption says about the current request.
+	 *
+	 * `evaluate` for a request no exemption applies to -- no role is exempt,
+	 * or it carries no login cookie -- which is every request on a site that
+	 * never configured one. `defer` when it carries a login cookie and the
+	 * cookie cannot be validated yet, at `muplugins_loaded`. `exempt` when it
+	 * validates, for a member of an exempt role.
+	 *
+	 * @param array<mixed> $cookies The request's cookies.
+	 */
+	private function bypass_decision( array $cookies ): string {
+		$roles = Role_Bypass::clean( (array) Plugin::instance()->settings()->get( 'global.bypass_roles', array() ) );
+
+		if ( array() === $roles || ! Role_Bypass::carries_login_cookie( $cookies ) ) {
+			return 'evaluate';
+		}
+
+		if ( ! Role_Bypass::can_authenticate() ) {
+			return 'defer';
+		}
+
+		return Role_Bypass::exempts( $roles ) ? 'exempt' : 'evaluate';
+	}
+
+	/**
+	 * Whether this request went unevaluated as a member of an exempt role.
+	 */
+	public static function exempted(): bool {
+		return self::$exempt;
 	}
 
 	/**
@@ -645,5 +707,6 @@ final class Runner {
 		self::$failure        = null;
 		self::$failure_detail = '';
 		self::$marks          = array();
+		self::$exempt         = false;
 	}
 }

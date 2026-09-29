@@ -29,6 +29,7 @@ its habit of writing down what does not work.
 - [During an incident](#during-an-incident)
 - [wp-config.php options](#wp-configphp-options)
 - [WP-CLI commands](#wp-cli-commands)
+- [Exempting a role](#exempting-a-role)
 - [Multisite](#multisite)
 - [Uninstalling](#uninstalling)
 - [Building a release](#building-a-release)
@@ -1932,6 +1933,53 @@ Agreeing to a destructive command is opt-in through `BFW_CLI_DESTRUCTIVE=1`, so
 running it against a site you care about does not empty its block list. CI opts
 in, because its site goes away with the runner.
 
+## Exempting a role
+
+The **General** screen can exempt roles from evaluation. No rule runs for a
+member of an exempt role, and nothing is logged for them. It is the tool for a
+rule set that is right but keeps catching editors doing legitimate work, and it
+is off by default: while no role is ticked, both evaluation paths are exactly
+what they would be without the feature.
+
+**Prefer something narrower.** An allow rule scoped to an office range, or
+observing the one rule that misfires, leaves the rest of the firewall at full
+strength. A role exemption does not: anyone who can grant the role can exempt
+themselves, and an account takeover is unfiltered from then on. Site Health
+reports a configured exemption for that reason.
+
+### Why it needs a second evaluation point
+
+Roles do not exist where the firewall runs. The `wp-config.php` path runs before
+WordPress does, and the mu-plugin runs at `muplugins_loaded`, before the
+functions that check a login cookie are loaded — which is exactly what makes
+refusing a request cheap. So, like the Drupal module with its session cookie,
+the plugin splits on a question it *can* answer that early: does the request
+carry a WordPress login cookie?
+
+| Request | Where it is evaluated |
+| --- | --- |
+| No login cookie | Where it always was. It cannot belong to anyone. |
+| Login cookie present | At `plugins_loaded`, once the cookie can be validated. |
+
+The cookie is *validated* then, not just read — without making anybody the
+current user, so plugins that authenticate another way still get their say. A
+forged, expired or logged-out cookie belongs to nobody, and the request is
+evaluated like any other, just later. Naming a cookie buys an attacker a later
+evaluation, never a skipped one.
+
+### What it costs
+
+- **A page cache that serves logged-in visitors.** A request with a login cookie
+  is left for WordPress, so on the `wp-config.php` path it reaches
+  `advanced-cache.php` unevaluated. WP Super Cache, W3 Total Cache, Batcache,
+  WP Rocket and LiteSpeed Cache do not serve cached pages to requests carrying
+  a login cookie by default, so it goes on to the runner. A cache configured to
+  serve them would serve those requests without the firewall seeing them.
+- **Code that answers a request while plugins are loading** — before
+  `plugins_loaded` — sees a cookie-bearing request before the firewall does.
+- **Cookie logins only.** An application password or token is checked by
+  WordPress later still, so those requests are evaluated as usual.
+
 ## Multisite
 
 Per-site. Each site gets its own settings, its own block list, its own counters
@@ -2205,11 +2253,6 @@ Listed rather than omitted, so you know they were considered.
   release is how a library update reaches sites and coupling that to a review
   queue is the wrong dependency. `readme.txt` is maintained so the decision stays
   cheap to reverse. See `DECISIONS.md` section 4.
-- **A role-based bypass matching the module's second evaluation point.** Roles
-  are exempted on the General screen, but the module's trick of deferring
-  cookie-bearing requests past the page cache to a second evaluation point is not
-  ported — WordPress has no equivalent policy to lean on, and the bypass that
-  Drupal's version introduced is not one worth reimplementing blind.
 - **Editing preset rules.** Presets are included by reference so they update with
   the library. To carve out an exception, add an allow rule with a lower weight.
 - **Per-user rate limits.** Not expressible; see

@@ -22,6 +22,7 @@ use Kanopi\BasicFirewall\RuleType\Rule_Type_Base;
 use Kanopi\BasicFirewall\RuleType\Types\Edge_Signal;
 use Kanopi\BasicFirewall\RuleType\Types\User_Agent;
 use Kanopi\BasicFirewall\Runtime\Lockdown;
+use Kanopi\BasicFirewall\Runtime\Role_Bypass;
 use Kanopi\BasicFirewall\Support\Schema;
 use Kanopi\Firewall\Utility\Schedule;
 use Symfony\Component\Yaml\Yaml;
@@ -57,8 +58,9 @@ final class Config_Compiler {
 	 * @var array<string, mixed>
 	 */
 	public const RUNTIME_DEFAULTS = array(
-		'enabled' => true,
-		'redact'  => array(),
+		'enabled'     => true,
+		'redact'      => array(),
+		'defer_login' => false,
 	);
 
 	/**
@@ -229,10 +231,14 @@ final class Config_Compiler {
 		$settings = Plugin::instance()->settings();
 
 		return array(
-			'enabled' => (bool) $settings->get( 'enabled', true ),
+			'enabled'     => (bool) $settings->get( 'enabled', true ),
 
 			// Names the log redacts as well as the library's own; see Redaction.
-			'redact'  => Redaction::clean( (array) $settings->get( 'logging.redact_extra', array() ) ),
+			'redact'      => Redaction::clean( (array) $settings->get( 'logging.redact_extra', array() ) ),
+
+			// A role is exempt, so a request carrying a login cookie is left
+			// for the runner, which can validate it; see Role_Bypass.
+			'defer_login' => array() !== Role_Bypass::clean( (array) $settings->get( 'global.bypass_roles', array() ) ),
 		);
 	}
 

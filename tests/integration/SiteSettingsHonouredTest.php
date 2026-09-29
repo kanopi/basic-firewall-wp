@@ -59,7 +59,7 @@ final class SiteSettingsHonouredTest extends Honoured_Settings {
 	 */
 	private const COVERAGE = array(
 		'enabled'                                         => 'test_enabled',
-		'global.bypass_roles'                             => 'unapplied: stored, shown on the General screen and reported by Site Health, but no code path exempts a role.',
+		'global.bypass_roles'                             => 'test_bypass_roles',
 		'global.mode'                                     => 'test_mode',
 		'global.panic_file'                               => 'test_panic_file',
 		'global.lockdown'                                 => 'test_lockdown',
@@ -222,6 +222,76 @@ final class SiteSettingsHonouredTest extends Honoured_Settings {
 
 		$this->assertSame( 'block', $firewall->getConfiguredMode()->value );
 		$this->assertFileDoesNotExist( $sidecar, 'A sidecar holding only defaults was left for the early path to read on every request.' );
+	}
+
+	/**
+	 * A member of an exempt role goes unevaluated; nobody else does.
+	 *
+	 * The runner's decision, asked directly: this process has already been
+	 * marked evaluated, as every test run is. Where a login cookie is
+	 * evaluated before the runner can check it is EarlyPathExceptionModeTest.
+	 */
+	public function test_bypass_roles(): void {
+		require_once ABSPATH . 'wp-admin/includes/user.php';
+
+		$editor     = wp_insert_user(
+			array(
+				'user_login' => 'bfw-bypass-editor-' . wp_generate_password( 6, false ),
+				'user_pass'  => wp_generate_password(),
+				'role'       => 'editor',
+			)
+		);
+		$subscriber = wp_insert_user(
+			array(
+				'user_login' => 'bfw-bypass-subscriber-' . wp_generate_password( 6, false ),
+				'user_pass'  => wp_generate_password(),
+				'role'       => 'subscriber',
+			)
+		);
+		$cookies    = $_COOKIE;
+		$method     = isset( $_SERVER['REQUEST_METHOD'] ) ? sanitize_text_field( wp_unslash( $_SERVER['REQUEST_METHOD'] ) ) : null;
+		$runner     = \Kanopi\BasicFirewall\Plugin::instance()->runner();
+
+		// wp_validate_auth_cookie() reads it, and a CLI run has none.
+		$_SERVER['REQUEST_METHOD'] = 'GET';
+
+		$this->assertIsInt( $editor );
+		$this->assertIsInt( $subscriber );
+
+		try {
+			$this->build( array( 'global' => array( 'bypass_roles' => array( 'editor' ) ) ) );
+
+			$sidecar = (array) json_decode( (string) file_get_contents( \Kanopi\BasicFirewall\Plugin::instance()->paths()->runtime_file() ), true ); // phpcs:ignore WordPress.WP.AlternativeFunctions -- a local file.
+
+			$this->assertTrue( $sidecar['defer_login'] ?? false, 'The wp-config.php path cannot tell that a login cookie has to wait for the runner.' );
+
+			$as = static function ( $cookie ) {
+				$_COOKIE = null === $cookie ? array() : array( LOGGED_IN_COOKIE => $cookie );
+
+				return $_COOKIE;
+			};
+
+			$this->assertSame( 'exempt', self::invoke( $runner, 'bypass_decision', $as( wp_generate_auth_cookie( $editor, time() + 600, 'logged_in' ) ) ), 'A member of an exempt role was evaluated.' );
+			$this->assertSame( 'evaluate', self::invoke( $runner, 'bypass_decision', $as( wp_generate_auth_cookie( $subscriber, time() + 600, 'logged_in' ) ) ), 'A member of a role that is not exempt went unevaluated.' );
+			$this->assertSame( 'evaluate', self::invoke( $runner, 'bypass_decision', $as( 'bfw-bypass-editor|' . ( time() + 600 ) . '|forged|forged' ) ), 'A forged login cookie was exempted.' );
+			$this->assertSame( 'evaluate', self::invoke( $runner, 'bypass_decision', $as( null ) ) );
+
+			$this->build( array( 'global' => array( 'bypass_roles' => array() ) ) );
+
+			$this->assertSame( 'evaluate', self::invoke( $runner, 'bypass_decision', $as( wp_generate_auth_cookie( $editor, time() + 600, 'logged_in' ) ) ), 'With no role exempt, an editor went unevaluated.' );
+			$this->assertFileDoesNotExist( \Kanopi\BasicFirewall\Plugin::instance()->paths()->runtime_file() );
+		} finally {
+			$_COOKIE = $cookies;
+
+			if ( null === $method ) {
+				unset( $_SERVER['REQUEST_METHOD'] );
+			} else {
+				$_SERVER['REQUEST_METHOD'] = $method;
+			}
+
+			wp_delete_user( $editor );
+			wp_delete_user( $subscriber );
+		}
 	}
 
 	/**

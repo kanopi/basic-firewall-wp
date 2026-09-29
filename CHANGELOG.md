@@ -137,6 +137,11 @@ does not work as well as what does.
 - **Schema upgrades** that are numbered, idempotent and advance one routine at a
   time, so an upgrade interrupted by a timeout resumes rather than corrupting
   settings. A failure is reported in Site Health, never fatal.
+- **Exempting a role.** Members of roles ticked on the General screen are not
+  evaluated. A request carrying a WordPress login cookie is evaluated at
+  `plugins_loaded` instead, on both paths, once the cookie can be validated; a
+  forged one is evaluated like any other request. Off by default, and while it
+  is off nothing about either path changes.
 - **Multisite, per site.** Each site of a network has its own settings,
   compiled file, block list, counters and logs, and is evaluated from the
   mu-plugin against its own rules. The `wp-config.php` path steps aside on a

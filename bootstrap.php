@@ -194,6 +194,19 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 			return true;
 		}
 
+		/*
+		 * A role is exempt, and this request carries a WordPress login cookie.
+		 * Whose it is cannot be known until WordPress validates it, so the
+		 * request is left unmarked for the runner, which evaluates it -- or,
+		 * for a member of an exempt role, does not -- once it can. Anything
+		 * without the cookie is evaluated here as usual; see Role_Bypass.
+		 */
+		if ( $runtime['defer_login'] && basic_firewall_carries_login_cookie( $options ) ) {
+			$GLOBALS['basic_firewall_early']['reason'] = 'deferred-login';
+
+			return true;
+		}
+
 		$autoload = basic_firewall_autoloader( $options );
 
 		if ( null === $autoload ) {
@@ -561,12 +574,13 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 	 *
 	 * @param array<string, mixed> $options Bootstrap options.
 	 *
-	 * @return array{enabled: bool, redact: list<string>}
+	 * @return array{enabled: bool, redact: list<string>, defer_login: bool}
 	 */
 	function basic_firewall_runtime( array $options ) {
 		$runtime = array(
-			'enabled' => true,
-			'redact'  => array(),
+			'enabled'     => true,
+			'redact'      => array(),
+			'defer_login' => false,
 		);
 
 		$compiled = basic_firewall_compiled_path( $options );
@@ -591,6 +605,10 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 			$runtime['enabled'] = false;
 		}
 
+		if ( true === ( $decoded['defer_login'] ?? false ) ) {
+			$runtime['defer_login'] = true;
+		}
+
 		foreach ( is_array( $decoded['redact'] ?? null ) ? $decoded['redact'] : array() as $name ) {
 			if ( is_string( $name ) && '' !== $name ) {
 				$runtime['redact'][] = $name;
@@ -598,6 +616,36 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 		}
 
 		return $runtime;
+	}
+
+	/**
+	 * Whether this request carries something named like a WordPress login cookie.
+	 *
+	 * Asked of the plugin's own Role_Bypass, loaded by hand, so the two paths
+	 * cannot disagree about which requests wait for the runner. If it cannot
+	 * be loaded the answer is no, and the request is evaluated here as it
+	 * would be with no role exempt -- a missed exemption, never a missed
+	 * evaluation.
+	 *
+	 * @param array<string, mixed> $options Bootstrap options.
+	 *
+	 * @return bool
+	 */
+	function basic_firewall_carries_login_cookie( array $options ) {
+		$class = 'Kanopi\\BasicFirewall\\Runtime\\Role_Bypass';
+
+		if ( ! class_exists( $class, false ) ) {
+			$file = rtrim( (string) $options['plugin_path'], '/' ) . '/src/Runtime/Role_Bypass.php';
+
+			if ( ! is_readable( $file ) ) {
+				return false;
+			}
+
+			require_once $file;
+		}
+
+		// phpcs:ignore WordPress.Security.ValidatedSanitizedInput -- only the cookie names are read, and only compared.
+		return class_exists( $class, false ) && (bool) call_user_func( array( $class, 'carries_login_cookie' ), $_COOKIE );
 	}
 
 	/**

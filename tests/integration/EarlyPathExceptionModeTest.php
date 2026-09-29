@@ -342,6 +342,31 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 	}
 
 	/**
+	 * With a role exempt, a request carrying a login cookie waits for the runner.
+	 *
+	 * Whose the cookie is can only be known once WordPress validates it, so
+	 * this path leaves the request unmarked and the runner decides. Without
+	 * the cookie, or with no role exempt, nothing changes.
+	 */
+	public function test_a_login_cookie_waits_for_the_runner_when_a_role_is_exempt(): void {
+		$cookie = array( 'Cookie' => 'wordpress_logged_in_0123abcd=someone%7C1%7Cforged' );
+
+		$this->given_rule( 'block', 'block' );
+
+		$this->assertSame( 403, $this->request( '/bfw-early-match', $cookie )['status'], 'With no role exempt, a login cookie changed where the request was evaluated.' );
+
+		$this->given_rule( 'block', 'block', array( 'bypass_roles' => array( 'editor' ) ) );
+
+		$this->assertSame( 403, $this->request( '/bfw-early-match' )['status'], 'An exempt role stopped this path evaluating requests that carry no login cookie.' );
+
+		$response = $this->request( '/bfw-early-match', $cookie );
+
+		$this->assertSame( 200, $response['status'] );
+		$this->assertSame( 'deferred-login', $response['reason'] );
+		$this->assertSame( 'no', $response['evaluated'], 'The request was marked evaluated, so the runner would never check the cookie or evaluate it.' );
+	}
+
+	/**
 	 * A failure that is not a verdict fails open, and is reported.
 	 *
 	 * It used to fail open silently on both paths: nothing recorded that the

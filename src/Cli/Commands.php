@@ -368,7 +368,7 @@ final class Commands {
 			return 'mu-plugin, per site (the wp-config.php snippet steps aside on a multisite network and can be removed)';
 		}
 
-		if ( $early['called'] && ! $early['evaluated'] && ! in_array( $early['reason'], array( 'disabled', 'switched-off' ), true ) ) {
+		if ( $early['called'] && ! $early['evaluated'] && ! in_array( $early['reason'], array( 'disabled', 'switched-off', 'deferred-login' ), true ) ) {
 			return sprintf(
 				'wp-config.php snippet present but NOT evaluating (%s) — running from the mu-plugin instead',
 				(string) $early['reason']

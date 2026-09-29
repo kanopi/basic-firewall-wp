@@ -889,7 +889,7 @@ final class Site_Health {
 		// runs; check_bootstrap() says what to do about a snippet left in.
 		$early = self::early_path_active() && ! is_multisite();
 
-		if ( $early && ! self::early_report()['evaluated'] && ! in_array( self::early_report()['reason'], array( 'disabled', 'switched-off' ), true ) ) {
+		if ( $early && ! self::early_report()['evaluated'] && ! in_array( self::early_report()['reason'], array( 'disabled', 'switched-off', 'deferred-login' ), true ) ) {
 			/*
 			 * The snippet is there and running, and this request still was not
 			 * evaluated by it. Reported rather than folded into the healthy
@@ -905,6 +905,11 @@ final class Site_Health {
 			 * test already reports that state. Two checks describing one
 			 * cause, one of them wrongly, is worse than the check that was
 			 * missing.
+			 *
+			 * `deferred-login` too: a role is exempt and this request -- an
+			 * admin screen, almost always -- carries a login cookie, so it was
+			 * handed to the runner on purpose. Requests without one are
+			 * evaluated by the snippet as usual.
 			 */
 			return self::critical(
 				__( 'The wp-config.php snippet is present but is not evaluating requests', 'basic-firewall' ),
@@ -1157,6 +1162,8 @@ final class Site_Health {
 		switch ( $reason ) {
 			case 'disabled':
 				return __( 'BASIC_FIREWALL_ENABLED is defined as false in wp-config.php, which switches the firewall off on both paths.', 'basic-firewall' );
+			case 'deferred-login':
+				return __( 'A role is exempt from the firewall and this request carries a WordPress login cookie, so it was left for the mu-plugin, which can check whose it is. Requests without one are evaluated before WordPress as usual.', 'basic-firewall' );
 			case 'multisite':
 				return __( 'This is a multisite network, where the wp-config.php path steps aside and each site is evaluated from the mu-plugin against its own rules.', 'basic-firewall' );
 			case 'switched-off':
@@ -1365,6 +1372,7 @@ final class Site_Health {
 					esc_html__( 'No rule runs for members of: %s. Anyone who can grant one of those roles can exempt themselves, and an account takeover is unfiltered from that point on. An allow rule scoped to an address range leaves the rest of the firewall at full strength.', 'basic-firewall' ),
 					esc_html( implode( ', ', array_map( 'strval', $bypass ) ) )
 				)
+				. ' ' . esc_html__( 'To tell who a request belongs to, every request carrying a WordPress login cookie is evaluated once WordPress has validated it, after plugins load, rather than before — including on the wp-config.php path. A page cache that serves pages to logged-in visitors would serve those requests before the firewall sees them; the common ones do not by default.', 'basic-firewall' )
 			);
 		}
 
