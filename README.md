@@ -174,6 +174,11 @@ namespace-scoped**, which makes it immune to a collision with any other plugin
 that bundles `kanopi/firewall`. `wp basic-firewall status` reports
 `Collision safe: yes (scoped)`.
 
+It carries only what runs. Development dependencies are never installed into
+it, the plugin's own tests and tooling config are left out, and so is what the
+bundled libraries ship for their own development — their CLI tools (`bin/`),
+documentation, tests and linter config. Each library's licence file is kept.
+
 Immune because both evaluation paths always run the scoped copy. When another
 copy is already loaded — a Bedrock site's own Composer autoloader, required from
 `wp-config.php`, or another plugin — the plugin still registers its own
@@ -2304,23 +2309,26 @@ and the job itself refuses to run without `CIRCLE_TAG`.
 A red nightly-WordPress job holds a release like any other job. Re-run the
 workflow once trunk settles rather than releasing past it.
 
-### One-time setup: the token
+### The token
 
-The `release` job reads a GitHub token from a CircleCI **context** named
-`basic-firewall-release`. Until that exists, every tag build fails at the
-`release` job, with everything before it still green.
+The `release` job authenticates as the Kanopi GitHub App rather than with a
+stored personal token. It runs with the `kanopi-code` CircleCI context, and the
+`ci-tools/github-app-token` step from the `kanopi/ci-tools` orb exchanges the
+App's credentials there (`GH_APP_ID`, `GH_APP_KEY`) for an installation token
+that lasts about an hour, exported as `GITHUB_TOKEN` and `GH_TOKEN` for the
+publish step. Nothing long-lived is stored for this repository, and no other job
+runs with that context.
 
-1. Create a token that can write this repository's releases — either a
-   fine-grained personal access token (or GitHub App token) scoped to
-   `kanopi/basic-firewall-wp` with **Contents: Read and write**, or a classic
-   token with the `repo` scope. Prefer the fine-grained one, owned by a bot or
-   service account rather than a person.
-2. In CircleCI, **Organization Settings → Contexts → Create Context**, named
-   exactly `basic-firewall-release`.
-3. Add an environment variable to it named exactly **`GITHUB_TOKEN`** with the
-   token as its value.
-4. Restrict the context to the security group allowed to cut releases, so a
-   pull request cannot reach the token.
+What it needs:
+
+- The App **installed on `kanopi/basic-firewall-wp`** with **Contents: Read and
+  write**, which is what creating a release and uploading its assets takes.
+- The `kanopi-code` context available to this project.
+
+If the exchange fails, the step leaves the environment as it was and
+`build/publish-release.sh` stops before publishing anything, naming what to
+check. Everything before the `release` job stays green, so the fix is a re-run
+of that one job.
 
 ## Deliberately out of scope
 

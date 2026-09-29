@@ -44,12 +44,13 @@ fi
 
 if [ -z "${GITHUB_TOKEN:-}${GH_TOKEN:-}" ]; then
 	cat >&2 <<'EOF'
-publish-release: GITHUB_TOKEN is not set.
+publish-release: neither GITHUB_TOKEN nor GH_TOKEN is set.
 
-The release job reads it from the CircleCI context `basic-firewall-release`.
-Create that context (Organization Settings -> Contexts) with an environment
-variable GITHUB_TOKEN holding a token that can write this repository's
-contents, and restrict the context to the people allowed to release.
+In CI the release job gets one from ci-tools/github-app-token, which exchanges
+the Kanopi GitHub App's credentials in the kanopi-code context for an
+installation token. If you are reading this there, that exchange failed: check
+its step output, that the App is installed on this repository with Contents:
+Read and write, and that the job runs with the kanopi-code context.
 See README, "Releasing".
 EOF
 	exit 1
