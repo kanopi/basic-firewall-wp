@@ -158,7 +158,7 @@ final class Rate_Limit extends Rule_Type_Base {
 				 */
 				'lines'       => array( self::class, 'limit_lines' ),
 				'description' => wp_kses_post(
-					__( 'One per line, as <code>pattern requests seconds</code> — <code>/wp-login.php 5 300</code> is five attempts in five minutes.<br><br>A fourth field names <strong>what to count</strong>, comma separated. Left off, the firewall counts the client address and the pattern, which is what it has always done. <code>/wp-login.php 5 300 post.log</code> counts the account being tried rather than the address trying it, so a credential-stuffing run spread over a thousand addresses still hits one limit. <code>/api/* 100 60 client_ip,path</code> counts each endpoint separately rather than the API as a whole.<br><br><strong>A limit that counts an account is not a replacement for one that counts the address.</strong> The two catch opposite attacks — an account key misses one client walking a list of usernames, which gets a fresh budget per name — and a limit without <code>client_ip</code> in its key refuses but never bans. Keep an address-keyed limit on the same pattern, <em>in a separate rate limit rule</em>: within one rule only the first line whose pattern matches is ever used.', 'basic-firewall' )
+					__( 'One per line, as <code>pattern requests seconds</code> — <code>/wp-login.php 5 300</code> is five attempts in five minutes.<br><br>A fourth field names <strong>what to count</strong>, comma separated. Left off, the firewall counts the client address and the pattern, which is what it has always done. <code>/wp-login.php 5 300 post.log</code> counts the account being tried rather than the address trying it, so a credential-stuffing run spread over a thousand addresses still hits one limit. <code>/api/* 100 60 client_ip,path</code> counts each endpoint separately rather than the API as a whole. A header name is read in any case; a form field, cookie or query name exactly as written, so <code>post.userName</code> and <code>post.username</code> are different fields.<br><br><strong>A limit that counts an account is not a replacement for one that counts the address.</strong> The two catch opposite attacks — an account key misses one client walking a list of usernames, which gets a fresh budget per name — and a limit without <code>client_ip</code> in its key refuses but never bans. Keep an address-keyed limit on the same pattern, <em>in a separate rate limit rule</em>: within one rule only the first line whose pattern matches is ever used.', 'basic-firewall' )
 				),
 			),
 			'storage' => array(
@@ -312,25 +312,6 @@ final class Rate_Limit extends Rule_Type_Base {
 					__( '%1$s is not something a limit can count by, on %2$s. Every request would share one count, so one visitor could spend the allowance for everybody. Use client_ip, rule_pattern, path, method, host, scheme, port or query, or header., post., cookie. or query. followed by a name.', 'basic-firewall' ),
 					implode( ', ', $unknown ),
 					$pattern
-				);
-
-				continue;
-			}
-
-			/*
-			 * The library lower-cases every component before resolving it. That
-			 * is right for a header, whose name is case-insensitive, and wrong
-			 * for a form field, a cookie or a query parameter, whose names are
-			 * not: `post.userName` looks for `username`, finds nothing, and
-			 * counts every request in one bucket.
-			 */
-			$miscased = self::miscased_key_components( self::raw_key_components( $raw_key ) );
-
-			if ( array() !== $miscased ) {
-				$errors['paths'] = sprintf(
-					/* translators: %s: the rejected components. */
-					__( '%s names a field with capital letters. The firewall compares these names in lower case, so that field would never be found and every request would share one count. Only a field whose name is already lower case can be counted.', 'basic-firewall' ),
-					implode( ', ', $miscased )
 				);
 
 				continue;
@@ -708,7 +689,7 @@ final class Rate_Limit extends Rule_Type_Base {
 		return array_values(
 			array_filter(
 				array_map(
-					static fn ( string $part ): string => strtolower( trim( $part ) ),
+					array( self::class, 'normalise_key_component' ),
 					explode( ',', $value )
 				),
 				static fn ( string $part ): bool => '' !== $part
@@ -717,25 +698,40 @@ final class Rate_Limit extends Rule_Type_Base {
 	}
 
 	/**
-	 * Split a typed key without changing its case.
+	 * One key component, spelled the way the library reads it.
 	 *
-	 * @param string $value Raw field.
+	 * Mirrors `RateLimit::normaliseComponent()` in kanopi/firewall 2.33.2. The
+	 * prefix is forgiven its case, and so is a header name, which HTTP makes
+	 * case-insensitive. A POST, cookie or query name is not: it is case-sensitive
+	 * everywhere that reads it, so `post.userName` keeps its capital or it names
+	 * a field that is never there -- every request would resolve to the same
+	 * empty value and share one count.
 	 *
-	 * @return list<string>
+	 * Before 2.33.2 the library lower-cased every component, and this plugin
+	 * refused a capitalised POST, cookie or query name rather than store one
+	 * that could not work. Every key stored under that rule is lower case
+	 * already, and reads exactly as it did.
+	 *
+	 * @param string $component As typed.
 	 */
-	private static function raw_key_components( string $value ): array {
-		return array_values(
-			array_filter(
-				array_map( 'trim', explode( ',', $value ) ),
-				static fn ( string $part ): bool => '' !== $part
-			)
-		);
+	public static function normalise_key_component( string $component ): string {
+		$component = trim( $component );
+		$dot       = strpos( $component, '.' );
+
+		if ( false === $dot ) {
+			return strtolower( $component );
+		}
+
+		$prefix = strtolower( substr( $component, 0, $dot ) );
+		$name   = substr( $component, $dot + 1 );
+
+		return $prefix . '.' . ( 'header' === $prefix ? strtolower( $name ) : $name );
 	}
 
 	/**
 	 * The components the library could not resolve against any request.
 	 *
-	 * @param list<string> $components Parsed, lower-cased components.
+	 * @param list<string> $components Parsed, normalised components.
 	 *
 	 * @return list<string>
 	 */
@@ -757,33 +753,6 @@ final class Rate_Limit extends Rule_Type_Base {
 		}
 
 		return $unknown;
-	}
-
-	/**
-	 * The components naming a case-sensitive field with capitals in it.
-	 *
-	 * @param list<string> $components Components as typed.
-	 *
-	 * @return list<string>
-	 */
-	public static function miscased_key_components( array $components ): array {
-		$miscased = array();
-
-		foreach ( $components as $component ) {
-			$dot = strpos( $component, '.' );
-
-			if ( false === $dot ) {
-				continue;
-			}
-
-			$family = strtolower( substr( $component, 0, $dot ) );
-
-			if ( in_array( $family, array( 'post', 'cookie', 'query' ), true ) && substr( $component, $dot + 1 ) !== strtolower( substr( $component, $dot + 1 ) ) ) {
-				$miscased[] = $component;
-			}
-		}
-
-		return $miscased;
 	}
 
 	/**

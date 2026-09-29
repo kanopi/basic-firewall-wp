@@ -72,17 +72,36 @@ final class RateLimitKeyTest extends TestCase {
 	}
 
 	/**
-	 * A form field, cookie or query name with capitals is named; a header is not.
+	 * A form field, cookie or query name keeps its case; a prefix and a header do not.
 	 *
-	 * The library lower-cases the whole component before resolving it. A
-	 * header's name is case-insensitive, so that is harmless there; the other
-	 * three are looked up exactly and would never be found.
+	 * Those three names are case-sensitive everywhere that reads them, so
+	 * `post.userName` lower-cased is a field that is never there. A header name
+	 * is case-insensitive, and the prefix is forgiven its case.
 	 */
-	public function test_a_case_sensitive_name_with_capitals_is_named(): void {
+	public function test_a_case_sensitive_name_keeps_its_case(): void {
 		$this->assertSame(
-			array( 'post.userName', 'cookie.Session', 'query.Q' ),
-			Rate_Limit::miscased_key_components( array( 'post.userName', 'cookie.Session', 'query.Q', 'header.X-Api-Key', 'POST.log', 'client_ip' ) )
+			array( 'post.userName', 'cookie.Session', 'query.Q', 'header.x-api-key', 'post.log', 'post.x', 'client_ip', 'query' ),
+			Rate_Limit::parse_key( ' post.userName, cookie.Session ,query.Q, header.X-Api-Key, POST.log, Post.x, CLIENT_IP, Query, ' )
 		);
+	}
+
+	/**
+	 * The plugin spells every component exactly as the library reads it.
+	 *
+	 * Checked against the library's own normalisation rather than a copy of
+	 * it, so a library that changes its mind fails here. A key that already
+	 * worked -- lower case, or a capitalised header or prefix -- is spelled as
+	 * it always was, which is why no stored key moves to a different counter.
+	 */
+	public function test_components_match_the_library(): void {
+		$typed = array( 'post.userName', 'cookie.Session', 'query.Q', 'header.User-Agent', 'POST.x', 'Cookie.sid', 'CLIENT_IP', 'rule_pattern', 'Path', 'post.log', 'header.x-api-key' );
+
+		$library = ( new \ReflectionClass( \Kanopi\Firewall\Plugins\RateLimit::class ) )->newInstanceWithoutConstructor();
+		$method  = new \ReflectionMethod( $library, 'keyComponents' );
+		$method->setAccessible( true );
+
+		$this->assertSame( $method->invoke( $library, array( 'key' => $typed ) ), Rate_Limit::parse_key( implode( ',', $typed ) ) );
+		$this->assertSame( array( 'header.user-agent', 'post.x' ), Rate_Limit::parse_key( 'header.User-Agent, POST.x' ) );
 	}
 
 	/**
