@@ -595,4 +595,122 @@ final class HttpEvaluationTest extends TestCase {
 			sprintf( 'The allowance of %d was never enforced: %s', $limit, implode( ', ', $statuses ) )
 		);
 	}
+
+	/**
+	 * A directly requested file is matched on its own path, on both paths.
+	 *
+	 * WordPress serves wp-login.php, xmlrpc.php and every admin screen from
+	 * the file requested rather than through index.php, and the library used
+	 * to see each of them as `/` (#30). Every other test here requests a URL
+	 * routed through index.php, which is why none of them noticed.
+	 *
+	 * An anonymous request is decided by the wp-config.php path where the
+	 * site has the snippet, and by the mu-plugin where it does not. A request
+	 * carrying a login cookie, with a role exempt, is deferred to the runner
+	 * at `plugins_loaded` -- so the subscriber's request below is decided
+	 * there, and has to see the real path too.
+	 */
+	public function test_direct_files_are_matched_on_their_own_path(): void {
+		require_once ABSPATH . 'wp-admin/includes/user.php';
+
+		$this->given_rules(
+			array(
+				array(
+					'id'       => 'e2e_direct_admin',
+					'type'     => 'url',
+					'label'    => 'End-to-end admin screens',
+					'enabled'  => true,
+					'response' => 'block',
+					'weight'   => 0,
+					'record'   => 'no',
+					'settings' => array(
+						'match_type' => 'any',
+						'conditions' => array(
+							array(
+								'variable' => 'path',
+								'operator' => 'starts_with',
+								'value'    => '/wp-admin/edit.php',
+							),
+							array(
+								'variable' => 'path',
+								'operator' => 'equals',
+								'value'    => '/xmlrpc.php',
+							),
+						),
+					),
+				),
+			)
+		);
+
+		$this->assertSame( 403, $this->request( '/wp-admin/edit.php' )['status'], 'A rule on an admin screen did not match a direct request for it.' );
+		$this->assertSame( 403, $this->request( '/xmlrpc.php' )['status'], 'A rule on xmlrpc.php did not match a direct request for it.' );
+		$this->assertNotSame( 403, $this->request( '/wp-login.php' )['status'], 'The rule matched a file it does not name.' );
+
+		Plugin::instance()->settings()->set( 'global.bypass_roles', array( 'editor' ) );
+
+		$subscriber = wp_insert_user(
+			array(
+				'user_login' => 'bfw-e2e-direct-' . wp_generate_password( 6, false ),
+				'user_pass'  => wp_generate_password(),
+				'role'       => 'subscriber',
+			)
+		);
+
+		$this->assertIsInt( $subscriber );
+
+		try {
+			$cookie = array( 'Cookie' => LOGGED_IN_COOKIE . '=' . rawurlencode( wp_generate_auth_cookie( $subscriber, time() + 600, 'logged_in' ) ) );
+
+			$this->assertSame( 403, $this->request( '/wp-admin/edit.php', $cookie )['status'], 'A logged-in request deferred to the runner did not see the admin screen\'s path.' );
+		} finally {
+			wp_delete_user( $subscriber );
+		}
+	}
+
+	/**
+	 * A rate limit on `/wp-login.php` counts direct requests for it.
+	 */
+	public function test_a_login_rate_limit_counts_direct_requests(): void {
+		$limit = 3;
+
+		$this->given_rules(
+			array(
+				array(
+					'id'       => 'e2e_login_rate',
+					'type'     => 'rate_limit',
+					'label'    => 'End-to-end login rate limit',
+					'enabled'  => true,
+					'response' => 'block',
+					'weight'   => 0,
+					'record'   => 'no',
+					'settings' => array(
+						'paths'                => array(
+							array(
+								'pattern' => '/wp-login.php',
+								'limit'   => $limit,
+								'window'  => 60,
+							),
+						),
+						'default_limit'        => 60,
+						'default_window'       => 60,
+						'limit_unlisted_paths' => false,
+						'status_code'          => 429,
+						'storage'              => array(
+							'backend' => 'file',
+							'file'    => 'private://e2e-ratelimit.data',
+						),
+					),
+				),
+			)
+		);
+
+		$statuses = array();
+
+		for ( $i = 0; $i <= $limit; $i++ ) {
+			$statuses[] = $this->request( '/wp-login.php' )['status'];
+		}
+
+		$this->assertNotContains( 429, array_slice( $statuses, 0, $limit ), 'A login within the allowance was refused: ' . implode( ', ', $statuses ) );
+		$this->assertSame( 429, $statuses[ $limit ], 'Direct requests for wp-login.php were never counted: ' . implode( ', ', $statuses ) );
+	}
 }
