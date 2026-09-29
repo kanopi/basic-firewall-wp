@@ -148,7 +148,18 @@ printf '\nwp-cli: references and lists\n'
 
 expect fail 'find-reference refuses a reference that does not exist' 'was not found' \
 	find-reference BFW-NO-SUCH-REFERENCE
-expect ok 'refresh-sources previews without fetching' '' refresh-sources --dry-run
+# The preview reports the cache, not only the declarations. It read a key
+# nothing writes for the error policy and printed no cache state at all, so the
+# columns are asserted on rather than only the exit status. A site with no
+# referenced list prints a success line instead, which is also a pass.
+refresh_preview=$($WP basic-firewall refresh-sources --dry-run --format=csv </dev/null 2>&1)
+if printf '%s' "$refresh_preview" | grep -qF 'nothing to refresh' \
+	|| printf '%s' "$refresh_preview" | head -1 | grep -qF 'name,upstream,ttl,on_error,cached,entries,fetched,state'; then
+	report pass 'refresh-sources --dry-run reports the cache for each list'
+else
+	report fail 'refresh-sources --dry-run reports the cache for each list' "$(printf '%s' "$refresh_preview" | head -1)"
+fi
+expect ok 'refresh-sources --dry-run renders as json' '' refresh-sources --dry-run --format=json
 
 printf '\nwp-cli: export and import\n'
 

@@ -12,6 +12,7 @@ namespace Kanopi\BasicFirewall\Sources;
 use Kanopi\BasicFirewall\Library_Loader;
 use Kanopi\BasicFirewall\Plugin;
 use Kanopi\Firewall\Source\SourceCache;
+use Kanopi\Firewall\Source\SourceDefinition;
 use Kanopi\Firewall\Source\SourceLoader;
 use Kanopi\Firewall\Source\SourceManager;
 use Symfony\Component\Yaml\Yaml;
@@ -209,6 +210,106 @@ final class Refresher {
 		self::record( $result );
 
 		return $result;
+	}
+
+	/**
+	 * What each referenced list is, and what the cache holds for it, fetching nothing.
+	 *
+	 * Built from the library's own reading of each declaration rather than
+	 * from the array as stored. The declaration keys are snake_case and a
+	 * misspelt one is ignored rather than refused, so reading the array here
+	 * reported whatever this method guessed the key was called -- `onError`,
+	 * which nothing writes, so every list showed `last_known_good` whatever
+	 * its policy said. SourceDefinition::fromArray() is what the request path
+	 * reads, so it is what this reports.
+	 *
+	 * The cache is read through the same SourceCache the request path builds
+	 * -- no directory, derived from KANOPI_FIREWALL_CACHE_DIR -- for the reason
+	 * refresh() gives: a preview of any other directory describes a cache
+	 * nothing consults.
+	 *
+	 * The upstream is the library's display form, with any credential in the
+	 * URL replaced, because this is printed to a terminal and a CI log.
+	 *
+	 * @return list<array{name: string, upstream: string, ttl: string, on_error: string, cached: string, entries: string, fetched: string, state: string}>
+	 */
+	public static function preview(): array {
+		$declarations = self::declarations();
+
+		if ( array() === $declarations || ! Library_Loader::is_usable() ) {
+			return array();
+		}
+
+		self::define_cache_dir();
+
+		$cache = new SourceCache();
+		$rows  = array();
+
+		foreach ( $declarations as $index => $declaration ) {
+			try {
+				$definition = SourceDefinition::fromArray( $declaration, (int) $index );
+			} catch ( \Throwable $e ) {
+				/*
+				 * Reported in the row rather than thrown. A declaration the
+				 * library refuses is exactly what somebody running a preview
+				 * needs to see, and one bad list should not hide the others.
+				 */
+				$rows[] = array(
+					'name'     => (string) ( $declaration['name'] ?? 'unnamed' ),
+					'upstream' => '',
+					'ttl'      => '',
+					'on_error' => '',
+					'cached'   => 'no',
+					'entries'  => '',
+					'fetched'  => '',
+					'state'    => sprintf( 'invalid: %s', $e->getMessage() ),
+				);
+
+				continue;
+			}
+
+			$meta   = $cache->meta( $definition );
+			$cached = array() !== $meta && null !== $cache->entries( $definition );
+
+			$fetched = is_int( $meta['fetched_at'] ?? null ) ? gmdate( 'Y-m-d H:i:s', $meta['fetched_at'] ) . ' UTC' : '';
+
+			$rows[] = array(
+				'name'     => $definition->name,
+				'upstream' => $definition->displayUpstream(),
+				'ttl'      => (string) $cache->ttl( $definition ),
+				'on_error' => $definition->mustAbortOnError() && 'abort' !== $definition->onError ? 'abort (required)' : $definition->onError,
+				'cached'   => $cached ? 'yes' : 'no',
+				'entries'  => $cached ? (string) (int) ( $meta['entry_count'] ?? 0 ) : '',
+				'fetched'  => $cached ? $fetched : '',
+				'state'    => self::cache_state( $definition, $cache, $meta, $cached ),
+			);
+		}
+
+		return $rows;
+	}
+
+	/**
+	 * One list's cache, in the terms the request path would act on.
+	 *
+	 * A local file is told apart from a remote list with nothing cached. The
+	 * offline flag keeps only a *remote* list off the network -- a file in the
+	 * private directory is read directly whenever the cache is cold -- so
+	 * "not cached" on a file is not the problem it is on a URL, where it means
+	 * the rule contributes nothing until a refresh succeeds.
+	 *
+	 * @param SourceDefinition     $definition The list.
+	 * @param SourceCache          $cache      The cache the request path reads.
+	 * @param array<string, mixed> $meta       Its cached metadata.
+	 * @param bool                 $cached     Whether entries are cached.
+	 */
+	private static function cache_state( SourceDefinition $definition, SourceCache $cache, array $meta, bool $cached ): string {
+		if ( $cached ) {
+			return $cache->isFresh( $definition, $meta ) ? 'fresh' : 'stale';
+		}
+
+		return $definition->isRemote()
+			? 'not cached — contributes nothing until a refresh succeeds'
+			: 'not cached — a local file, read directly';
 	}
 
 	/**

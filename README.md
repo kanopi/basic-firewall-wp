@@ -836,7 +836,7 @@ band, by a WP-Cron job on the interval set on the General screen, or by hand:
 ```bash
 wp basic-firewall refresh-sources            # refresh anything stale
 wp basic-firewall refresh-sources --force    # revalidate everything
-wp basic-firewall refresh-sources --dry-run  # show what is referenced
+wp basic-firewall refresh-sources --dry-run  # what is referenced, and what the cache holds
 ```
 
 On a host where WP-Cron is disabled, set the interval to **Never** and call the

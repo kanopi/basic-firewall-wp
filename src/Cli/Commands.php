@@ -98,13 +98,28 @@ final class Commands {
 	 * : Revalidate every list, even one the cache still considers fresh.
 	 *
 	 * [--dry-run]
-	 * : List what is referenced and what the cache holds. Fetches nothing.
+	 * : List each referenced list -- its upstream with any credential masked,
+	 * its effective TTL and error policy -- and what the cache holds for it:
+	 * whether it is cached, how many entries, when it was fetched, and whether
+	 * that copy is fresh or stale. Fetches nothing and writes nothing.
+	 *
+	 * [--format=<format>]
+	 * : With --dry-run, render the listing in a particular format.
+	 * ---
+	 * default: table
+	 * options:
+	 *   - table
+	 *   - json
+	 *   - yaml
+	 *   - csv
+	 * ---
 	 *
 	 * ## EXAMPLES
 	 *
 	 *     wp basic-firewall refresh-sources
 	 *     wp basic-firewall refresh-sources --force
 	 *     wp basic-firewall refresh-sources --dry-run
+	 *     wp basic-firewall refresh-sources --dry-run --format=json
 	 *
 	 * @subcommand refresh-sources
 	 *
@@ -121,20 +136,17 @@ final class Commands {
 		}
 
 		if ( isset( $assoc_args['dry-run'] ) ) {
-			$rows = array();
+			$rows = Refresher::preview();
 
-			foreach ( $declarations as $declaration ) {
-				$rows[] = array(
-					'name'     => (string) ( $declaration['name'] ?? 'unnamed' ),
-					'upstream' => is_array( $declaration['upstream'] ?? null )
-						? (string) ( $declaration['upstream']['url'] ?? '' )
-						: (string) ( $declaration['upstream'] ?? '' ),
-					'ttl'      => (string) ( $declaration['ttl'] ?? '' ),
-					'on_error' => (string) ( $declaration['onError'] ?? 'last_known_good' ),
-				);
+			if ( array() === $rows ) {
+				WP_CLI::error( 'The firewall library is not available, so the referenced lists cannot be read.' );
 			}
 
-			Utils\format_items( 'table', $rows, array( 'name', 'upstream', 'ttl', 'on_error' ) );
+			Utils\format_items(
+				(string) ( $assoc_args['format'] ?? 'table' ),
+				$rows,
+				array( 'name', 'upstream', 'ttl', 'on_error', 'cached', 'entries', 'fetched', 'state' )
+			);
 
 			return;
 		}
