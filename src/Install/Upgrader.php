@@ -273,6 +273,31 @@ final class Upgrader {
 
 				Plugin::instance()->settings()->replace( Plugin::instance()->settings()->all() );
 			},
+
+			/*
+			 * 9: the Request / URL type's `referer` and `content_type`.
+			 *
+			 * Both are headers to the library, which reads them as
+			 * `header.referer` and `header.content-type` and resolves the old
+			 * names to nothing -- so "referer does not contain example.com"
+			 * blocked every request. The same rewrite as routine 7, run again
+			 * because the rename map has grown; it is idempotent, so a name
+			 * already rewritten is left alone.
+			 *
+			 * `uri`, `body` and `server.*` are not renamed, because the library
+			 * reads nothing equivalent. They are kept as they are and reported
+			 * -- on the rule, and by the compiler -- rather than dropped: out of
+			 * an "all" rule, dropping a negated condition would widen what the
+			 * rule matches.
+			 */
+			9 => static function (): void {
+				$settings = Plugin::instance()->settings();
+				$values   = $settings->all();
+
+				self::rename_condition_variables( $values );
+
+				$settings->replace( $values );
+			},
 		);
 	}
 

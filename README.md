@@ -491,7 +491,7 @@ generated.
 | Rule type | Matches on |
 |---|---|
 | IP address | Client IP — single addresses, CIDR blocks, `start-end` ranges, IPv4 and IPv6 |
-| Request / URL | Method, host, path, scheme, port, query, POST body, headers, cookies |
+| Request / URL | Method, host, path, scheme, port, query parameters, posted fields, headers, cookies |
 | User agent | Automated flag, bot flag, device, browser, OS, brand, model — parsed, not string-matched |
 | Rate limit | Requests per address — or per account, header or field — per time window, per pattern |
 | Edge signal | The TLS fingerprint (JA3, JA4) or bot score your CDN computed. Needs a CDN sending the headers, and trusted proxies |
@@ -508,6 +508,26 @@ when it is rebuilt on the library's scoring model. Until then it is not offered,
 another plugin cannot register a type under its id, and a rule saved by a
 pre-release build is kept as it is — never compiled, and named on the Status
 screen and in Site Health until you delete it.
+
+### What a Request / URL condition reads
+
+`method`, `host`, `path`, `scheme` and `port`, and a member of a family named in
+the second column: `query.<parameter>`, `post.<field>`, `header.<name>` and
+`cookie.<name>`. Those are what the library resolves; anything else resolves to
+nothing, and a condition comparing against nothing never matches — or, negated,
+always does, which on a block rule is every visitor.
+
+- **The Referer and Content-Type headers** are `header.referer` and
+  `header.content-type`. A condition stored as `referer` or `content_type` is
+  compiled, and rewritten on upgrade, as the header it names.
+- **`uri`, `body` and the `server` family are not offered**, because the library
+  cannot read them. Use `path` and `query.<parameter>` for the first, a posted
+  field by name for the second, and `host`, `port`, `scheme` or a header for the
+  third. A stored condition on one is kept as it is — out of an "all" rule,
+  removing a negated condition would widen what the rule matches — and reported
+  on the rule, on the Status screen and in Site Health until you edit it out.
+- **`port` compares as a number** with *is equal to*, *is not equal to* and *is
+  one of*, because the library holds it as one and compares strictly.
 
 ### Responses
 

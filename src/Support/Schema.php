@@ -53,7 +53,7 @@ final class Schema {
 	/**
 	 * Current schema version. Bumped whenever an upgrade routine is added.
 	 */
-	public const VERSION = 8;
+	public const VERSION = 9;
 
 	/**
 	 * The full settings tree.

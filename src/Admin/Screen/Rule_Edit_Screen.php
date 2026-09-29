@@ -1609,7 +1609,6 @@ final class Rule_Edit_Screen extends Screen {
 			'header' => __( 'A request header — name it alongside', 'basic-firewall' ),
 			'cookie' => __( 'A cookie — name it alongside', 'basic-firewall' ),
 			'post'   => __( 'A posted field — name it alongside', 'basic-firewall' ),
-			'server' => __( 'A server variable — name it alongside', 'basic-firewall' ),
 		);
 
 		$families = array();

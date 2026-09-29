@@ -99,10 +99,36 @@ abstract class Condition_Rule_Type_Base extends Rule_Type_Base {
 	 * reported instead -- on the rule, and by the compiler -- so it stops
 	 * reporting itself healthy.
 	 *
+	 * A key ending in `.*` retires a whole family: `server.*` covers
+	 * `server.SERVER_NAME` and every other member, because a family is read by
+	 * the same code whichever member is named, and none of them can be read
+	 * once the family cannot.
+	 *
 	 * @return array<string, string>
 	 */
 	protected function retired_variables(): array {
 		return array();
+	}
+
+	/**
+	 * What to use instead of a retired variable, or null if it is not retired.
+	 *
+	 * @param string $variable Variable name, already translated by library_variable().
+	 */
+	protected function retirement( string $variable ): ?string {
+		$retired = $this->retired_variables();
+
+		if ( isset( $retired[ $variable ] ) ) {
+			return $retired[ $variable ];
+		}
+
+		$position = strpos( $variable, '.' );
+
+		if ( false !== $position && isset( $retired[ substr( $variable, 0, $position ) . '.*' ] ) ) {
+			return $retired[ substr( $variable, 0, $position ) . '.*' ];
+		}
+
+		return null;
 	}
 
 	/**
@@ -122,9 +148,8 @@ abstract class Condition_Rule_Type_Base extends Rule_Type_Base {
 	 * @return list<string> Variable names, each once.
 	 */
 	public function unreadable_variables( array $settings ): array {
-		$retired = $this->retired_variables();
-		$found   = array();
-		$rows    = array_merge(
+		$found = array();
+		$rows  = array_merge(
 			is_array( $settings['conditions'] ?? null ) ? $settings['conditions'] : array(),
 			is_array( $settings['sources'] ?? null ) ? $settings['sources'] : array()
 		);
@@ -136,7 +161,7 @@ abstract class Condition_Rule_Type_Base extends Rule_Type_Base {
 
 			$variable = $this->library_variable( (string) ( $row['variable'] ?? '' ) );
 
-			if ( isset( $retired[ $variable ] ) ) {
+			if ( '' !== $variable && null !== $this->retirement( $variable ) ) {
 				$found[ $variable ] = $variable;
 			}
 		}
@@ -151,14 +176,13 @@ abstract class Condition_Rule_Type_Base extends Rule_Type_Base {
 	 */
 	public function check_requirements( array $settings ): array {
 		$problems = parent::check_requirements( $settings );
-		$retired  = $this->retired_variables();
 
 		foreach ( $this->unreadable_variables( $settings ) as $variable ) {
 			$problems[] = sprintf(
 				/* translators: 1: variable name, 2: what to use instead. */
 				__( 'A condition on this rule reads %1$s, which the firewall library cannot read. It compares against nothing on every request, so it never matches — or, negated, always does. %2$s', 'basic-firewall' ),
 				$variable,
-				$retired[ $variable ]
+				(string) $this->retirement( $variable )
 			);
 		}
 
@@ -325,7 +349,7 @@ abstract class Condition_Rule_Type_Base extends Rule_Type_Base {
 
 			$clean['sources'][ $index ]['variable'] = $variable;
 
-			if ( ! isset( $variables[ $variable ] ) && ! isset( $this->retired_variables()[ $variable ] ) && ! $this->is_prefixed_variable( $variable ) ) {
+			if ( ! isset( $variables[ $variable ] ) && null === $this->retirement( $variable ) && ! $this->is_prefixed_variable( $variable ) ) {
 				$errors[ 'sources.' . $index . '.variable' ] = sprintf(
 					/* translators: %s: the rejected variable. */
 					__( '%s is not something this rule type can read, so every entry in the list would be compared against nothing.', 'basic-firewall' ),
@@ -387,7 +411,7 @@ abstract class Condition_Rule_Type_Base extends Rule_Type_Base {
 	 * @param string $variable Variable name.
 	 */
 	protected function variable_is_known( string $variable ): bool {
-		if ( isset( $this->variable_options()[ $variable ] ) || isset( $this->retired_variables()[ $variable ] ) ) {
+		if ( isset( $this->variable_options()[ $variable ] ) || null !== $this->retirement( $variable ) ) {
 			return true;
 		}
 

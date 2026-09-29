@@ -231,10 +231,18 @@ this.
     nothing. A condition on the ASN `network`, which has no library equivalent,
     is kept rather than dropped — dropping it would widen an "all" rule — and
     reported on the rule and the Status screen.
+  - Request / URL conditions on `referer` and `content_type` become
+    `header.referer` and `header.content-type`, which is how the library reads
+    them; before this a negated one matched every request. Conditions on `uri`,
+    `body` and `server.*`, which the library cannot read at all, are kept and
+    reported on the rule, the Status screen and in Site Health.
   - `storage.record_request`, new in library 2.31.0, is filled in.
 - **Translated at compile time rather than rewritten**, so stored rules work
   without being edited: the operators `gt`, `gte`, `lt`, `lte` and
   `not_contains`, which the library does not know and which matched nothing;
+  the renamed condition variables above, for a document that reaches the
+  compiler without the upgrade; a `port` compared with *is equal to*, *is not
+  equal to* or *is one of*, which is compiled as a number;
   and the geolocation and ASN reader settings, which compiled to keys the
   library never read. So did these, each now compiled to the key the library
   reads:

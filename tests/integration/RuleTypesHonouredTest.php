@@ -9,6 +9,7 @@ declare( strict_types = 1 );
 
 namespace Kanopi\BasicFirewall\Tests\integration;
 
+use Kanopi\BasicFirewall\Compiler\Config_Compiler;
 use Kanopi\BasicFirewall\Database_Credentials;
 use Kanopi\BasicFirewall\Plugin;
 use Kanopi\BasicFirewall\RuleType\Registry;
@@ -310,6 +311,241 @@ final class RuleTypesHonouredTest extends Honoured_Settings {
 			self::condition( 'path', 'equals', '/wp-admin/install.php' ),
 			self::request( '/wp-admin/install.php' ),
 			self::request( '/about' )
+		);
+	}
+
+	/**
+	 * What each variable the Request / URL screen offers is compared against.
+	 *
+	 * Operator and value, chosen to match url_request(). A family is written
+	 * with a member, since the family on its own reads nothing; the test below
+	 * checks every family the screen offers has one here.
+	 *
+	 * @var array<string, array{0: string, 1: string}>
+	 */
+	private const URL_MATCHES = array(
+		'method'         => array( 'equals', 'POST' ),
+		'path'           => array( 'equals', '/wp-login.php' ),
+		'host'           => array( 'equals', 'example.com' ),
+		'scheme'         => array( 'equals', 'https' ),
+		'port'           => array( 'equals', '8443' ),
+		'query.x'        => array( 'equals', '1' ),
+		'post.log'       => array( 'equals', 'admin' ),
+		'header.referer' => array( 'contains', 'evil.test' ),
+		'cookie.session' => array( 'equals', 'abc123' ),
+	);
+
+	/**
+	 * A request carrying something for every URL variable.
+	 */
+	private static function url_request(): Request {
+		$request = Request::create(
+			'https://example.com:8443/wp-login.php?x=1&redirect_to=%2F',
+			'POST',
+			array( 'log' => 'admin' ),
+			array( 'session' => 'abc123' ),
+			array(),
+			array(
+				'REMOTE_ADDR'  => '203.0.113.200',
+				'HTTP_REFERER' => 'https://evil.test/',
+				'CONTENT_TYPE' => 'application/x-www-form-urlencoded',
+			)
+		);
+
+		return $request;
+	}
+
+	/**
+	 * Every variable the Request / URL screen offers is one the library reads.
+	 *
+	 * The screen offered `uri`, `body`, `content_type`, `referer` and the
+	 * `server` family, none of which the library resolves: each compared
+	 * against nothing, so a negated condition on one matched every request.
+	 * Rather than trusting a list of names, ask the type what it offers, save a
+	 * rule on each through the settings, start the library on the compiled
+	 * file, and make it evaluate a request.
+	 */
+	public function test_every_offered_url_variable_resolves(): void {
+		$type     = Plugin::instance()->rule_types()->get( 'url' );
+		$offered  = array_keys( (array) self::invoke( $type, 'variable_options' ) );
+		$families = (array) self::invoke( $type, 'variable_prefixes' );
+
+		foreach ( $offered as $variable ) {
+			$this->assertArrayHasKey( $variable, self::URL_MATCHES, "The URL screen offers $variable and nothing here proves the library reads it." );
+		}
+
+		foreach ( $families as $family ) {
+			$this->assertNotEmpty(
+				array_filter( array_keys( self::URL_MATCHES ), static fn ( string $key ): bool => 0 === strpos( $key, $family . '.' ) ),
+				"The URL screen offers the $family family and nothing here proves the library reads a member of it."
+			);
+		}
+
+		foreach ( array_keys( self::URL_MATCHES ) as $variable ) {
+			$family = strstr( $variable, '.', true );
+
+			$this->assertTrue( in_array( $variable, $offered, true ) || in_array( $family, $families, true ), "$variable is tested here but no longer offered." );
+		}
+
+		$rules = array();
+		$index = 0;
+
+		foreach ( self::URL_MATCHES as $variable => list( $operator, $value ) ) {
+			$rules[] = $this->rule( 'url-var-' . ( $index++ ), 'url', array( 'conditions' => array( self::condition( $variable, $operator, $value ) ) ) );
+		}
+
+		$firewall = $this->build( array( 'rules' => $rules ) );
+		$index    = 0;
+
+		foreach ( self::URL_MATCHES as $variable => list( $operator, $value ) ) {
+			$plugin = $this->plugin_named( $firewall, 'url-var-' . ( $index++ ) );
+
+			$this->assertTrue( (bool) $plugin->evaluate( self::url_request() ), "$variable $operator $value did not match a request carrying it." );
+			$this->assertFalse( (bool) $plugin->evaluate( self::request( 'http://other.test/' ) ), "$variable $operator $value matched a request that does not carry it." );
+		}
+	}
+
+	/**
+	 * A condition stored on an old name is saved and compiled as the header it is.
+	 *
+	 * Written raw, as a site on the previous release has it, so the compiler's
+	 * own translation is what is being tested rather than the validator's.
+	 *
+	 * @dataProvider renamed_url_variables
+	 *
+	 * @param string $old     Stored name.
+	 * @param string $library The library's name.
+	 * @param string $value   What the request carries.
+	 */
+	public function test_an_old_url_name_compiles_to_the_header( string $old, string $library, string $value ): void {
+		$condition           = self::condition( $old, 'not_contains', $value );
+		$condition['negate'] = false;
+
+		$firewall = $this->build( array( 'rules' => array( $this->rule( 'old-name', 'url', array( 'conditions' => array( $condition ) ) ) ) ), true );
+
+		$compiled = array_values( array_filter( $this->compiled['plugins'], static fn ( array $entry ): bool => 'old-name' === ( $entry['metadata']['name'] ?? '' ) ) );
+
+		$this->assertSame( $library, $compiled[0]['config'][0]['variable'] );
+
+		$plugin = $this->plugin_named( $firewall, 'old-name' );
+
+		$this->assertFalse( (bool) $plugin->evaluate( self::url_request() ), "A request carrying $value matched \"$old does not contain $value\"." );
+		$this->assertTrue( (bool) $plugin->evaluate( self::request( '/' ) ), "A request without $value did not match \"$old does not contain $value\"." );
+	}
+
+	/**
+	 * The renamed URL variables, and something the request carries in each.
+	 *
+	 * @return array<string, array{0: string, 1: string, 2: string}>
+	 */
+	public static function renamed_url_variables(): array {
+		return array(
+			'referer'      => array( 'referer', 'header.referer', 'evil.test' ),
+			'content_type' => array( 'content_type', 'header.content-type', 'x-www-form-urlencoded' ),
+		);
+	}
+
+	/**
+	 * Every rename is tested above.
+	 */
+	public function test_every_url_rename_is_tested(): void {
+		$this->assertSame( Url::RENAMED_VARIABLES, array_combine( array_column( self::renamed_url_variables(), 0 ), array_column( self::renamed_url_variables(), 1 ) ) );
+	}
+
+	/**
+	 * A condition on a variable the library cannot read is kept, and reported.
+	 *
+	 * Negated, inside an "all" rule, which is the case that makes dropping it
+	 * wrong: without the condition the rule matches more than it was written
+	 * to. With it, it compares against nothing -- which is also wrong, and
+	 * which is why it is reported rather than left to look healthy.
+	 *
+	 * @dataProvider retired_url_variables
+	 *
+	 * @param string $variable A retired variable.
+	 */
+	public function test_a_retired_url_variable_is_kept_and_reported( string $variable ): void {
+		$retired           = self::condition( $variable, 'contains', 'x' );
+		$retired['negate'] = true;
+
+		$this->given_settings(
+			self::merge(
+				$this->base_settings(),
+				array(
+					'rules' => array(
+						$this->rule(
+							'retired',
+							'url',
+							array(
+								'match_type' => 'all',
+								'conditions' => array( self::condition( 'path', 'starts_with', '/wp-admin' ), $retired ),
+							)
+						),
+					),
+				)
+			)
+		);
+
+		/*
+		 * Compiled directly rather than started. The library's own linter
+		 * agrees the condition cannot match, and says so as an error -- which
+		 * is the point, and which start() rightly treats as a failure.
+		 */
+		$compiler = new Config_Compiler();
+		$compiler->compile();
+
+		$this->problems = $compiler->problems();
+
+		$kept = array_column( (array) Plugin::instance()->settings()->get( 'rules', array() ), null, 'id' );
+
+		$this->assertSame( array( 'path', $variable ), array_column( $kept['retired']['settings']['conditions'], 'variable' ), 'A settings write dropped the condition.' );
+		$this->assertNotEmpty( preg_grep( '/"retired".*' . preg_quote( $variable, '/' ) . '/', $this->problems ), 'The compiler did not report the condition.' );
+		$this->assertNotEmpty( preg_grep( '/' . preg_quote( $variable, '/' ) . '/', Plugin::instance()->rule_types()->get( 'url' )->check_requirements( $kept['retired']['settings'] ) ), 'The rule screen does not report the condition.' );
+		$this->assertArrayNotHasKey( $variable, (array) self::invoke( Plugin::instance()->rule_types()->get( 'url' ), 'variable_options' ), 'A retired variable is still offered.' );
+	}
+
+	/**
+	 * The variables the Request / URL type offered and the library never read.
+	 *
+	 * @return array<string, array{0: string}>
+	 */
+	public static function retired_url_variables(): array {
+		return array(
+			'uri'    => array( 'uri' ),
+			'body'   => array( 'body' ),
+			'server' => array( 'server.SERVER_NAME' ),
+		);
+	}
+
+	/**
+	 * A port compares as the number the request holds.
+	 *
+	 * @dataProvider port_comparisons
+	 *
+	 * @param string $operator Comparison.
+	 * @param string $value    As typed.
+	 * @param bool   $matches  Whether a request on 8443 matches.
+	 */
+	public function test_a_port_compares_as_a_number( string $operator, string $value, bool $matches ): void {
+		$firewall = $this->build( array( 'rules' => array( $this->rule( 'port', 'url', array( 'conditions' => array( self::condition( 'port', $operator, $value ) ) ) ) ) ) );
+
+		$this->assertSame( $matches, (bool) $this->plugin_named( $firewall, 'port' )->evaluate( self::url_request() ) );
+	}
+
+	/**
+	 * Port comparisons against a request on 8443.
+	 *
+	 * @return array<string, array{0: string, 1: string, 2: bool}>
+	 */
+	public static function port_comparisons(): array {
+		return array(
+			'equals'            => array( 'equals', '8443', true ),
+			'equals another'    => array( 'equals', '443', false ),
+			'not equal to 8443' => array( 'not_equals', '8443', false ),
+			'not equal to 443'  => array( 'not_equals', '443', true ),
+			'one of'            => array( 'in', '443, 8443', true ),
+			'not one of'        => array( 'in', '80, 443', false ),
+			'greater than'      => array( 'gt', '8000', true ),
 		);
 	}
 
