@@ -4,7 +4,7 @@ Tags: security, firewall, rate limiting, bot protection, waf
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 1.0.0-rc.1
+Stable tag: 1.0.0-rc.2
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -133,6 +133,10 @@ proxy too.
 4. Blocked clients, with an address lookup that works on every backend.
 
 == Changelog ==
+
+= 1.0.0-rc.2 =
+* Bundles kanopi/firewall 2.33.2: a rate-limit key keeps the case of a form field, cookie or query parameter name.
+* The wp-config.php early path finds a Composer autoloader in a custom vendor-dir: an 'autoloader' option or BASIC_FIREWALL_AUTOLOADER constant, or a library wp-config.php already loaded.
 
 = 1.0.0-rc.1 =
 * First release. The WordPress port of the Drupal basic_firewall module, built on kanopi/firewall ^2.33.1; the zip bundles 2.33.1, scoped.
