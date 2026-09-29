@@ -589,12 +589,46 @@ abstract class Condition_Rule_Type_Base extends Rule_Type_Base {
 	 * The pattern body, with any delimiters and flags taken back off.
 	 *
 	 * Accepts what this plugin stores and what somebody used to writing regular
-	 * expressions will type anyway. A settings document written before the
-	 * change holds delimited patterns, and this is what lets one load.
+	 * expressions will type anyway: `#foo#i`, `~foo~`, `/foo/i`.
+	 *
+	 * A slash is the one delimiter taken off only when flags follow it. It is
+	 * also the path separator, and a pattern written about paths opens and
+	 * closes with one far more often than it is delimited by them: `/wp-admin/`
+	 * means "the wp-admin directory", and unwrapping it to `wp-admin` widened
+	 * the rule to every path containing those letters -- `/wp-admin-guide`,
+	 * `/blog/wp-admin-tips` -- on the first save, silently, and again on every
+	 * later save of anything, since every settings write re-validates every
+	 * rule. Kept, it compiles to `#/wp-admin/#`, which is what it says.
+	 * `/wp-admin/i` has no such reading, so it is still unwrapped.
 	 *
 	 * @param string $value Stored value.
 	 */
 	public static function regex_body( string $value ): string {
+		return self::unwrap_regex( $value, false );
+	}
+
+	/**
+	 * The body of a pattern stored before bodies were, delimiters and all.
+	 *
+	 * For the upgrade routine only. Before schema 3 the stored value was the
+	 * complete pattern the library ran, so a leading and trailing slash there
+	 * was a delimiter whether or not flags followed -- `/wp-admin/` matched
+	 * `wp-admin` anywhere, and the body that keeps matching the same things is
+	 * `wp-admin`. Read as a body it would narrow the rule instead.
+	 *
+	 * @param string $value Value stored by an earlier release.
+	 */
+	public static function legacy_regex_body( string $value ): string {
+		return self::unwrap_regex( $value, true );
+	}
+
+	/**
+	 * Take delimiters and flags off a pattern, if it has them.
+	 *
+	 * @param string $value            The value.
+	 * @param bool   $bare_slash_wraps Whether `/.../` with no flags counts as delimited.
+	 */
+	private static function unwrap_regex( string $value, bool $bare_slash_wraps ): string {
 		$value = trim( $value );
 
 		if ( strlen( $value ) < 2 ) {
@@ -620,6 +654,10 @@ abstract class Condition_Rule_Type_Base extends Rule_Type_Base {
 		// Anything after the closing delimiter has to look like PCRE flags, or
 		// this was never a delimited pattern in the first place.
 		if ( '' !== $flags && 1 !== preg_match( '/^[imsxuADSUXJn]+$/', $flags ) ) {
+			return $value;
+		}
+
+		if ( '/' === $delimiter && '' === $flags && ! $bare_slash_wraps ) {
 			return $value;
 		}
 

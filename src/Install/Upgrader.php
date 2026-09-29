@@ -177,6 +177,18 @@ final class Upgrader {
 				$settings = Plugin::instance()->settings();
 				$values   = $settings->all();
 
+				/*
+				 * Routine 3's rewrite, first. replace() re-validates every
+				 * rule, and validation takes a pasted pattern's delimiters off
+				 * while leaving its case to the checkbox -- which is right for
+				 * somebody typing `#foo#i` into the form, and wrong here: a
+				 * schema 1 document carries its case in the flag and has no
+				 * checkbox value at all. Run in this order, routine 3 found
+				 * every pattern already unwrapped and had no flag left to read,
+				 * so `#Bot#` stored before 1.0.0 came out case-insensitive.
+				 * Idempotent, so routine 3 running after it changes nothing.
+				 */
+				self::unwrap_regex_conditions( $values );
 				self::strip_legacy_scheme( $values );
 
 				$settings->replace( $values );
@@ -197,10 +209,16 @@ final class Upgrader {
 			 * to be too, or this upgrade would quietly narrow what every such
 			 * rule matches.
 			 *
-			 * Nothing depends on the routine having run. `regex_body()` unwraps
-			 * a delimited pattern wherever one turns up, so a site that skips
-			 * this keeps working; the routine is what stops the old spelling
-			 * being shown back to somebody on the rule screen.
+			 * The legacy reading is used: before this, the stored value was
+			 * the whole pattern, so `/wp-admin/` was delimited even without
+			 * flags. Anywhere else a bare slash pair is a path, not delimiters
+			 * -- see Condition_Rule_Type_Base::regex_body().
+			 *
+			 * Little depends on the routine having run. `regex_body()` unwraps
+			 * a pattern delimited any other way wherever one turns up, so a
+			 * site that skips this keeps working; the routine is what stops the
+			 * old spelling being shown back to somebody on the rule screen, and
+			 * what reads a slash-delimited pattern the way it was meant.
 			 */
 			3 => static function (): void {
 				$settings = Plugin::instance()->settings();
@@ -360,8 +378,8 @@ final class Upgrader {
 					continue;
 				}
 
-				$stored = (string) ( $condition['value'] ?? '' );
-				$body   = Condition_Rule_Type_Base::regex_body( $stored );
+				$stored = trim( (string) ( $condition['value'] ?? '' ) );
+				$body   = Condition_Rule_Type_Base::legacy_regex_body( $stored );
 
 				if ( $body === $stored ) {
 					continue;

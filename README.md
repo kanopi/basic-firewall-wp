@@ -1208,6 +1208,13 @@ because anyone who has written regular expressions before will type them out of
 habit. The box still decides the case, so `#foo#i` saved with *Case sensitive*
 ticked compiles to `#foo#`.
 
+**Slashes are the exception.** A pattern that opens and closes with `/` is
+taken as written, because `/` is the path separator: `/wp-admin/` means the
+wp-admin directory and compiles to `#/wp-admin/#`, matching
+`/wp-admin/options.php` and not `/wp-admin-guide`. Only with flags after the
+closing slash — `/wp-admin/i` — is it read as delimiters and unwrapped. Saving
+the rule, or anything else, never changes the pattern you wrote.
+
 Two problems disappear with this, both of which were silent:
 
 **An undelimited pattern used to match nothing.** The field accepted
@@ -1231,9 +1238,10 @@ assembled, with case carried by its flag, which is where a regular expression
 has always expressed it.
 
 Patterns stored by an earlier version are rewritten on upgrade — the delimiters
-come off and an `i` flag becomes an unticked box, so nothing changes about what
-a rule matches. Nothing depends on that having run: a delimited value is
-unwrapped wherever one turns up.
+come off, slashes included since they were delimiters then, and an `i` flag
+becomes an unticked box, so nothing changes about what a rule matches or in
+which case. A value delimited any other way is also unwrapped wherever one
+turns up, so a document that skipped the upgrade still loads.
 
 ## Presets
 

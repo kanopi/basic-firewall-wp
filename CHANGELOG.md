@@ -37,6 +37,10 @@ does not work as well as what does.
   - The edge signal type matches what the CDN worked out that the site cannot:
     a JA3 or JA4 TLS fingerprint, or the bot score, from Cloudflare, Fastly or a
     custom CDN. Believed only behind a trusted proxy.
+  - A regular expression condition is written as the pattern alone; the
+    delimiters and the case flag come from the form. A pattern between slashes,
+    such as `/wp-admin/`, is a path and is kept exactly as written through
+    every save.
   - Every setting of every type, and every site-wide setting, is proved in CI
     against the library that enforces it: the compiled file is loaded, and the
     library's own objects are asked what they ended up with, or a request is
@@ -223,7 +227,8 @@ this.
     inside the private directory; the old spelling still resolves anywhere the
     upgrade did not reach.
   - A regular expression is stored as its body rather than `#body#i`, and the
-    `i` flag becomes the condition's case-sensitivity box, so no rule narrows.
+    `i` flag becomes the condition's case-sensitivity box, so no rule narrows
+    or changes case — upgrading from the earliest builds included.
   - Geolocation and ASN condition variables take the library's names:
     `country_name`, `timezone`, `latitude`, `longitude` and `organization`
     become `country.name`, `location.timeZone`, `location.latitude`,

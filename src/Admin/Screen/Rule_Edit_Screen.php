@@ -1324,7 +1324,7 @@ final class Rule_Edit_Screen extends Screen {
 			printf(
 				'<p class="description" data-bfw-show-when="%s">%s</p>',
 				esc_attr( $name . '[operator]:regex' ),
-				esc_html__( 'The pattern only — no delimiters. Those and the case flag are added for you, so ^/wp-admin is written exactly like that.', 'basic-firewall' )
+				esc_html__( 'The pattern only — no delimiters. Those and the case flag are added for you, so ^/wp-admin is written exactly like that. Slashes are part of the pattern: /wp-admin/ matches the wp-admin directory.', 'basic-firewall' )
 			);
 
 			echo '</td><td>';

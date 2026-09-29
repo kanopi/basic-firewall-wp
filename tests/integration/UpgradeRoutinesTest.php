@@ -155,4 +155,35 @@ final class UpgradeRoutinesTest extends Settings_Snapshot {
 		);
 		$this->assertTrue( $rules['url']['settings']['conditions'][2]['negate'], 'A kept condition lost its negation.' );
 	}
+
+	/**
+	 * Upgrading from schema 1 keeps each pattern's case, whatever routine 2 does.
+	 *
+	 * Routine 2 saves the document, and a save re-validates every rule, which
+	 * took every pasted pattern's delimiters off and left its case to the
+	 * checkbox -- a schema 1 document has no checkbox value. Routine 3 then
+	 * found nothing delimited and no flag to read, so `#Bot#` came out of the
+	 * upgrade case-insensitive, matching `bot`, `BOT` and `robot` alike.
+	 */
+	public function test_regex_case_survives_upgrading_from_schema_1(): void {
+		$rules = $this->upgrade(
+			array(
+				self::url_rule(
+					'patterns',
+					array(
+						self::condition( 'header.user-agent', 'regex', '#Bot#' ),
+						self::condition( 'header.user-agent', 'regex', '#bot#i' ),
+						self::condition( 'path', 'regex', '/wp-admin/' ),
+						self::condition( 'path', 'regex', '^/already-a-body' ),
+					)
+				),
+			),
+			1
+		);
+
+		$conditions = $rules['patterns']['settings']['conditions'];
+
+		$this->assertSame( array( 'Bot', 'bot', 'wp-admin', '^/already-a-body' ), array_column( $conditions, 'value' ) );
+		$this->assertSame( array( true, false, true, false ), array_column( $conditions, 'case_sensitive' ), 'An upgrade changed which case a pattern matches.' );
+	}
 }
