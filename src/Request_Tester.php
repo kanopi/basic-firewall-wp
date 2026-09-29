@@ -336,25 +336,7 @@ final class Request_Tester {
 		$method = strtoupper( (string) ( $described['method'] ?? 'GET' ) );
 		$body   = (string) ( $described['body'] ?? '' );
 
-		/*
-		 * Built as a web server would describe the same request to this site,
-		 * then corrected by Request_Factory exactly as a live request is. So
-		 * `/wp-login.php` is tested as the direct request for wp-login.php it
-		 * would be in production, and the answer here is the answer there.
-		 */
-		$server = Request_Factory::server_for( '' === $path ? '/' : $path, self::site_path(), ABSPATH );
-
-		$request = Request::create(
-			$server['REQUEST_URI'],
-			$method,
-			array(),
-			array(),
-			array(),
-			$server,
-			'' === $body ? null : $body
-		);
-
-		Request_Factory::normalise( $request );
+		$request = self::site_request( '' === $path ? '/' : $path, $method, '' === $body ? null : $body );
 
 		$ip = trim( (string) ( $described['ip'] ?? '' ) );
 
@@ -378,6 +360,29 @@ final class Request_Tester {
 		foreach ( $this->parse_headers( (string) ( $described['headers'] ?? '' ) ) as $name => $value ) {
 			$request->headers->set( $name, $value );
 		}
+
+		return $request;
+	}
+
+	/**
+	 * A made-up request for a path on this site, built as a live one would be.
+	 *
+	 * Built as a web server would describe the same request to this site,
+	 * then corrected by Request_Factory exactly as a live request is. So
+	 * `/wp-login.php` is tested as the direct request for wp-login.php it
+	 * would be in production, and the answer here is the answer there. Site
+	 * Health builds its regression check the same way.
+	 *
+	 * @param string      $path   Path relative to the site, with any query.
+	 * @param string      $method HTTP method.
+	 * @param string|null $body   Request body.
+	 */
+	public static function site_request( string $path, string $method = 'GET', ?string $body = null ): Request {
+		$server = Request_Factory::server_for( $path, self::site_path(), ABSPATH );
+
+		$request = Request::create( $server['REQUEST_URI'], $method, array(), array(), array(), $server, $body );
+
+		Request_Factory::normalise( $request );
 
 		return $request;
 	}

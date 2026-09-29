@@ -17,6 +17,7 @@ use Kanopi\BasicFirewall\Install\Upgrader;
 use Kanopi\BasicFirewall\Library_Capabilities;
 use Kanopi\BasicFirewall\Library_Loader;
 use Kanopi\BasicFirewall\Plugin;
+use Kanopi\BasicFirewall\Request_Tester;
 use Kanopi\BasicFirewall\RuleType\Types\Rate_Limit;
 use Kanopi\BasicFirewall\RuleType\Types\User_Agent;
 use Kanopi\BasicFirewall\Runtime\Runner;
@@ -84,6 +85,7 @@ final class Site_Health {
 			'compiled'     => __( 'Basic Firewall compiled configuration', 'basic-firewall' ),
 			'verification' => __( 'Basic Firewall crawler verification', 'basic-firewall' ),
 			'rate_keys'    => __( 'Basic Firewall rate limit keys', 'basic-firewall' ),
+			'request_path' => __( 'Basic Firewall request path', 'basic-firewall' ),
 			'private_dir'  => __( 'Basic Firewall private directory', 'basic-firewall' ),
 			'bootstrap'    => __( 'Basic Firewall wp-config.php snippet', 'basic-firewall' ),
 			'evaluation'   => __( 'Basic Firewall evaluation point', 'basic-firewall' ),
@@ -128,6 +130,7 @@ final class Site_Health {
 			'compiled'    => self::check_compiled(),
 			'verification' => self::check_verification(),
 			'rate_keys'    => self::check_rate_keys(),
+			'request_path' => self::check_request_path(),
 			'private_dir' => self::check_private_dir(),
 			'bootstrap'   => self::check_bootstrap(),
 			'evaluation'  => self::check_evaluation(),
@@ -653,6 +656,46 @@ final class Site_Health {
 				esc_html__( 'These rules verify crawlers by reverse DNS: %s. Each lookup is made on the request path the first time an address is seen, and a verdict is cached — so a local caching resolver on this host is what keeps a cache miss at a couple of milliseconds rather than a hundred.', 'basic-firewall' ),
 				$names
 			)
+		);
+	}
+
+	/**
+	 * Does a direct request for wp-login.php reach the rules as `/wp-login.php`?
+	 *
+	 * WordPress serves pages from files other than index.php, and Symfony
+	 * reads the requested file as the front controller and reports the path of
+	 * every such request as `/`. The plugin corrects that when it builds the
+	 * request; this builds the request a web server would describe for
+	 * `wp-login.php` and checks the correction held. If it did not, a
+	 * `/wp-login.php` rate limit counts nothing and no rule on `/wp-admin`
+	 * matches a screen -- while every one of them reads as protection. Critical
+	 * for that reason, and cheap: one request object, no evaluation.
+	 *
+	 * @return array{status: string, label: string, description: string, actions: string}
+	 */
+	private static function check_request_path(): array {
+		try {
+			$seen = Request_Tester::site_request( '/wp-login.php' )->getPathInfo();
+		} catch ( \Throwable $e ) {
+			$seen = null;
+		}
+
+		if ( '/wp-login.php' === $seen ) {
+			return self::ok(
+				__( 'Rules see the path of a directly requested file', 'basic-firewall' ),
+				esc_html__( 'WordPress serves the login page, XML-RPC and every admin screen from files other than index.php. A direct request for wp-login.php reaches the rules as /wp-login.php, so path conditions and rate limits on it match.', 'basic-firewall' )
+			);
+		}
+
+		return self::critical(
+			__( 'Rules see the wrong path for directly requested files', 'basic-firewall' ),
+			'<p>' . esc_html(
+				sprintf(
+					/* translators: %s: the path the firewall saw, or "nothing". */
+					__( 'A direct request for wp-login.php reached the rules as %s instead of /wp-login.php. Path conditions and rate limits on the login page, XML-RPC and admin screens are not matching, and a negated path condition matches all of them. Update the plugin; if this persists, report it with the plugin and PHP versions.', 'basic-firewall' ),
+					null === $seen ? __( 'nothing', 'basic-firewall' ) : $seen
+				)
+			) . '</p>'
 		);
 	}
 
