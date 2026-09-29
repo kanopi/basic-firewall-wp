@@ -7,6 +7,27 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed
+
+- **Rules now see the path of a directly requested PHP file** (#30). WordPress
+  serves `wp-login.php`, `xmlrpc.php`, `wp-cron.php`, every `/wp-admin/*.php`
+  screen and custom endpoints in the site root from the file itself rather than
+  through `index.php`, and for those the library's `path` was `/`. A
+  `/wp-login.php` rate limit never counted a login, a rule on `/wp-admin` or
+  `/xmlrpc.php` never matched, a negated path condition matched every such
+  request, and the log and block records said `path: /` beside a URL with a
+  stray `/` after the file name. A challenge on an admin screen also posted its
+  answer under `/wp-admin/`, where the firewall never looked for it. The
+  request handed to the library is now built by one factory, used by the
+  wp-config.php path, the mu-plugin (including logged-in requests deferred to
+  `plugins_loaded`), the Test screen and the lockdown screen's address check.
+  It points the request's own copy of `SCRIPT_NAME`, `PHP_SELF` and
+  `SCRIPT_FILENAME` at the front controller, derived from the request so a site
+  in a subdirectory gets its own, and leaves the request alone when the server
+  values cannot be reconciled. The real `$_SERVER` is not modified. A new Site
+  Health check, *Basic Firewall request path*, is critical if a direct
+  `wp-login.php` request resolves to `/`.
+
 ## [1.0.0-rc.2]
 
 **Second release candidate for 1.0.0.** Published as a GitHub pre-release, so
