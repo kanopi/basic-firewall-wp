@@ -293,6 +293,12 @@ path reads them from needs a WordPress that does not exist yet. The sidecar
 holds path strings only — the credentials are read from the constants per
 request and never touch disk, on either path.
 
+A rebuild that fails — an unwritable directory, a configuration that will not
+compile — leaves the previous compiled file in force, and so leaves the
+injection paths and both sidecars describing that file. The Compiled screen and
+Site Health report the failure; nothing that file needs is taken away from it
+in the meantime.
+
 ### `exception` mode before WordPress
 
 In every other mode the library sends its own response and exits. In `exception`
