@@ -9,7 +9,6 @@ declare( strict_types = 1 );
 
 namespace Kanopi\BasicFirewall\Tests\integration;
 
-use Kanopi\BasicFirewall\Admin\Screen\Rule_Edit_Screen;
 use Kanopi\BasicFirewall\Plugin;
 use Kanopi\Firewall\Firewall;
 use Symfony\Component\Yaml\Yaml;
@@ -29,6 +28,8 @@ use Symfony\Component\Yaml\Yaml;
  * @covers \Kanopi\BasicFirewall\RuleType\Types\Asn
  */
 final class GeoReaderSettingsTest extends Settings_Snapshot {
+
+	use Rendered_Rule_Form;
 
 	/**
 	 * Request globals, put back after each test.
@@ -310,122 +311,5 @@ final class GeoReaderSettingsTest extends Settings_Snapshot {
 		$compiled = Yaml::parseFile( Plugin::instance()->paths()->compiled_file() );
 
 		return is_array( $compiled ) ? (array) ( $compiled['plugins'][0]['metadata'] ?? array() ) : array();
-	}
-
-	/**
-	 * Render the edit screen and read back what its form would post.
-	 *
-	 * @param string $id The rule being edited.
-	 *
-	 * @return array<string, string> Control names to the values they were rendered with.
-	 */
-	private function rendered_fields( string $id ): array {
-		$this->as_administrator();
-
-		$_GET  = array( 'rule' => $id );
-		$_POST = array();
-
-		ob_start();
-		( new Rule_Edit_Screen() )->render();
-		$html = (string) ob_get_clean();
-
-		$document = new \DOMDocument();
-		libxml_use_internal_errors( true );
-		$document->loadHTML( '<?xml encoding="utf-8"?>' . $html );
-		libxml_clear_errors();
-
-		$xpath  = new \DOMXPath( $document );
-		$form   = $xpath->query( '//form[.//input[@name="basic_firewall_nonce"]]' )->item( 0 );
-		$fields = array();
-
-		$this->assertNotNull( $form, 'The edit screen rendered no form.' );
-
-		foreach ( $xpath->query( './/input[@name] | .//select[@name] | .//textarea[@name]', $form ) as $control ) {
-			if ( ! $control instanceof \DOMElement ) {
-				continue;
-			}
-
-			$name = $control->getAttribute( 'name' );
-			$tag  = strtolower( $control->nodeName ); // phpcs:ignore WordPress.NamingConventions.ValidVariableName.UsedPropertyNotSnakeCase -- a DOM property.
-
-			if ( 'select' === $tag ) {
-				$selected = $xpath->query( './/option[@selected]', $control )->item( 0 ) ?? $xpath->query( './/option', $control )->item( 0 );
-
-				$fields[ $name ] = $selected instanceof \DOMElement ? $selected->getAttribute( 'value' ) : '';
-
-				continue;
-			}
-
-			if ( 'textarea' === $tag ) {
-				$fields[ $name ] = $control->textContent; // phpcs:ignore WordPress.NamingConventions.ValidVariableName.UsedPropertyNotSnakeCase -- a DOM property.
-
-				continue;
-			}
-
-			$kind = strtolower( $control->getAttribute( 'type' ) );
-
-			if ( in_array( $kind, array( 'submit', 'button' ), true ) ) {
-				continue;
-			}
-
-			if ( in_array( $kind, array( 'checkbox', 'radio' ), true ) && ! $control->hasAttribute( 'checked' ) ) {
-				continue;
-			}
-
-			$fields[ $name ] = $control->getAttribute( 'value' );
-		}
-
-		return $fields;
-	}
-
-	/**
-	 * Post back exactly what the screen rendered.
-	 *
-	 * @param string $id The rule being edited.
-	 *
-	 * @return bool Whether the screen saved it and redirected.
-	 */
-	private function save_as_rendered( string $id ): bool {
-		$fields = $this->rendered_fields( $id );
-
-		// The form's own names, nested the way PHP nests a real submission.
-		parse_str( http_build_query( $fields ), $posted );
-
-		$_GET  = array( 'rule' => $id );
-		$_POST = $posted;
-
-		add_filter(
-			'wp_redirect',
-			static function (): void {
-				throw new \RuntimeException( 'redirected' );
-			}
-		);
-
-		try {
-			( new Rule_Edit_Screen() )->handle();
-		} catch ( \RuntimeException $e ) {
-			return 'redirected' === $e->getMessage();
-		}
-
-		return false;
-	}
-
-	/**
-	 * Act as an administrator, who holds the plugin's capability.
-	 */
-	private function as_administrator(): void {
-		$admins = get_users(
-			array(
-				'role'   => 'administrator',
-				'number' => 1,
-				'fields' => 'ID',
-			)
-		);
-
-		if ( array() === $admins ) {
-			$this->markTestSkipped( 'The site has no administrator to act as.' );
-		}
-
-		wp_set_current_user( (int) $admins[0] );
 	}
 }

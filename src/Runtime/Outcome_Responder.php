@@ -344,10 +344,10 @@ final class Outcome_Responder {
 	 * still answered with the redirect.
 	 *
 	 * The redirect target came back through the challenge flow, so it is
-	 * treated as untrusted: only a site-relative path is followed. Without
-	 * this the challenge page is an open redirect, and an open redirect on
-	 * the one page every blocked visitor is sent to is worth more to an
-	 * attacker than most.
+	 * treated as untrusted: only a site-relative path is followed, see
+	 * safe_redirect(). Without this the challenge page is an open redirect,
+	 * and an open redirect on the one page every blocked visitor is sent to
+	 * is worth more to an attacker than most.
 	 *
 	 * @param ChallengeSolvedException $outcome The solved challenge.
 	 * @param Request|null             $request The submission.
@@ -355,11 +355,7 @@ final class Outcome_Responder {
 	 * @return array{format: string, redirect: string}
 	 */
 	public static function solved_response( ChallengeSolvedException $outcome, ?Request $request ): array {
-		$redirect = $outcome->getRedirect();
-
-		if ( '' === $redirect || 0 !== strpos( $redirect, '/' ) || 0 === strpos( $redirect, '//' ) || 0 === strpos( $redirect, '/\\' ) ) {
-			$redirect = '/';
-		}
+		$redirect = self::safe_redirect( $outcome->getRedirect() );
 
 		$wants_json = null !== $request
 			&& false !== stripos( (string) $request->headers->get( 'Accept', '' ), 'application/json' );
@@ -368,6 +364,53 @@ final class Outcome_Responder {
 			'format'   => $wants_json ? 'json' : 'redirect',
 			'redirect' => $redirect,
 		);
+	}
+
+	/**
+	 * Reduce a posted destination to a path on this site, or to `/`.
+	 *
+	 * Checking that the value starts with `/` and not `//` is not enough,
+	 * because browsers are more forgiving than that check. They strip tabs
+	 * and newlines anywhere in a URL, so `/<tab>/evil.example` is followed
+	 * as `//evil.example`; they read `\` as `/`, so `/\evil.example` is
+	 * too. So the value is refused outright if it holds any control
+	 * character or whitespace, backslashes are treated as the slashes a
+	 * browser will make of them before the `//` check, and the percent-decoded
+	 * path is held to the same rules, in case anything between here and the
+	 * browser decodes it. What survives is rebuilt from its path and query
+	 * alone, so no scheme, host, credentials or fragment can ride along.
+	 *
+	 * @param string $target The destination the challenge form posted.
+	 *
+	 * @return string A site-relative path, with its query string if it had one.
+	 */
+	public static function safe_redirect( string $target ): string {
+		if ( '' === $target || 1 === preg_match( '/[\x00-\x20\x7f]/', $target ) ) {
+			return '/';
+		}
+
+		$normalised = str_replace( '\\', '/', $target );
+
+		if ( '/' !== $normalised[0] || 0 === strpos( $normalised, '//' ) ) {
+			return '/';
+		}
+
+		// Not wp_parse_url(): this also runs from wp-config.php, before WordPress has loaded.
+		$parts = parse_url( $normalised ); // phpcs:ignore WordPress.WP.AlternativeFunctions.parse_url_parse_url
+
+		if ( ! is_array( $parts ) || isset( $parts['scheme'] ) || isset( $parts['host'] ) || isset( $parts['user'] ) || isset( $parts['pass'] ) || isset( $parts['port'] ) ) {
+			return '/';
+		}
+
+		$path = (string) ( $parts['path'] ?? '' );
+		// Decoded only to check it: the destination is sent as it arrived.
+		$decoded = str_replace( '\\', '/', rawurldecode( $path ) );
+
+		if ( '' === $path || '/' !== $path[0] || 0 === strpos( $decoded, '//' ) || 1 === preg_match( '/[\x00-\x1f\x7f]/', $decoded ) ) {
+			return '/';
+		}
+
+		return isset( $parts['query'] ) && '' !== $parts['query'] ? $path . '?' . $parts['query'] : $path;
 	}
 
 	/**

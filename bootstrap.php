@@ -120,6 +120,16 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 			'reason'      => null,
 		);
 
+		/*
+		 * An `X-Firewall-Mark` the client sent is not a mark. The header is
+		 * where the plugin mirrors the marks it applies, and anything reading
+		 * it cannot tell the two apart, so it goes before anything can
+		 * short-circuit -- whether or not this request is evaluated here. The
+		 * runner does the same on the mu-plugin path; see
+		 * Runner::forget_client_marks().
+		 */
+		unset( $_SERVER['HTTP_X_FIREWALL_MARK'] );
+
 		$options = basic_firewall_options( $options );
 
 		/*

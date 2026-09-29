@@ -69,12 +69,23 @@ final class Export_Screen extends Screen {
 		$exporter = new Exporter();
 		$export   = $exporter->export();
 
-		if ( array() !== $export['redacted'] ) {
+		$removed = array_values( array_diff( $export['redacted'], $export['redacted_urls'] ) );
+
+		if ( array() !== $removed ) {
 			printf(
 				'<div class="bfw-warning"><p><strong>%s</strong></p><ul style="list-style:disc;margin-left:2em"><li>%s</li></ul><p>%s</p></div>',
 				esc_html__( 'These credentials were removed from the export:', 'basic-firewall' ),
-				wp_kses_post( implode( '</li><li>', array_map( 'esc_html', $export['redacted'] ) ) ),
-				esc_html__( 'A site importing this keeps whatever it already has for them — importing will not blank them — but a site that has none will need them supplied by hand.', 'basic-firewall' )
+				wp_kses_post( implode( '</li><li>', array_map( 'esc_html', $removed ) ) ),
+				esc_html__( 'A site importing this keeps whatever it already has for them — importing will not blank them — as long as the host, port, account or URL each belongs with is unchanged. A site that has none will need them supplied by hand.', 'basic-firewall' )
+			);
+		}
+
+		if ( array() !== $export['redacted_urls'] ) {
+			printf(
+				'<div class="bfw-warning"><p><strong>%s</strong></p><ul style="list-style:disc;margin-left:2em"><li>%s</li></ul><p>%s</p></div>',
+				esc_html__( 'These URLs are exported with the credential in them replaced by ***:', 'basic-firewall' ),
+				wp_kses_post( implode( '</li><li>', array_map( 'esc_html', $export['redacted_urls'] ) ) ),
+				esc_html__( 'A site importing this keeps its own copy of a URL that matches apart from the credential. Anywhere else, put the credential back by hand — or move it into the list\'s advanced block as upstream.auth, which is stripped and restored whole.', 'basic-firewall' )
 			);
 		}
 

@@ -18,6 +18,7 @@ use Kanopi\BasicFirewall\Library_Capabilities;
 use Kanopi\BasicFirewall\Library_Loader;
 use Kanopi\BasicFirewall\Plugin;
 use Kanopi\BasicFirewall\RuleType\Types\Rate_Limit;
+use Kanopi\BasicFirewall\RuleType\Types\User_Agent;
 use Kanopi\BasicFirewall\Runtime\Runner;
 use Kanopi\BasicFirewall\Runtime\Trusted_Proxies;
 
@@ -514,13 +515,20 @@ final class Site_Health {
 	 */
 	private static function check_verification(): array {
 		$verifying = array();
+		$unusable  = array();
 
 		foreach ( (array) Plugin::instance()->settings()->get( 'rules', array() ) as $rule ) {
 			if ( ! is_array( $rule ) || empty( $rule['enabled'] ) || 'user_agent' !== ( $rule['type'] ?? '' ) || empty( $rule['settings']['verify'] ) ) {
 				continue;
 			}
 
-			$verifying[] = (string) ( '' !== (string) ( $rule['label'] ?? '' ) ? $rule['label'] : ( $rule['id'] ?? '?' ) );
+			$name = (string) ( '' !== (string) ( $rule['label'] ?? '' ) ? $rule['label'] : ( $rule['id'] ?? '?' ) );
+
+			$verifying[] = $name;
+
+			if ( User_Agent::verification_unusable( (array) $rule['settings'] ) ) {
+				$unusable[] = $name;
+			}
 		}
 
 		if ( array() === $verifying ) {
@@ -552,6 +560,22 @@ final class Site_Health {
 					esc_html__( 'These rules verify crawlers by reverse DNS: %1$s. The installed firewall library switches verification off while rule lists are kept off the request path, so each of them currently matches nobody — a genuine crawler is treated as ordinary traffic. Update to kanopi/firewall 2.33.0, which gives verification its own switch, or add %2$s to wp-config.php.', 'basic-firewall' ),
 					$names,
 					"<code>define( 'BASIC_FIREWALL_SOURCES_OFFLINE', false );</code>"
+				)
+			);
+		}
+
+		/*
+		 * Last, because it is the one problem the rule can fix for itself. The
+		 * compiler skips these rather than compile them without verification,
+		 * so a genuine crawler is judged by the rules below, as if unverified.
+		 */
+		if ( array() !== $unusable ) {
+			return self::critical(
+				__( 'Rules that verify crawlers have no domain to verify against', 'basic-firewall' ),
+				sprintf(
+					/* translators: %s: rule names. */
+					esc_html__( 'These rules verify crawlers by reverse DNS but list no domain to accept: %s. Anything that is not a plain domain, such as *.googlebot.com or a URL, is dropped, so they are skipped when the configuration is compiled rather than left to believe every client claiming to be a crawler. Edit each rule and list a domain such as googlebot.com.', 'basic-firewall' ),
+					'<strong>' . esc_html( implode( ', ', $unusable ) ) . '</strong>'
 				)
 			);
 		}

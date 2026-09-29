@@ -1009,5 +1009,9 @@ final class Commands {
 				)
 			);
 		}
+
+		foreach ( (array) ( $summary['credentials_withheld'] ?? array() ) as $withheld ) {
+			WP_CLI::warning( (string) $withheld );
+		}
 	}
 }

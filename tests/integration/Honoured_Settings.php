@@ -145,6 +145,16 @@ abstract class Honoured_Settings extends Settings_Snapshot {
 			$this->given_settings( $settings );
 		}
 
+		return $this->start();
+	}
+
+	/**
+	 * Rebuild the compiled file from the stored settings, and start the library on it.
+	 *
+	 * Separate from build() for a test that stores its settings some other
+	 * way -- through the importer, say.
+	 */
+	protected function start(): Firewall {
 		$result = Plugin::instance()->compiled()->rebuild();
 
 		$this->assertTrue( $result['written'], 'The compiled file was not written: ' . implode( ' ', $result['problems'] ) );

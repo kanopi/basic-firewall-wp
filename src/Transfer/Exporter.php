@@ -26,6 +26,11 @@ use Symfony\Component\Yaml\Yaml;
  * importing it, at the point the rule stopped working, with no indication why.
  * The header names every path that was removed.
  *
+ * **A URL keeps everything but its credential.** A referenced list's URL can
+ * carry one -- `https://user:pass@host/`, `?api_key=` -- and the rule is useless
+ * without the URL, so the credential is replaced with `***` and the header
+ * names the URL as one that was altered. See Secret_Paths::redact_url().
+ *
  * **A token is not a secret.** `%env(ABUSEIPDB_API_KEY)%` names an environment
  * variable rather than holding one, so it survives intact -- stripping it would
  * break the receiving site and protect nothing.
@@ -35,7 +40,7 @@ final class Exporter {
 	/**
 	 * Export the current settings.
 	 *
-	 * @return array{document: array<string, mixed>, redacted: list<string>}
+	 * @return array{document: array<string, mixed>, redacted: list<string>, redacted_urls: list<string>}
 	 */
 	public function export(): array {
 		return $this->export_document( Plugin::instance()->settings()->all() );
@@ -49,7 +54,7 @@ final class Exporter {
 	 *
 	 * @param string $id Rule identifier.
 	 *
-	 * @return array{document: array<string, mixed>, redacted: list<string>}|null
+	 * @return array{document: array<string, mixed>, redacted: list<string>, redacted_urls: list<string>}|null
 	 */
 	public function export_rule( string $id ): ?array {
 		foreach ( (array) Plugin::instance()->settings()->get( 'rules', array() ) as $rule ) {
@@ -64,17 +69,22 @@ final class Exporter {
 	/**
 	 * Strip credentials from a document and record what went.
 	 *
+	 * `redacted` lists every path that was removed or altered, so a caller
+	 * that only reads that list still sees all of them; `redacted_urls` says
+	 * which of those are URLs that were kept with their credential replaced.
+	 *
 	 * @param array<string, mixed> $document Settings document.
 	 *
-	 * @return array{document: array<string, mixed>, redacted: list<string>}
+	 * @return array{document: array<string, mixed>, redacted: list<string>, redacted_urls: list<string>}
 	 */
-	private function export_document( array $document ): array {
+	public static function redact( array $document ): array {
 		$redacted = array();
+		$urls     = array();
 
 		foreach ( Secret_Paths::in( $document ) as $path ) {
 			$value = Secret_Paths::get( $document, $path );
 
-			if ( null === $value || '' === $value ) {
+			if ( Secret_Paths::is_empty( $value ) ) {
 				// Nothing there to redact. Saying so would be noise.
 				continue;
 			}
@@ -96,10 +106,39 @@ final class Exporter {
 			$redacted[] = $path;
 		}
 
+		foreach ( Secret_Paths::urls_in( $document ) as $path ) {
+			$value = Secret_Paths::get( $document, $path );
+
+			if ( ! is_string( $value ) ) {
+				continue;
+			}
+
+			$clean = Secret_Paths::redact_url( $value );
+
+			if ( $clean !== $value ) {
+				Secret_Paths::set( $document, $path, $clean );
+
+				$redacted[] = $path;
+				$urls[]     = $path;
+			}
+		}
+
 		return array(
-			'document' => $document,
-			'redacted' => $redacted,
+			'document'      => $document,
+			'redacted'      => $redacted,
+			'redacted_urls' => $urls,
 		);
+	}
+
+	/**
+	 * Strip credentials from a document for export.
+	 *
+	 * @param array<string, mixed> $document Settings document.
+	 *
+	 * @return array{document: array<string, mixed>, redacted: list<string>, redacted_urls: list<string>}
+	 */
+	private function export_document( array $document ): array {
+		return self::redact( $document );
 	}
 
 	/**
@@ -110,7 +149,7 @@ final class Exporter {
 	public function to_yaml(): string {
 		$export = $this->export();
 
-		return $this->render( $export['document'], $export['redacted'] );
+		return $this->render( $export['document'], $export['redacted'], $export['redacted_urls'] );
 	}
 
 	/**
@@ -121,16 +160,17 @@ final class Exporter {
 	public function rule_to_yaml( string $id ): ?string {
 		$export = $this->export_rule( $id );
 
-		return null === $export ? null : $this->render( $export['document'], $export['redacted'] );
+		return null === $export ? null : $this->render( $export['document'], $export['redacted'], $export['redacted_urls'] );
 	}
 
 	/**
 	 * Build the document text.
 	 *
 	 * @param array<string, mixed> $document Redacted document.
-	 * @param list<string>         $redacted Paths that were removed.
+	 * @param list<string>         $redacted Paths that were removed or altered.
+	 * @param list<string>         $urls     Those of them that are URLs kept with the credential replaced.
 	 */
-	private function render( array $document, array $redacted ): string {
+	private function render( array $document, array $redacted, array $urls = array() ): string {
 		$header = "# Basic Firewall configuration export\n"
 			. '# Exported ' . gmdate( 'c' ) . "\n"
 			. '# Plugin version ' . BASIC_FIREWALL_VERSION . "\n"
@@ -139,13 +179,29 @@ final class Exporter {
 		if ( array() === $redacted ) {
 			$header .= "# No credentials were found in this configuration, so none were removed.\n";
 		} else {
-			$header .= "# The following credentials were REMOVED from this export and are not\n"
-				. "# included below. The receiving site keeps whatever it already has for\n"
-				. "# these -- importing this document will not blank them -- but a site that\n"
-				. "# has none will need them supplied by hand.\n#\n";
+			$removed = array_values( array_diff( $redacted, $urls ) );
 
-			foreach ( $redacted as $path ) {
-				$header .= '#   - ' . $path . "\n";
+			if ( array() !== $removed ) {
+				$header .= "# The following credentials were REMOVED from this export and are not\n"
+					. "# included below. The receiving site keeps whatever it already has for\n"
+					. "# these -- importing this document will not blank them -- as long as\n"
+					. "# the host, port, account or URL each belongs with is unchanged. A site\n"
+					. "# that has none will need them supplied by hand.\n#\n";
+
+				foreach ( $removed as $path ) {
+					$header .= '#   - ' . $path . "\n";
+				}
+			}
+
+			if ( array() !== $urls ) {
+				$header .= ( array() !== $removed ? "#\n" : '' )
+					. "# These URLs are included with the credential in them replaced by ***.\n"
+					. "# The receiving site keeps its own copy of a URL that matches apart from\n"
+					. "# that; anywhere else, put the credential back by hand:\n#\n";
+
+				foreach ( $urls as $path ) {
+					$header .= '#   - ' . $path . "\n";
+				}
 			}
 
 			$header .= "#\n# An %env(NAME)% or %file(/path)% token is a reference rather than a\n"

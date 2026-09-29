@@ -10,6 +10,7 @@ declare( strict_types = 1 );
 namespace Kanopi\BasicFirewall\Compiler;
 
 use Kanopi\BasicFirewall\Plugin;
+use Kanopi\BasicFirewall\Transfer\Secret_Paths;
 use Symfony\Component\Yaml\Yaml;
 
 /**
@@ -321,6 +322,41 @@ TXT;
 		$contents = file_get_contents( $path ); // phpcs:ignore WordPress.WP.AlternativeFunctions -- a local file, not a remote URL; WP_Filesystem is not loaded this early.
 
 		return false === $contents ? null : $contents;
+	}
+
+	/**
+	 * The compiled file as the Compiled screen shows it: every credential replaced.
+	 *
+	 * The file itself has to hold them -- the library reads it -- but a screen
+	 * is somewhere else: it is screenshotted into tickets, shared over a
+	 * shoulder and left open. So what is shown is the same tree, parsed and
+	 * dumped again the way it was written, with each credential replaced by
+	 * Secret_Paths::REDACTED. Null when there is no file, and false when it
+	 * cannot be parsed: a file that cannot be parsed cannot be redacted, so
+	 * it is not shown at all.
+	 *
+	 * @return string|false|null
+	 */
+	public function redacted_contents() {
+		$contents = $this->contents();
+
+		if ( null === $contents ) {
+			return null;
+		}
+
+		try {
+			$compiled = Yaml::parse( $contents );
+		} catch ( \Throwable $e ) {
+			return false;
+		}
+
+		if ( ! is_array( $compiled ) ) {
+			return false;
+		}
+
+		$compiled = Secret_Paths::redact_compiled( $compiled, Plugin::instance()->settings()->all() );
+
+		return self::HEADER . "\n\n" . Yaml::dump( $compiled, 10, 2, Yaml::DUMP_MULTI_LINE_LITERAL_BLOCK );
 	}
 
 	/**

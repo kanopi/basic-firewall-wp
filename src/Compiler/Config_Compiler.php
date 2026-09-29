@@ -19,6 +19,7 @@ use Kanopi\BasicFirewall\RuleType\Registry;
 use Kanopi\BasicFirewall\RuleType\Response_Settings;
 use Kanopi\BasicFirewall\RuleType\Rule_Type_Base;
 use Kanopi\BasicFirewall\RuleType\Types\Edge_Signal;
+use Kanopi\BasicFirewall\RuleType\Types\User_Agent;
 use Kanopi\BasicFirewall\Runtime\Lockdown;
 use Kanopi\BasicFirewall\Support\Schema;
 use Kanopi\Firewall\Utility\Schedule;
@@ -860,6 +861,23 @@ final class Config_Compiler {
 				$this->problems[] = sprintf(
 					/* translators: %s: rule identifier. */
 					__( 'Rule "%s" verifies crawlers by reverse DNS, which the installed firewall library cannot do — it would believe every client claiming to be one. It was skipped.', 'basic-firewall' ),
+					(string) ( $rule['id'] ?? '?' )
+				);
+
+				continue;
+			}
+
+			/*
+			 * A rule asking to verify crawlers with no domain to verify against
+			 * is skipped too, for the same reason. The rule screen refuses it,
+			 * but an import or WP-CLI stores `verify` with the list emptied of
+			 * everything that was not a domain, and compiling that without its
+			 * verification is an allow rule for anybody claiming to be Googlebot.
+			 */
+			if ( 'user_agent' === (string) ( $rule['type'] ?? '' ) && User_Agent::verification_unusable( (array) ( $rule['settings'] ?? array() ) ) ) {
+				$this->problems[] = sprintf(
+					/* translators: %s: rule identifier. */
+					__( 'Rule "%s" verifies crawlers by reverse DNS but lists no domain to accept — anything that is not a plain domain, such as *.googlebot.com, is dropped. It was skipped rather than compiled into a rule that believes every client claiming to be a crawler.', 'basic-firewall' ),
 					(string) ( $rule['id'] ?? '?' )
 				);
 

@@ -211,6 +211,16 @@ final class Import_Screen extends Screen {
 
 		echo '</tbody></table>';
 
+		$withheld = (array) ( $preview['summary']['credentials_withheld'] ?? array() );
+
+		if ( array() !== $withheld ) {
+			printf(
+				'<div class="bfw-warning"><p><strong>%s</strong></p><ul style="list-style:disc;margin-left:2em"><li>%s</li></ul></div>',
+				esc_html__( 'Stored credentials this import will not keep:', 'basic-firewall' ),
+				wp_kses_post( implode( '</li><li>', array_map( 'esc_html', array_map( 'strval', $withheld ) ) ) )
+			);
+		}
+
 		$this->open_form();
 
 		printf( '<input type="hidden" name="import_action" value="apply" />' );

@@ -168,6 +168,32 @@ does not work as well as what does.
   password-reset links start.
 - Destructive WP-CLI commands refuse to run without `--yes` and exit non-zero
   when they refuse, rather than exiting 0 having done nothing.
+- An export strips a referenced list's credentials on every rule type that takes
+  a list — `upstream.auth` and every `upstream.headers` entry — and replaces a
+  credential in a list URL with `***`, naming each path in its header.
+- An import keeps a stored credential the document left out only while the
+  host, port, account or URL it belongs with is unchanged; otherwise it is
+  blanked and the preview says so. Credentials follow their rule by identifier.
+- A rate limit rule's Redis password and DSN are never rendered into its edit
+  form; blank keeps the stored value and a box removes it. Limits and counter
+  storage have their own controls, so saving the form unchanged stores what was
+  there.
+- The Compiled screen shows every credential in the compiled file as
+  `[redacted]`; the file itself keeps them for the library.
+- A user agent rule that asks to verify crawlers but is left with no domain to
+  accept — an import or WP-CLI drops `*.googlebot.com` and keeps the verify flag
+  — is skipped when the configuration is compiled and reported on the Status
+  screen and in Site Health, never compiled as a plain agent match that lets
+  anyone sending `Googlebot/2.1` past an allow rule.
+- An `X-Firewall-Mark` header sent by the client is removed before evaluation on
+  both paths, so `$_SERVER['HTTP_X_FIREWALL_MARK']` is only ever a mark the
+  firewall applied.
+- After a solved challenge in `exception` mode the visitor is sent only to a
+  path on this site, rebuilt from the posted destination's path and query. A
+  destination holding a control character or whitespace, raw or
+  percent-encoded, or that a browser would read as `//` once its backslashes
+  are slashes, is replaced with `/`, so `/<tab>/evil.example` cannot become
+  `//evil.example`.
 
 ### Upgrading from a pre-release build
 

@@ -309,6 +309,14 @@ The bootstrap leaves it in a global and the runner answers it before any
 ordinary plugin loads — or at `plugins_loaded`, if the mu-plugin loader is
 missing or was copied by an older release.
 
+Where a solved challenge sends the visitor came back through the visitor, so it
+is not trusted. Only a path on this site is followed, rebuilt from the posted
+path and query. Anything holding a control character or whitespace, raw or
+percent-encoded, goes to `/` instead, and a backslash counts as the slash a
+browser makes of it before the `//` check. Browsers strip tabs and read `\` as
+`/`, so `/<tab>/evil.example` and `/\evil.example` would otherwise leave the
+site.
+
 If the bootstrap cannot find the plugin's responder it hands refusals to the
 runner the same way, so they are still answered, but after a page cache has had
 its chance. Site Health reports that as **critical** while the mode is
@@ -514,6 +522,12 @@ add_action( 'basic_firewall_request_marked', function ( array $marks ) {
 // Or ask directly, any time after plugins_loaded:
 if ( Kanopi\BasicFirewall\Runtime\Runner::is_marked( 'honeypot' ) ) { … }
 ```
+
+The last mark applied is also mirrored into `$_SERVER['HTTP_X_FIREWALL_MARK']`,
+for code that reads request headers the ordinary way. That is where PHP puts an
+`X-Firewall-Mark` header the client sent, too, so one arriving with the request
+is removed before evaluation on both paths: if the key is set, the firewall set
+it.
 
 A rule can also set a request header, for something downstream — a CDN, a log
 pipeline — that was never written to know this plugin exists.
@@ -769,8 +783,14 @@ last refresh ran and how many entries each list contributed, because "this allow
 rule stopped allowing" is otherwise a hard thing to trace.
 
 A list behind a credential goes in the Advanced box as `upstream.auth`, and is
-stripped from an export like every other credential the plugin holds. Prefer an
-`%env()%` token over the literal value. Two things are refused outright when you
+stripped from an export like every other credential the plugin holds — the
+token, password or value, and every `upstream.headers` entry, on every rule type
+that takes a list. A credential typed into the URL itself
+(`https://user:pass@…`, or a parameter named `token`, `key`, `api_key`,
+`password`, `secret`, `signature` and the like) is replaced with `***` and the
+URL kept; a key in a parameter with any other name is not recognised, which is
+one more reason to use `upstream.auth`. Prefer an `%env()%` token over the
+literal value. Two things are refused outright when you
 type them: an absolute path, and any scheme other than `http`/`https` — a source
 is read at the web server's privilege, and this setting travels in an imported
 configuration document. A relative filename resolves inside the private
@@ -883,6 +903,14 @@ Matching is on a label boundary, so `googlebot.com` does not accept
 `evilgooglebot.com`. The screen refuses anything that is not a domain — a URL, a
 wildcard, a bare `com` — and refuses verification with no domain listed, since
 the library treats that as matching nobody.
+
+An import, WP-CLI or a hand edit is not refused, so it keeps what the screen
+would have: the entries that are not domains are dropped and the verify box
+stays ticked. A rule left verifying against no domain at all — every entry was
+`*.googlebot.com`, say — is **skipped when the configuration is compiled**, and
+named on the Status screen and in Site Health. It is never compiled without its
+verification, because an allow rule on the agent alone lets anyone through who
+sends `Googlebot/2.1`.
 
 It **fails closed**: no PTR record, a hostname outside your list, a forward
 lookup that does not return, or DNS being unreachable all mean the rule does not
@@ -1087,6 +1115,18 @@ or query parameter named with capitals. The library lower-cases every component
 before looking it up, which is harmless for a header and means `post.userName`
 looks for `username` and finds nothing.
 
+#### Where the counts are kept
+
+Each rate limit rule keeps its own counters — in a file in the private
+directory, a database table, or Redis — chosen with **Keep the counters in** on
+the rule. A file is enough for one web server; several servers behind a load balancer
+each keep their own file and each allow the full limit, so use the database or
+Redis there. The Redis password and a DSN are typed and never shown: the field is
+always empty, leaving it blank keeps what is stored, and *Remove the stored
+value* clears it. Both are stripped from an export and shown as `[redacted]` on
+the Compiled screen, and a password is kept by an import only while the Redis
+host and port are unchanged.
+
 ### Regular expressions
 
 **Write the pattern only.** No delimiters, no flags:
@@ -1141,6 +1181,12 @@ Tick one on the Presets screen and it is included **by reference**, not copied,
 so it updates when the library does. `wp basic-firewall sources` lists what is
 available, and the Compiled screen is the only place that shows what a preset
 actually contributed.
+
+The Compiled screen shows every credential in the file as `[redacted]` —
+passwords, secret keys, tokens, API keys, a list's headers and the credential in
+a list URL — along with anything the settings hold at a secret path, wherever it
+was compiled. The file itself keeps them, because the library reads it. An
+`%env()%` token is shown as written.
 
 ### The `wordpress` preset is withheld
 
@@ -1268,6 +1314,13 @@ keep the stored one, or tick *Remove the stored password*. It is written into th
 compiled file and stripped from an export, so `%env(YOUR_VARIABLE)%` is the
 better answer: that token is not a credential, survives an export, and never
 reaches the database.
+
+It is not injected at request time the way WordPress's database credentials
+are. Those come from constants that exist on both evaluation paths; this password
+lives in the settings option, which the wp-config.php path cannot read without
+WordPress. Getting it there would mean writing it to a file beside the compiled
+one — the same plaintext on the same disk, with one more file to protect. The
+token is the way to keep it off disk.
 
 Redis needs no WordPress credentials, so it works on the wp-config.php
 evaluation path exactly as it does on the mu-plugin path. If the server cannot be
@@ -1571,6 +1624,9 @@ Three behaviours are guaranteed, and each has a test that fails if it regresses:
 **Credentials are stripped, and the document says which.** Every rule type
 declares which of its own settings are secret, so a type contributed by another
 plugin has its API key redacted without the exporter knowing the type exists.
+Every type that takes a referenced list has the list's credentials stripped as
+well, and a list URL is exported with any credential in it replaced by `***`;
+the header names those URLs separately.
 
 **`%env(NAME)%` tokens are references, not secrets, and survive intact.** A token
 names an environment variable rather than holding one, so stripping it would
@@ -1581,6 +1637,16 @@ This is the direction that does damage: writing a stripped export over a
 receiving site would erase its challenge secret — and a firewall that cannot
 start fails open, so every rule silently stops being enforced while the interface
 goes on reporting "Blocking".
+
+**A kept credential goes only where it went before.** A stored password is kept
+only while the settings it belongs with are unchanged: the Redis host, port and
+username, a database connection's driver, host, port and user, a log handler's
+type and table, a CAPTCHA's site key, a list's URL. A document that points any of
+those somewhere new without carrying the credential gets it blanked instead, and
+the preview — on the screen and from `wp basic-firewall import` — names each one
+and what changed. A URL exported with `***` is restored from the stored copy when
+the two match apart from the credential. Rules are matched by identifier, so
+reordering them moves nothing to the wrong rule.
 
 ## During an incident
 

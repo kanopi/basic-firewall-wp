@@ -34,6 +34,13 @@ final class Runner {
 	public const ENABLED_CONSTANT = 'BASIC_FIREWALL_ENABLED';
 
 	/**
+	 * Where a mark is mirrored for code that reads request headers.
+	 *
+	 * `X-Firewall-Mark`, as PHP names a request header in `$_SERVER`.
+	 */
+	public const MARK_SERVER_KEY = 'HTTP_X_FIREWALL_MARK';
+
+	/**
 	 * Why evaluation did not happen, or null.
 	 *
 	 * @var string|null
@@ -56,6 +63,19 @@ final class Runner {
 	 * @param Request|null $request Request to evaluate, or null for the current one.
 	 */
 	public function evaluate( ?Request $request = null ): bool {
+		/*
+		 * Before anything else, and on every branch: an `X-Firewall-Mark` the
+		 * client sent is not a mark. The header is where this plugin mirrors
+		 * the marks it applies, and code reading it has no way to tell the
+		 * two apart -- so a scanner could otherwise mark itself as whatever a
+		 * downstream check trusts, or pass itself off as unmarked. Only when
+		 * evaluating the current request: a request handed in by a caller is
+		 * not the one $_SERVER describes.
+		 */
+		if ( null === $request ) {
+			self::forget_client_marks();
+		}
+
 		if ( defined( 'BASIC_FIREWALL_EVALUATED' ) ) {
 			/*
 			 * The wp-config.php path already dealt with this request -- but it
@@ -203,7 +223,7 @@ final class Runner {
 		self::$marks = array_values( array_map( 'strval', $marks ) );
 
 		foreach ( self::$marks as $mark ) {
-			$_SERVER['HTTP_X_FIREWALL_MARK'] = $mark;
+			$_SERVER[ self::MARK_SERVER_KEY ] = $mark;
 		}
 
 		/** This filter is documented in src/Runtime/Runner.php */
@@ -235,7 +255,7 @@ final class Runner {
 		 * to know this plugin exists.
 		 */
 		foreach ( self::$marks as $mark ) {
-			$_SERVER['HTTP_X_FIREWALL_MARK'] = $mark;
+			$_SERVER[ self::MARK_SERVER_KEY ] = $mark;
 		}
 
 		/**
@@ -246,6 +266,18 @@ final class Runner {
 		 * @param Request      $request The evaluated request.
 		 */
 		do_action( 'basic_firewall_request_marked', self::$marks, $request );
+	}
+
+	/**
+	 * Drop any `X-Firewall-Mark` header the client sent.
+	 *
+	 * The header is the plugin's to set, so one that arrived with the request
+	 * is removed before evaluation rather than left for code downstream to
+	 * mistake for a mark. The wp-config.php path does the same in
+	 * bootstrap.php, before WordPress exists to call this.
+	 */
+	public static function forget_client_marks(): void {
+		unset( $_SERVER[ self::MARK_SERVER_KEY ] );
 	}
 
 	/**

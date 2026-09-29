@@ -478,17 +478,18 @@ final class Schema {
 					'default' => '',
 				),
 				'password' => array(
-					'type'    => 'string',
-					'label'   => 'Redis password',
-					'default' => '',
-					'secret'  => true,
+					'type'     => 'string',
+					'label'    => 'Redis password',
+					'default'  => '',
+					'secret'   => true,
+					'bound_to' => array( 'host', 'port', 'username' ),
 
 					/*
 					 * Not trimmed. A password is whatever was issued, trailing
 					 * space included, and quietly altering it produces an
 					 * authentication failure nobody can see on the screen.
 					 */
-					'trim'    => false,
+					'trim'     => false,
 				),
 			),
 		);
@@ -615,10 +616,11 @@ final class Schema {
 					'default' => '',
 				),
 				'password' => array(
-					'type'    => 'string',
-					'label'   => 'Password',
-					'default' => '',
-					'secret'  => true,
+					'type'     => 'string',
+					'label'    => 'Password',
+					'default'  => '',
+					'secret'   => true,
+					'bound_to' => array( 'driver', 'host', 'port', 'user' ),
 				),
 			),
 		);
@@ -714,10 +716,11 @@ final class Schema {
 									 */
 								),
 								'secret_key'    => array(
-									'type'    => 'string',
-									'label'   => 'Secret key',
-									'default' => '',
-									'secret'  => true,
+									'type'     => 'string',
+									'label'    => 'Secret key',
+									'default'  => '',
+									'secret'   => true,
+									'bound_to' => array( 'site_key' ),
 								),
 								'theme'         => array(
 									'type'    => 'string',
@@ -773,10 +776,11 @@ final class Schema {
 									'default' => '',
 								),
 								'secret_key'        => array(
-									'type'    => 'string',
-									'label'   => 'Secret key',
-									'default' => '',
-									'secret'  => true,
+									'type'     => 'string',
+									'label'    => 'Secret key',
+									'default'  => '',
+									'secret'   => true,
+									'bound_to' => array( 'site_key' ),
 								),
 								'version'           => array(
 									'type'    => 'string',
@@ -938,10 +942,16 @@ final class Schema {
 					'choices' => array( 'wordpress', 'dsn', 'parameters' ),
 				),
 				'dsn'               => array(
-					'type'    => 'string',
-					'label'   => 'Connection DSN',
-					'default' => '',
-					'secret'  => true,
+					'type'     => 'string',
+					'label'    => 'Connection DSN',
+					'default'  => '',
+					'secret'   => true,
+
+					/*
+					 * Handlers are a list matched by position, so the handler
+					 * that arrives in a slot may not be the one that was there.
+					 */
+					'bound_to' => array( 'type', 'table' ),
 				),
 				'parameters'        => self::connection_parameters(),
 				'retain_days'       => array(
@@ -1227,29 +1237,55 @@ final class Schema {
 	}
 
 	/**
+	 * The settings each credential belongs with.
+	 *
+	 * A credential is only good for the thing it was issued for. The importer
+	 * keeps a site's stored password when a document leaves it out, and that
+	 * is right only while the password still goes to the same place: a
+	 * document that points Redis at another host, with the password stripped,
+	 * must not have this site's password sent there. `bound_to` names the
+	 * sibling settings that say where the credential goes; if any of them
+	 * changes, the stored credential is not carried across.
+	 *
+	 * @return array<string, list<string>> Each secret path, with the sibling keys it is bound to.
+	 */
+	public static function secret_bindings(): array {
+		$found = array();
+		self::collect_secrets( self::definition(), '', $found, $bindings );
+
+		return $bindings;
+	}
+
+	/**
 	 * Recursive worker for secret_paths().
 	 *
-	 * @param array<string, mixed> $node  Schema node.
-	 * @param string               $path  Path accumulated so far.
-	 * @param list<string>         $found Collected paths, by reference.
+	 * @param array<string, mixed>             $node     Schema node.
+	 * @param string                           $path     Path accumulated so far.
+	 * @param list<string>                     $found    Collected paths, by reference.
+	 * @param array<string, list<string>>|null $bindings Each path's `bound_to`, by reference.
 	 */
-	private static function collect_secrets( array $node, string $path, array &$found ): void {
+	private static function collect_secrets( array $node, string $path, array &$found, ?array &$bindings = null ): void {
+		if ( null === $bindings ) {
+			$bindings = array();
+		}
+
 		if ( ! empty( $node['secret'] ) && '' !== $path ) {
-			$found[] = $path;
+			$found[]           = $path;
+			$bindings[ $path ] = array_values( array_map( 'strval', (array) ( $node['bound_to'] ?? array() ) ) );
 		}
 
 		$type = $node['type'] ?? '';
 
 		if ( 'map' === $type ) {
 			foreach ( $node['children'] ?? array() as $key => $child ) {
-				self::collect_secrets( $child, '' === $path ? (string) $key : $path . '.' . $key, $found );
+				self::collect_secrets( $child, '' === $path ? (string) $key : $path . '.' . $key, $found, $bindings );
 			}
 
 			return;
 		}
 
 		if ( 'list' === $type && isset( $node['of'] ) && is_array( $node['of'] ) ) {
-			self::collect_secrets( $node['of'], $path . '.*', $found );
+			self::collect_secrets( $node['of'], $path . '.*', $found, $bindings );
 		}
 	}
 }

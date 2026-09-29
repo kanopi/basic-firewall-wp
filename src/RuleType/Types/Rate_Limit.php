@@ -144,11 +144,85 @@ final class Rate_Limit extends Rule_Type_Base {
 	 * {@inheritDoc}
 	 */
 	public function settings_help(): array {
+		$storage = 'settings[storage][backend]';
+
 		return array(
-			'paths' => array(
+			'paths'   => array(
 				'label'       => __( 'Limits', 'basic-firewall' ),
+
+				/*
+				 * Stored as maps, typed as lines. The screen writes each map
+				 * back as the line it was read from; without this it printed
+				 * "Array" for every limit, and saving the rule untouched was
+				 * refused for having no limits in it.
+				 */
+				'lines'       => array( self::class, 'limit_lines' ),
 				'description' => wp_kses_post(
 					__( 'One per line, as <code>pattern requests seconds</code> — <code>/wp-login.php 5 300</code> is five attempts in five minutes.<br><br>A fourth field names <strong>what to count</strong>, comma separated. Left off, the firewall counts the client address and the pattern, which is what it has always done. <code>/wp-login.php 5 300 post.log</code> counts the account being tried rather than the address trying it, so a credential-stuffing run spread over a thousand addresses still hits one limit. <code>/api/* 100 60 client_ip,path</code> counts each endpoint separately rather than the API as a whole.<br><br><strong>A limit that counts an account is not a replacement for one that counts the address.</strong> The two catch opposite attacks — an account key misses one client walking a list of usernames, which gets a fresh budget per name — and a limit without <code>client_ip</code> in its key refuses but never bans. Keep an address-keyed limit on the same pattern, <em>in a separate rate limit rule</em>: within one rule only the first line whose pattern matches is ever used.', 'basic-firewall' )
+				),
+			),
+			'storage' => array(
+				'label'  => __( 'Counter storage', 'basic-firewall' ),
+
+				/*
+				 * Field by field, like the geolocation reader. The storage map
+				 * used to be a textarea of `key: value` lines -- the Redis
+				 * password in clear among them -- which posted back as a string
+				 * the validator did not recognise, so every save reset the
+				 * storage to a file and dropped the password.
+				 */
+				'fields' => array(
+					'backend'           => array(
+						'label'       => __( 'Keep the counters in', 'basic-firewall' ),
+						'choices'     => array(
+							'file'     => __( 'A file in the private directory', 'basic-firewall' ),
+							'database' => __( 'A database table', 'basic-firewall' ),
+							'redis'    => __( 'Redis', 'basic-firewall' ),
+						),
+						'description' => __( 'A file is enough for one web server. Several servers behind a load balancer each keep their own file, so each allows the full limit — use the database or Redis there.', 'basic-firewall' ),
+					),
+					'file'              => array(
+						'label'       => __( 'Counter file', 'basic-firewall' ),
+						'description' => __( 'A relative path resolves inside the private directory.', 'basic-firewall' ),
+						'show_when'   => $storage . ':file',
+					),
+					'connection_source' => array(
+						'label'     => __( 'Connection', 'basic-firewall' ),
+						'choices'   => array(
+							'wordpress' => __( 'WordPress\'s own database', 'basic-firewall' ),
+							'dsn'       => __( 'A DSN', 'basic-firewall' ),
+						),
+						'show_when' => $storage . ':database',
+					),
+					'dsn'               => array(
+						'label'       => __( 'DSN', 'basic-firewall' ),
+						'secret'      => true,
+						'description' => __( 'A DSN carries its password, so it is treated as one.', 'basic-firewall' ),
+						'show_when'   => 'settings[storage][connection_source]:dsn',
+					),
+					'table'             => array(
+						'label'       => __( 'Table', 'basic-firewall' ),
+						'description' => __( 'In WordPress\'s database the table prefix is added for you.', 'basic-firewall' ),
+						'show_when'   => $storage . ':database',
+					),
+					'redis_host'        => array(
+						'label'     => __( 'Redis host', 'basic-firewall' ),
+						'show_when' => $storage . ':redis',
+					),
+					'redis_port'        => array(
+						'label'     => __( 'Redis port', 'basic-firewall' ),
+						'show_when' => $storage . ':redis',
+					),
+					'redis_password'    => array(
+						'label'     => __( 'Redis password', 'basic-firewall' ),
+						'secret'    => true,
+						'show_when' => $storage . ':redis',
+					),
+					'key_prefix'        => array(
+						'label'       => __( 'Key prefix', 'basic-firewall' ),
+						'description' => __( 'Left empty, one is derived from the site, so sites sharing one Redis do not count each other\'s requests.', 'basic-firewall' ),
+						'show_when'   => $storage . ':redis',
+					),
 				),
 			),
 		);
@@ -500,6 +574,56 @@ final class Rate_Limit extends Rule_Type_Base {
 	 */
 	public function secret_settings(): array {
 		return array( 'storage.dsn', 'storage.redis_password' );
+	}
+
+	/**
+	 * What the Redis password belongs with.
+	 *
+	 * Read by Secret_Paths, so an import that points the counters at another
+	 * Redis does not send this site's password there. The DSN carries its own
+	 * host, so it is bound to nothing.
+	 *
+	 * @return array<string, list<string>>
+	 */
+	public function secret_bindings(): array {
+		return array(
+			'storage.redis_password' => array( 'storage.backend', 'storage.redis_host', 'storage.redis_port' ),
+		);
+	}
+
+	/**
+	 * The stored limits as the lines the screen reads them back from.
+	 *
+	 * `pattern requests seconds`, and the key as a fourth field when one is
+	 * named -- the inverse of what validate_settings() reads, so rendering and
+	 * posting back stores exactly what was there.
+	 *
+	 * @param mixed $value The stored `paths`: maps, or lines stored as typed.
+	 */
+	public static function limit_lines( $value ): string {
+		$lines = array();
+
+		foreach ( self::path_lines( $value ) as $path ) {
+			if ( is_string( $path ) ) {
+				$lines[] = $path;
+
+				continue;
+			}
+
+			$key = array_values( array_map( 'strval', (array) ( $path['key'] ?? array() ) ) );
+
+			$lines[] = trim(
+				sprintf(
+					'%s %d %d %s',
+					(string) ( $path['pattern'] ?? '' ),
+					(int) ( $path['limit'] ?? 0 ),
+					(int) ( $path['window'] ?? 0 ),
+					implode( ',', $key )
+				)
+			);
+		}
+
+		return implode( "\n", $lines );
 	}
 
 	/**
