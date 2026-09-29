@@ -555,7 +555,7 @@ record the client even though something below ends the request. And **redirect
 beats block** because the terminal responses run gentlest first: a redirect
 leaves the visitor somewhere to go.
 
-The last four arrived in `kanopi/firewall` 2.26.0, which the plugin's ^2.33.1
+The last four arrived in `kanopi/firewall` 2.26.0, which the plugin's ^2.33.2
 requirement covers. On an older library — possible when a site's own Composer
 autoloader wins the race — they are not offered, and a rule carrying one is
 skipped at compile time with a warning rather than compiled into something the
@@ -1041,7 +1041,7 @@ site cannot: a **TLS fingerprint** — `ja3`, `ja4` — which identifies the cli
 stack rather than what it claims to be, so a script wearing a browser's user
 agent still negotiates TLS like a script; and a **bot score**, the edge's own
 verdict from signals that never reach the origin. Arrived in
-`kanopi/firewall` 2.27.0, which the plugin's ^2.33.1 requirement covers.
+`kanopi/firewall` 2.27.0, which the plugin's ^2.33.2 requirement covers.
 
 Choose the CDN — Cloudflare, Fastly, or *something else* with the header names
 typed as `signal: Header-Name`. Akamai and CloudFront are not named on purpose:
@@ -1148,7 +1148,16 @@ what a line without one counts:
 ```
 
 `log` is the username field on WordPress's own login form. Arrived in
-`kanopi/firewall` 2.27.0, which the plugin's ^2.33.1 requirement covers.
+`kanopi/firewall` 2.27.0, which the plugin's ^2.33.2 requirement covers.
+
+The prefix (`post`, `POST`) and a header name are read in any case: headers are
+case-insensitive, so `header.User-Agent` and `header.user-agent` are the same
+count. A form field, cookie or query name is **case-sensitive** and is read
+exactly as written — `post.userName` counts the field `userName`, not
+`username` — because that is how the form, the browser and PHP all name it.
+That needs `kanopi/firewall` 2.33.2; before it the library lower-cased every
+component, and the screen refused a capitalised name rather than store one that
+could never be found.
 
 **Read this before reaching for it:** the two key shapes catch opposite attacks,
 and swapping one for the other removes protection while looking like it adds
@@ -1200,12 +1209,12 @@ trade — choose it when credential stuffing is the bigger worry. Setting
 ban, and hands the ban to whichever address trips the limit next — usually the
 account's owner. The screen warns when you do.
 
-Two keys are refused outright, because they would put every request in one
-bucket and let one visitor spend the allowance for the whole site: a component
-the library cannot resolve (`pots.log`, a bare `post`), and a form field, cookie
-or query parameter named with capitals. The library lower-cases every component
-before looking it up, which is harmless for a header and means `post.userName`
-looks for `username` and finds nothing.
+A component the library cannot resolve (`pots.log`, a bare `post`) is refused
+outright, because it would put every request in one bucket and let one visitor
+spend the allowance for the whole site. A name spelled in the wrong case is not
+something the screen can catch — `post.username` on a form that posts `userName`
+is a field that is never there, with the same result — so copy the field name
+from the form exactly.
 
 #### Where the counts are kept
 
