@@ -339,6 +339,8 @@ final class Commands {
 			WP_CLI::warning( sprintf( 'A panic file is forcing "%s". Remove %s to return to "%s".', $panic['effective'], (string) $panic['path'], $panic['configured'] ) );
 		}
 
+		$this->warn_about_early_path();
+
 		if ( 'log' === $mode ) {
 			WP_CLI::log( '' );
 			WP_CLI::log( 'Mode is "log": rules are evaluated and matches recorded, but nothing is blocked.' );
@@ -398,6 +400,36 @@ final class Commands {
 		return $mu
 			? 'mu-plugin, before plugins and the theme'
 			: 'plugins_loaded — LATE. The mu-plugin loader is missing; reactivate the plugin';
+	}
+
+	/**
+	 * Say why the wp-config.php snippet is not evaluating, and how to fix it.
+	 *
+	 * The Evaluation point row carries the reason code, which is enough for
+	 * somebody who knows the codes. A deploy that moved Composer's vendor-dir
+	 * is fixed in wp-config.php, not here, so for a missing or unreadable
+	 * autoloader the snippet is printed as well -- with the autoloader line
+	 * when this site's install needs one. `wp` loads wp-config.php like any
+	 * request, so the report read here is the bootstrap's own.
+	 */
+	private function warn_about_early_path(): void {
+		$early = Site_Health::early_report();
+
+		if ( ! $early['called'] || $early['evaluated'] || is_multisite() ) {
+			return;
+		}
+
+		if ( in_array( $early['reason'], array( 'disabled', 'switched-off', 'deferred-login' ), true ) ) {
+			return;
+		}
+
+		WP_CLI::warning( Site_Health::early_reason_text( $early['reason'] ) );
+
+		if ( in_array( $early['reason'], array( 'no-autoloader', 'autoloader-unreadable' ), true ) ) {
+			WP_CLI::log( '' );
+			WP_CLI::log( 'The wp-config.php snippet for this site:' );
+			WP_CLI::log( Site_Health::bootstrap_snippet() );
+		}
 	}
 
 	/**
