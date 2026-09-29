@@ -95,6 +95,31 @@ final class LifecycleTest extends TestCase {
 	}
 
 	/**
+	 * Deactivating removes the runtime on a single site, and keeps settings.
+	 *
+	 * On a network the loader is left while another site still runs the
+	 * plugin; on a single site there is no other site, so it goes. The
+	 * harness puts the loader and the compiled file back.
+	 */
+	public function test_deactivation_removes_the_runtime_on_a_single_site(): void {
+		if ( is_multisite() ) {
+			$this->markTestSkipped( 'A single-site assertion.' );
+		}
+
+		if ( ! file_exists( WPMU_PLUGIN_DIR . '/basic-firewall-loader.php' ) ) {
+			$this->markTestSkipped( 'The loader is not installed on this site, so there is nothing to remove.' );
+		}
+
+		$settings = get_option( Schema::OPTION );
+
+		Activator::deactivate();
+
+		$this->assertFileDoesNotExist( WPMU_PLUGIN_DIR . '/basic-firewall-loader.php', 'Deactivating on a single site left the loader evaluating requests.' );
+		$this->assertFileDoesNotExist( Plugin::instance()->paths()->compiled_file() );
+		$this->assertSame( $settings, get_option( Schema::OPTION ), 'Deactivating touched the settings.' );
+	}
+
+	/**
 	 * The wp-config.php snippet gets a check of its own.
 	 *
 	 * Separate from the evaluation point on purpose: that test folds the

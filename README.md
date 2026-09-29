@@ -1918,7 +1918,8 @@ The one shared piece is the mu-plugin loader, because mu-plugins is shared. Ever
 site of a network runs the same copy of the plugin and so wants the same loader:
 whichever site refreshes it first leaves the others finding it current, and a
 refresh that cannot write the directory is recorded as a network option rather
-than against the site that noticed.
+than against the site that noticed. Deactivating on one site leaves it in place
+while any other site still runs the plugin.
 
 There is no network-wide settings screen. Configuring 200 sites means
 `wp site list --field=url` and a loop.
@@ -1938,7 +1939,10 @@ every request belongs at the CDN or the web server.
 ## Uninstalling
 
 Deactivating is reversible: it removes the mu-plugin loader and the compiled
-file and keeps everything else. **Delete** is not. It removes, on every site of
+file and keeps everything else. On a network the loader is shared, so
+deactivating on one site leaves it for the sites still running the plugin — it
+checks per site whether the plugin is active there — and it goes when the last
+site deactivates, or on network deactivation. **Delete** is not. It removes, on every site of
 a network:
 
 - every `basic_firewall_*` option and transient, the scheduled events, and the
