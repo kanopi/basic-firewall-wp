@@ -4,7 +4,7 @@ Tags: security, firewall, rate limiting, bot protection, waf
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 1.0.0
+Stable tag: 1.0.0-rc.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -134,7 +134,7 @@ proxy too.
 
 == Changelog ==
 
-= 1.0.0 =
+= 1.0.0-rc.1 =
 * First release. The WordPress port of the Drupal basic_firewall module, built on kanopi/firewall ^2.33.1; the zip bundles 2.33.1, scoped.
 * Nine rule types, six responses (allow, mark, record, challenge, redirect, block), observe-only rules and activity windows.
 * Two evaluation paths: an mu-plugin installed on activation, and an optional wp-config.php bootstrap that runs before a page cache.
