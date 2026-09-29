@@ -836,7 +836,7 @@ band, by a WP-Cron job on the interval set on the General screen, or by hand:
 ```bash
 wp basic-firewall refresh-sources            # refresh anything stale
 wp basic-firewall refresh-sources --force    # revalidate everything
-wp basic-firewall refresh-sources --dry-run  # show what is referenced
+wp basic-firewall refresh-sources --dry-run  # what is referenced, and what the cache holds
 ```
 
 On a host where WP-Cron is disabled, set the interval to **Never** and call the
@@ -852,7 +852,11 @@ that takes a list. A credential typed into the URL itself
 `password`, `secret`, `signature` and the like) is replaced with `***` and the
 URL kept; a key in a parameter with any other name is not recognised, which is
 one more reason to use `upstream.auth`. Prefer an `%env()%` token over the
-literal value. Two things are refused outright when you
+literal value. On the rule screen the Advanced box shows a stored credential
+and every header value as `[redacted]`: leave it to keep what is stored, or
+type over it. The stored value is kept only while the list's URL is unchanged,
+so changing the URL asks for the credential again. A credential in the URL is
+shown as `***` there too, and kept by a save that leaves the URL as shown. Two things are refused outright when you
 type them: an absolute path, and any scheme other than `http`/`https` — a source
 is read at the web server's privilege, and this setting travels in an imported
 configuration document. A relative filename resolves inside the private
@@ -1071,7 +1075,10 @@ A **Geolocation** rule reads from one of two places, chosen on the rule under
   redistributed, so the plugin never ships one. Give the path to the `.mmdb`
   file: relative resolves inside the private directory, absolute is used as
   given. A path to a file that is not there yet saves with a warning, because the
-  download job may not have run; until it does, the rule matches nothing.
+  download job may not have run; until it does, the rule matches nothing. The
+  MaxMind license key, kept for whatever downloads the database, is typed and
+  never shown, like the AbuseIPDB rule's API key: the field is always empty,
+  blank keeps what is stored, and *Remove the stored value* clears it.
   **The database has to be the right kind.** Geolocation looks every field up —
   country included — in a City database (GeoLite2-City or GeoIP2-City); ASN needs
   GeoLite2-ASN. The reader refuses any other kind on every lookup, so a Country
@@ -1966,7 +1973,7 @@ would turn any environment-variable injection into remote code execution.
 
 ```bash
 wp basic-firewall status            # what the firewall is doing right now
-wp basic-firewall rules             # rules in evaluation order
+wp basic-firewall rules             # rules in evaluation order: response, then weight
 wp basic-firewall rebuild           # recompile the configuration
 wp basic-firewall sources           # available presets
 wp basic-firewall refresh-sources   # re-fetch the lists rules reference

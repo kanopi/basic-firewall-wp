@@ -12,10 +12,12 @@ namespace Kanopi\BasicFirewall\Cli;
 use Kanopi\BasicFirewall\Cache\Cache_Backend;
 use Kanopi\BasicFirewall\Cache\Cache_Clearer;
 use Kanopi\BasicFirewall\Cache\Cache_Warmer;
+use Kanopi\BasicFirewall\Compiler\Evaluation_Order;
 use Kanopi\BasicFirewall\Health\Site_Health;
 use Kanopi\BasicFirewall\Library_Capabilities;
 use Kanopi\BasicFirewall\Library_Loader;
 use Kanopi\BasicFirewall\Plugin;
+use Kanopi\BasicFirewall\RuleType\Rule_Type;
 use Kanopi\BasicFirewall\Runtime\Trusted_Proxies;
 use Kanopi\BasicFirewall\Sources\Refresher;
 use Kanopi\BasicFirewall\Transfer\Exporter;
@@ -26,8 +28,8 @@ use WP_CLI\Utils;
 /**
  * Manage the Basic Firewall.
  *
- * The same twelve verbs as the Drush commands, so a runbook written for one
- * site works on the other.
+ * Named after the Drupal module's Drush commands, so a runbook written for
+ * one site reads the same on the other.
  */
 final class Commands {
 
@@ -98,13 +100,28 @@ final class Commands {
 	 * : Revalidate every list, even one the cache still considers fresh.
 	 *
 	 * [--dry-run]
-	 * : List what is referenced and what the cache holds. Fetches nothing.
+	 * : List each referenced list -- its upstream with any credential masked,
+	 * its effective TTL and error policy -- and what the cache holds for it:
+	 * whether it is cached, how many entries, when it was fetched, and whether
+	 * that copy is fresh or stale. Fetches nothing and writes nothing.
+	 *
+	 * [--format=<format>]
+	 * : With --dry-run, render the listing in a particular format.
+	 * ---
+	 * default: table
+	 * options:
+	 *   - table
+	 *   - json
+	 *   - yaml
+	 *   - csv
+	 * ---
 	 *
 	 * ## EXAMPLES
 	 *
 	 *     wp basic-firewall refresh-sources
 	 *     wp basic-firewall refresh-sources --force
 	 *     wp basic-firewall refresh-sources --dry-run
+	 *     wp basic-firewall refresh-sources --dry-run --format=json
 	 *
 	 * @subcommand refresh-sources
 	 *
@@ -121,20 +138,17 @@ final class Commands {
 		}
 
 		if ( isset( $assoc_args['dry-run'] ) ) {
-			$rows = array();
+			$rows = Refresher::preview();
 
-			foreach ( $declarations as $declaration ) {
-				$rows[] = array(
-					'name'     => (string) ( $declaration['name'] ?? 'unnamed' ),
-					'upstream' => is_array( $declaration['upstream'] ?? null )
-						? (string) ( $declaration['upstream']['url'] ?? '' )
-						: (string) ( $declaration['upstream'] ?? '' ),
-					'ttl'      => (string) ( $declaration['ttl'] ?? '' ),
-					'on_error' => (string) ( $declaration['onError'] ?? 'last_known_good' ),
-				);
+			if ( array() === $rows ) {
+				WP_CLI::error( 'The firewall library is not available, so the referenced lists cannot be read.' );
 			}
 
-			Utils\format_items( 'table', $rows, array( 'name', 'upstream', 'ttl', 'on_error' ) );
+			Utils\format_items(
+				(string) ( $assoc_args['format'] ?? 'table' ),
+				$rows,
+				array( 'name', 'upstream', 'ttl', 'on_error', 'cached', 'entries', 'fetched', 'state' )
+			);
 
 			return;
 		}
@@ -405,7 +419,18 @@ final class Commands {
 	}
 
 	/**
-	 * List the rules in evaluation order.
+	 * List the rules in the order the firewall evaluates them.
+	 *
+	 * By response first and weight within it, as the library partitions them:
+	 * allow, then mark, record, challenge, redirect and block. So a block rule
+	 * at weight -100 is listed after an allow rule at 50, because that is when
+	 * it runs. `order` is the position; `stage` is the partition. Mark and
+	 * record do not end evaluation, the others do.
+	 *
+	 * Before any rule, lockdown and the durable block list are consulted, and
+	 * a preset's rules are merged in by the library alongside these; neither
+	 * is listed. Disabled rules are listed last with no position, because the
+	 * library never sees them.
 	 *
 	 * ## OPTIONS
 	 *
@@ -419,6 +444,11 @@ final class Commands {
 	 *   - yaml
 	 *   - csv
 	 * ---
+	 *
+	 * ## EXAMPLES
+	 *
+	 *     wp basic-firewall rules
+	 *     wp basic-firewall rules --format=json
 	 *
 	 * @param array<int, string>    $args       Positional arguments.
 	 * @param array<string, string> $assoc_args Flags.
@@ -433,37 +463,65 @@ final class Commands {
 			return;
 		}
 
-		usort(
-			$rules,
-			static fn ( array $a, array $b ): int => ( (int) ( $a['weight'] ?? 0 ) ) <=> ( (int) ( $b['weight'] ?? 0 ) )
-		);
+		/*
+		 * The order is the library's to decide, so without the library there
+		 * is none to show -- and nothing is being evaluated anyway. Said, and
+		 * exited non-zero, rather than falling back to a weight sort that
+		 * would be claimed as an order it is not.
+		 */
+		if ( ! Evaluation_Order::is_available() ) {
+			WP_CLI::error( 'The firewall library is not available, so no rule is being evaluated and there is no evaluation order to show.' );
+		}
 
 		$rows = array();
 
-		foreach ( $rules as $rule ) {
+		foreach ( Evaluation_Order::of( $rules ) as $placed ) {
+			$rule = $placed['rule'];
 			$type = $registry->get( (string) ( $rule['type'] ?? '' ) );
 
 			$rows[] = array(
+				'order'    => null === $placed['position'] ? '-' : (string) $placed['position'],
+				'stage'    => '' === $placed['stage'] ? 'not evaluated' : $placed['stage'],
 				'id'       => (string) ( $rule['id'] ?? '' ),
 				'type'     => (string) ( $rule['type'] ?? '' ),
 				'response' => (string) ( $rule['response'] ?? '' ),
 				'weight'   => (int) ( $rule['weight'] ?? 0 ),
 				'enabled'  => empty( $rule['enabled'] ) ? 'no' : 'yes',
-				'status'   => null === $type
-					? 'UNKNOWN TYPE'
-					: ( $type->is_available() ? 'ok' : 'UNAVAILABLE' ),
+				'status'   => $this->rule_status( $type, $rule ),
 			);
 		}
 
 		Utils\format_items(
 			(string) ( $assoc_args['format'] ?? 'table' ),
 			$rows,
-			array( 'id', 'type', 'response', 'weight', 'enabled', 'status' )
+			array( 'order', 'stage', 'id', 'type', 'response', 'weight', 'enabled', 'status' )
 		);
 	}
 
 	/**
+	 * Whether a listed rule is running as configured.
+	 *
+	 * @param Rule_Type|null       $type The rule's type, or null when unknown.
+	 * @param array<string, mixed> $rule The stored rule.
+	 */
+	private function rule_status( ?Rule_Type $type, array $rule ): string {
+		if ( null === $type ) {
+			return 'UNKNOWN TYPE';
+		}
+
+		if ( ! $type->is_available() ) {
+			return 'UNAVAILABLE';
+		}
+
+		// Evaluated in its place, and every match treated as no match.
+		return ! empty( $rule['observe'] ) ? 'ok (observe only)' : 'ok';
+	}
+
+	/**
 	 * List every blocked client.
+	 *
+	 * Exits non-zero when the storage backend cannot list what it holds,
+	 * rather than printing an empty table that reads as "nobody is blocked".
 	 *
 	 * ## OPTIONS
 	 *
@@ -477,6 +535,11 @@ final class Commands {
 	 *   - yaml
 	 *   - csv
 	 * ---
+	 *
+	 * ## EXAMPLES
+	 *
+	 *     wp basic-firewall blocked
+	 *     wp basic-firewall blocked --format=csv
 	 *
 	 * @param array<int, string>    $args       Positional arguments.
 	 * @param array<string, string> $assoc_args Flags.
@@ -578,12 +641,24 @@ final class Commands {
 	}
 
 	/**
-	 * Find which rule would match a request.
+	 * Find the blocked client a block reference belongs to.
+	 *
+	 * A refused visitor is shown a reference, and the log line for that block
+	 * carries the same one. This looks it up in the block list and prints the
+	 * address, the rule that blocked it and when.
+	 *
+	 * It is a lookup, not a replay: nothing is evaluated. It finds only a block
+	 * that was recorded to the block list and has not yet expired or been
+	 * released -- a rule set not to record, a challenge, or a block made before
+	 * the current storage backend leaves nothing to find.
+	 *
+	 * Exits non-zero when the reference is not found, and when the storage
+	 * backend cannot list what it holds.
 	 *
 	 * ## OPTIONS
 	 *
 	 * <reference>
-	 * : A block reference from a log line or a blocked response.
+	 * : The reference from a blocked response or its log line.
 	 *
 	 * ## EXAMPLES
 	 *
@@ -603,20 +678,27 @@ final class Commands {
 
 		$listing = Plugin::instance()->blocked()->all();
 
-		if ( $listing['supported'] ) {
-			foreach ( $listing['clients'] as $client ) {
-				if ( strtoupper( (string) ( $client['record']['event_id'] ?? '' ) ) === $reference ) {
-					WP_CLI::success(
-						sprintf(
-							'%s — blocked by rule "%s" at %s.',
-							(string) $client['ip'],
-							(string) ( $client['record']['plugin'] ?? 'unknown' ),
-							(string) ( $client['record']['timestamp'] ?? 'unknown' )
-						)
-					);
+		/*
+		 * Said rather than folded into "not found". A backend that cannot list
+		 * was searched for nothing, and "not found" would send somebody off to
+		 * look for an expiry that never happened.
+		 */
+		if ( ! $listing['supported'] ) {
+			WP_CLI::error( 'The configured storage backend cannot list what it holds, so a reference cannot be looked up. Use `wp basic-firewall check <ip>` if you know the address.' );
+		}
 
-					return;
-				}
+		foreach ( $listing['clients'] as $client ) {
+			if ( strtoupper( (string) ( $client['record']['event_id'] ?? '' ) ) === $reference ) {
+				WP_CLI::success(
+					sprintf(
+						'%s — blocked by rule "%s" at %s.',
+						(string) $client['ip'],
+						(string) ( $client['record']['plugin'] ?? 'unknown' ),
+						(string) ( $client['record']['timestamp'] ?? 'unknown' )
+					)
+				);
+
+				return;
 			}
 		}
 
@@ -688,6 +770,10 @@ final class Commands {
 	 *
 	 * <ip>
 	 * : The client address.
+	 *
+	 * ## EXAMPLES
+	 *
+	 *     wp basic-firewall unblock 203.0.113.10
 	 *
 	 * @param array<int, string>    $args       Positional arguments.
 	 * @param array<string, string> $assoc_args Flags.
@@ -809,7 +895,10 @@ final class Commands {
 	}
 
 	/**
-	 * List the available presets.
+	 * List the available presets, and which are enabled.
+	 *
+	 * Presets, despite the name: the lists a rule references are
+	 * `refresh-sources`.
 	 *
 	 * ## OPTIONS
 	 *
@@ -823,6 +912,10 @@ final class Commands {
 	 *   - yaml
 	 *   - csv
 	 * ---
+	 *
+	 * ## EXAMPLES
+	 *
+	 *     wp basic-firewall sources
 	 *
 	 * @param array<int, string>    $args       Positional arguments.
 	 * @param array<string, string> $assoc_args Flags.

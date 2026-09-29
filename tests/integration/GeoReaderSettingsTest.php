@@ -71,7 +71,11 @@ final class GeoReaderSettingsTest extends Settings_Snapshot {
 	}
 
 	/**
-	 * A database reader is on the edit screen, with what is stored.
+	 * A database reader is on the edit screen, with what is stored -- except the license key.
+	 *
+	 * The key is a credential, so its field is rendered empty with a box to
+	 * remove the stored one, and the key itself is nowhere in the page. It
+	 * used to be pre-filled.
 	 */
 	public function test_the_edit_screen_renders_the_reader(): void {
 		$this->given_rule( $this->rule( 'geolocation', $this->database_reader() ) );
@@ -80,7 +84,9 @@ final class GeoReaderSettingsTest extends Settings_Snapshot {
 
 		$this->assertSame( 'database', $fields['settings[reader][source]'] ?? null );
 		$this->assertSame( 'geoip/GeoLite2-City.mmdb', $fields['settings[reader][database]'] ?? null );
-		$this->assertSame( 'LICENSE-KEY', $fields['settings[reader][license_key]'] ?? null );
+		$this->assertSame( '', $fields['settings[reader][license_key]'] ?? null, 'The license key field was filled in.' );
+		$this->assertStringNotContainsString( 'LICENSE-KEY', $this->rendered_html, 'The license key is in the page.' );
+		$this->assertStringContainsString( 'name="clear_secret[reader][license_key]"', $this->rendered_html );
 	}
 
 	/**

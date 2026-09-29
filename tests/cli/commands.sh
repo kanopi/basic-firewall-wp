@@ -123,9 +123,20 @@ printf 'wp-cli: reporting commands\n'
 
 expect ok 'status reports the library version' 'Library' status
 expect ok 'status renders as json' '"Enabled"' status --format=json
-expect ok 'rules lists in evaluation order' '' rules
+# The listing claims evaluation order, so it has to carry the library's
+# partitioning -- position and stage -- rather than a weight sort. A site with
+# no rules says so instead, which is also a pass.
+rules_listing=$($WP basic-firewall rules --format=csv </dev/null 2>&1)
+if printf '%s' "$rules_listing" | grep -qF 'No rules are configured' \
+	|| printf '%s' "$rules_listing" | head -1 | grep -qF 'order,stage,id,type,response,weight,enabled,status'; then
+	report pass 'rules lists by position and stage'
+else
+	report fail 'rules lists by position and stage' "$(printf '%s' "$rules_listing" | head -1)"
+fi
+expect ok 'rules renders as json' '' rules --format=json
 expect ok 'sources lists the presets' '' sources
 expect ok 'blocked lists the block list' '' blocked
+expect ok 'blocked renders as csv' '' blocked --format=csv
 expect ok 'rebuild recompiles' 'Compiled to' rebuild
 
 printf '\nwp-cli: the block list\n'
@@ -135,6 +146,18 @@ expect ok 'block takes a duration and a reason' 'is blocked' \
 	block "$ADDRESS" --duration=600 --reason='CLI coverage'
 expect ok 'check sees the block it just made' 'true' check "$ADDRESS"
 expect ok 'check reports the reason back' 'CLI coverage' check "$ADDRESS"
+
+# find-reference looks a reference up in the block list, so the block just made
+# is the one reference this script can be sure exists. Read from `check`, which
+# prints it, rather than from storage the script cannot see under ddev.
+reference=$($WP basic-firewall check "$ADDRESS" --format=json </dev/null 2>/dev/null \
+	| sed -n 's/.*"reference":"\([^"]*\)".*/\1/p')
+if [ -n "$reference" ]; then
+	expect ok 'find-reference names the address a reference belongs to' "$ADDRESS" find-reference "$reference"
+	expect ok 'find-reference names the rule that blocked it' 'Manual' find-reference "$(printf '%s' "$reference" | tr '[:upper:]' '[:lower:]')"
+else
+	report fail 'find-reference names the address a reference belongs to' 'check printed no reference to look up'
+fi
 expect ok 'blocked lists the blocked address' "$ADDRESS" blocked
 expect ok 'unblock releases it' 'unblocked' unblock "$ADDRESS"
 expect ok 'check sees it released' 'false' check "$ADDRESS"
@@ -148,7 +171,28 @@ printf '\nwp-cli: references and lists\n'
 
 expect fail 'find-reference refuses a reference that does not exist' 'was not found' \
 	find-reference BFW-NO-SUCH-REFERENCE
-expect ok 'refresh-sources previews without fetching' '' refresh-sources --dry-run
+# The preview reports the cache, not only the declarations. It read a key
+# nothing writes for the error policy and printed no cache state at all, so the
+# columns are asserted on rather than only the exit status. A site with no
+# referenced list prints a success line instead, which is also a pass.
+refresh_preview=$($WP basic-firewall refresh-sources --dry-run --format=csv </dev/null 2>&1)
+if printf '%s' "$refresh_preview" | grep -qF 'nothing to refresh' \
+	|| printf '%s' "$refresh_preview" | head -1 | grep -qF 'name,upstream,ttl,on_error,cached,entries,fetched,state'; then
+	report pass 'refresh-sources --dry-run reports the cache for each list'
+else
+	report fail 'refresh-sources --dry-run reports the cache for each list' "$(printf '%s' "$refresh_preview" | head -1)"
+fi
+expect ok 'refresh-sources --dry-run renders as json' '' refresh-sources --dry-run --format=json
+
+printf '\nwp-cli: caches\n'
+
+# Neither needs --yes -- losing a cache costs a rebuild and nothing else -- so
+# both must run to completion with stdin closed and exit 0. Each has two honest
+# outcomes (something cleared or nothing to clear; rules to warm or none), and
+# both are success lines.
+expect ok 'clear-cache runs without confirmation' 'Success:' clear-cache
+expect ok 'warm-cache builds the agent corpus, or says there is none to build' 'agent corpus' warm-cache
+expect ok 'warm-cache is safe to run twice' 'agent corpus' warm-cache
 
 printf '\nwp-cli: export and import\n'
 

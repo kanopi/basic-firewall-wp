@@ -90,6 +90,8 @@ trait Geo_Reader_Settings {
 			),
 			'license_key' => array(
 				'label'       => __( 'MaxMind license key', 'basic-firewall' ),
+				// Typed, never shown: see Rule_Edit_Screen::render_secret_row().
+				'secret'      => true,
 				'description' => __( 'Kept with the rule for whatever downloads the database. The firewall itself reads only the file.', 'basic-firewall' ),
 				'show_when'   => $source . ':database',
 			),

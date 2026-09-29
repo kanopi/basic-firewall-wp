@@ -488,13 +488,77 @@ final class Site_Health {
 
 		return self::ok(
 			__( 'The firewall has a compiled configuration', 'basic-firewall' ),
-			sprintf(
-				/* translators: 1: rule count, 2: preset count. */
-				esc_html__( '%1$d rule(s) and %2$d preset(s) are compiled and being enforced.', 'basic-firewall' ),
-				count( (array) $plugin->settings()->get( 'rules', array() ) ),
+			self::compiled_summary(
+				(array) $plugin->settings()->get( 'rules', array() ),
 				count( (array) $plugin->settings()->get( 'presets', array() ) )
 			)
 		);
+	}
+
+	/**
+	 * What a clean compile holds, counted the way the compiler counts it.
+	 *
+	 * Every stored rule used to be counted as "compiled and being enforced".
+	 * The compiler skips a disabled rule before anything else, so a site with
+	 * one rule switched on and nine switched off was told ten were enforcing
+	 * -- the reassuring direction to be wrong in, which is the one that goes
+	 * unnoticed. An observe-only rule is compiled and evaluated but enforces
+	 * nothing, so it is named as well. Only reached when the compile reported
+	 * no problems, so every enabled rule is in the file.
+	 *
+	 * "Evaluated" rather than "enforced" for the rest too: in log mode nothing
+	 * is enforced, and the operating mode has a test of its own.
+	 *
+	 * @param array<int|string, mixed> $rules   Stored rules.
+	 * @param int                      $presets Enabled presets.
+	 */
+	private static function compiled_summary( array $rules, int $presets ): string {
+		$enabled   = 0;
+		$observing = 0;
+		$disabled  = 0;
+
+		foreach ( $rules as $rule ) {
+			if ( ! is_array( $rule ) ) {
+				continue;
+			}
+
+			if ( empty( $rule['enabled'] ) ) {
+				++$disabled;
+
+				continue;
+			}
+
+			++$enabled;
+
+			if ( ! empty( $rule['observe'] ) ) {
+				++$observing;
+			}
+		}
+
+		$summary = sprintf(
+			/* translators: 1: enabled rule count, 2: preset count. */
+			__( '%1$d enabled rule(s) and %2$d preset(s) are compiled and being evaluated.', 'basic-firewall' ),
+			$enabled,
+			$presets
+		);
+
+		if ( $observing > 0 ) {
+			$summary .= ' ' . sprintf(
+				/* translators: %d: observe-only rule count. */
+				__( '%d of those rules observe only: their matches are logged and nothing is enforced.', 'basic-firewall' ),
+				$observing
+			);
+		}
+
+		if ( $disabled > 0 ) {
+			$summary .= ' ' . sprintf(
+				/* translators: %d: disabled rule count. */
+				__( '%d disabled rule(s) are not compiled and are not evaluated.', 'basic-firewall' ),
+				$disabled
+			);
+		}
+
+		return esc_html( $summary );
 	}
 
 	/**
