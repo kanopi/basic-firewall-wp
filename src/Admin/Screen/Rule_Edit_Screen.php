@@ -1127,7 +1127,10 @@ final class Rule_Edit_Screen extends Screen {
 				. ' ' . self::select( $name( 'operator' ), Condition_Rule_Type_Base::OPERATORS, (string) $source['operator'] )
 				. ' ' . self::checkbox( $name( 'negate' ), ! empty( $source['negate'] ), __( 'Invert', 'basic-firewall' ) ),
 				wp_kses_post(
-					__( 'Each line of the list becomes one condition. A list of crawler names matched with <strong>user agent header</strong> and <strong>contains</strong> is the usual arrangement — and the reason a list is worth referencing at all, since the names change weekly and the rule does not.', 'basic-firewall' )
+					trim(
+						__( 'Each line of the list becomes one condition. A list of crawler names matched with <strong>user agent header</strong> and <strong>contains</strong> is the usual arrangement — and the reason a list is worth referencing at all, since the names change weekly and the rule does not.', 'basic-firewall' )
+						. ' ' . esc_html( $type->source_note() )
+					)
 				)
 			);
 		}
@@ -1324,7 +1327,7 @@ final class Rule_Edit_Screen extends Screen {
 			printf(
 				'<p class="description" data-bfw-show-when="%s">%s</p>',
 				esc_attr( $name . '[operator]:regex' ),
-				esc_html__( 'The pattern only — no delimiters. Those and the case flag are added for you, so ^/wp-admin is written exactly like that.', 'basic-firewall' )
+				esc_html__( 'The pattern only — no delimiters. Those and the case flag are added for you, so ^/wp-admin is written exactly like that. Slashes are part of the pattern: /wp-admin/ matches the wp-admin directory.', 'basic-firewall' )
 			);
 
 			echo '</td><td>';
@@ -1609,7 +1612,6 @@ final class Rule_Edit_Screen extends Screen {
 			'header' => __( 'A request header — name it alongside', 'basic-firewall' ),
 			'cookie' => __( 'A cookie — name it alongside', 'basic-firewall' ),
 			'post'   => __( 'A posted field — name it alongside', 'basic-firewall' ),
-			'server' => __( 'A server variable — name it alongside', 'basic-firewall' ),
 		);
 
 		$families = array();

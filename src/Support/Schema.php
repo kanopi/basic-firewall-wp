@@ -53,7 +53,14 @@ final class Schema {
 	/**
 	 * Current schema version. Bumped whenever an upgrade routine is added.
 	 */
-	public const VERSION = 8;
+	public const VERSION = 9;
+
+	/**
+	 * Doctrine driver names a connection given as parameters may use.
+	 *
+	 * @var list<string>
+	 */
+	public const CONNECTION_DRIVERS = array( 'pdo_mysql', 'mysqli', 'pdo_pgsql', 'pgsql', 'sqlsrv', 'oci8', 'sqlite3' );
 
 	/**
 	 * The full settings tree.
@@ -591,7 +598,7 @@ final class Schema {
 					 * mistake everyone makes and it fails when the connection is
 					 * opened rather than when the form is saved.
 					 */
-					'choices' => array( 'pdo_mysql', 'mysqli', 'pdo_pgsql', 'pgsql', 'sqlsrv', 'oci8', 'sqlite3' ),
+					'choices' => self::CONNECTION_DRIVERS,
 				),
 				'host'     => array(
 					'type'    => 'string',

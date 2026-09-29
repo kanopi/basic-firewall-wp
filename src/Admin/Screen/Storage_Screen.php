@@ -99,16 +99,31 @@ final class Storage_Screen extends Screen {
 		$this->take_redis( $all );
 		$this->take_cache( $all );
 
-		$dsn = $this->posted( 'dsn' );
+		$database = is_array( $all['storage']['database'] ?? null ) ? $all['storage']['database'] : array();
 
 		/*
 		 * An empty DSN field means "not carried", never "clear the stored one" --
-		 * the same rule the importer follows, for the same reason. Somebody who
-		 * genuinely wants to clear it changes the connection source.
+		 * the same rule the importer follows, for the same reason. The box
+		 * beside it is how somebody clears it.
 		 */
-		if ( '' !== $dsn ) {
-			$all['storage']['database']['dsn'] = $dsn;
-		}
+		$all['storage']['database']['dsn'] = self::kept_secret(
+			$this->posted( 'dsn' ),
+			'' !== $this->posted( 'dsn_clear' ),
+			(string) ( $database['dsn'] ?? '' ),
+			true
+		);
+
+		/*
+		 * Individual parameters, which the connection select offered no way to
+		 * choose: a document imported with `parameters` rendered with the
+		 * select on its first option, and the next save of this screen --
+		 * of anything on it -- moved the block list to the WordPress
+		 * database. They are rendered now, and read back here.
+		 */
+		$all['storage']['database']['parameters'] = self::posted_connection_parameters(
+			$this->posted_array( 'parameters' ),
+			is_array( $database['parameters'] ?? null ) ? $database['parameters'] : array()
+		);
 
 		$problems = $settings->replace( $all );
 
@@ -218,9 +233,10 @@ final class Storage_Screen extends Screen {
 			self::select(
 				'connection_source',
 				array(
-					'wordpress' => __( 'Reuse WordPress\'s database credentials', 'basic-firewall' ),
-					'dsn'       => __( 'A connection DSN I supply', 'basic-firewall' ),
-					'preset'    => __( 'Let an enabled preset supply the connection', 'basic-firewall' ),
+					'wordpress'  => __( 'Reuse WordPress\'s database credentials', 'basic-firewall' ),
+					'dsn'        => __( 'A connection DSN I supply', 'basic-firewall' ),
+					'parameters' => __( 'Individual connection parameters', 'basic-firewall' ),
+					'preset'     => __( 'Let an enabled preset supply the connection', 'basic-firewall' ),
 				),
 				(string) $settings->get( 'storage.database.connection_source', 'wordpress' )
 			),
@@ -230,14 +246,23 @@ final class Storage_Screen extends Screen {
 			)
 		);
 
+		$dsn_stored = '' !== (string) $settings->get( 'storage.database.dsn', '' );
+
 		$this->row(
 			__( 'Connection DSN', 'basic-firewall' ),
-			self::text( 'dsn', '', 'text', 'placeholder="mysqli://user:password@host:3306/database"' ),
+			self::text( 'dsn', '', 'password', 'autocomplete="new-password" placeholder="mysqli://user:password@host:3306/database"' )
+			. ( $dsn_stored ? '<br>' . self::checkbox( 'dsn_clear', false, __( 'Remove the stored value', 'basic-firewall' ) ) : '' ),
 			wp_kses_post(
 				/* translators: the %env()% below is a literal token the firewall reads, not a placeholder. */
 				__( 'The scheme must be a <strong>Doctrine driver name</strong>, not a database name: <code>mysqli://</code> works, <code>mysql://</code> is an unknown driver, and <code>pdo_mysql://</code> is not a valid URL scheme. Usable schemes are <code>mysqli</code>, <code>pgsql</code>, <code>sqlsrv</code>, <code>oci8</code> and <code>sqlite3</code>. A DSN embeds the password, so the whole string has to be a <code>%env()%</code> token or none of it can be. Leave blank to keep the stored value.', 'basic-firewall' )
 			),
 			'connection_source:dsn'
+		);
+
+		$this->render_connection_parameters(
+			'parameters',
+			(array) $settings->get( 'storage.database.parameters', array() ),
+			'connection_source:parameters'
 		);
 
 		$storage_table  = (string) $settings->get( 'storage.database.storage_table', '' );

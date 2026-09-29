@@ -139,7 +139,8 @@ final class RegexCaseTest extends TestCase {
 			'a body holding a hash'    => array( 'colour#[0-9a-f]+', false, '~colour#[0-9a-f]+~i' ),
 			'a body holding them all'  => array( 'a#b~c%d!e@f', false, '#a\\#b~c%d!e@f#i' ),
 			'pasted with delimiters'   => array( '#already#i', false, '#already#i' ),
-			'pasted with slashes'      => array( '/slashes/', false, '#slashes#i' ),
+			'slashes with a flag'      => array( '/slashes/i', true, '#slashes#' ),
+			'a path between slashes'   => array( '/wp-admin/', false, '#/wp-admin/#i' ),
 			'a literal leading hash'   => array( '#tag', false, '~#tag~i' ),
 		);
 	}
@@ -162,6 +163,54 @@ final class RegexCaseTest extends TestCase {
 		);
 
 		$this->assertSame( '#^/legacy#i', $entry['config'][0]['value'], 'A stored pattern was double-wrapped.' );
+	}
+
+	/**
+	 * A path between slashes is saved as written, however often it is saved.
+	 *
+	 * `/wp-admin/` was taken for a delimited pattern and stored as `wp-admin`,
+	 * which matches every path containing those letters. Every settings write
+	 * re-validates every rule, so it happened on the first save of anything,
+	 * not only of this rule.
+	 */
+	public function test_a_path_between_slashes_survives_saving(): void {
+		$type     = new Url();
+		$settings = $this->rule( array( 'value' => '/wp-admin/' ) )['settings'];
+
+		for ( $save = 0; $save < 3; $save++ ) {
+			$errors   = array();
+			$settings = $type->validate_settings( $settings, $errors );
+
+			$this->assertSame( array(), $errors );
+			$this->assertSame( '/wp-admin/', $settings['conditions'][0]['value'], 'Saving took the slashes off a path.' );
+		}
+
+		$pattern = $type->compile( array( 'settings' => $settings ) + $this->rule( array() ) )['config'][0]['value'];
+
+		$this->assertSame( 1, preg_match( $pattern, '/wp-admin/options.php' ) );
+		$this->assertSame( 0, preg_match( $pattern, '/wp-admin-guide/' ), 'The pattern was widened to match wp-admin anywhere.' );
+	}
+
+	/**
+	 * A slash-delimited pattern with flags is still unwrapped.
+	 */
+	public function test_slashes_with_flags_are_delimiters(): void {
+		$errors = array();
+		$clean  = ( new Url() )->validate_settings( $this->rule( array( 'value' => '/^\/wp-admin/i' ) )['settings'], $errors );
+
+		$this->assertSame( '^\/wp-admin', $clean['conditions'][0]['value'] );
+	}
+
+	/**
+	 * A value stored before bodies were is read the way it was run then.
+	 *
+	 * Before schema 3 the stored value was the whole pattern, so a slash pair
+	 * was a delimiter with or without flags. The upgrade reads it that way.
+	 */
+	public function test_a_legacy_value_takes_its_slashes_off(): void {
+		$this->assertSame( 'wp-admin', Condition_Rule_Type_Base::legacy_regex_body( '/wp-admin/' ) );
+		$this->assertSame( 'bot', Condition_Rule_Type_Base::legacy_regex_body( '#bot#i' ) );
+		$this->assertSame( '^/admin', Condition_Rule_Type_Base::legacy_regex_body( '^/admin' ) );
 	}
 
 	/**

@@ -34,9 +34,26 @@ does not work as well as what does.
     address. That catches a botnet against one account, misses one client
     walking a list of usernames, and never bans — so the screen and Site Health
     warn when one has no address-keyed limit beside it.
+  - An ASN rule's referenced list of numbers matches with *is equal to*, *is
+    one of* and *is not equal to*, each entry compared as a whole number. An
+    entry has to be digits alone to be used; one written `AS16509` is skipped,
+    and the rule screen says so.
+  - A geolocation or ASN rule checks the type of the MaxMind database it is
+    given — City for geolocation, GeoLite2-ASN for ASN — and a database of the
+    wrong kind, which the reader refuses on every lookup, is reported on the
+    rule, on the Status screen and in Site Health.
   - The edge signal type matches what the CDN worked out that the site cannot:
     a JA3 or JA4 TLS fingerprint, or the bot score, from Cloudflare, Fastly or a
     custom CDN. Believed only behind a trusted proxy.
+  - A regular expression condition is written as the pattern alone; the
+    delimiters and the case flag come from the form. A pattern between slashes,
+    such as `/wp-admin/`, is a path and is kept exactly as written through
+    every save.
+  - A document written straight into the option — WP-CLI, a deploy, a restore
+    — is compiled as each rule type's validator reads it, so settings in the
+    shape a person types them compile as the rule screen would store them. A
+    rule that could only be read by dropping part of it is skipped and named on
+    the Status screen and in Site Health.
   - Every setting of every type, and every site-wide setting, is proved in CI
     against the library that enforces it: the compiled file is loaded, and the
     library's own objects are asked what they ended up with, or a request is
@@ -195,6 +212,11 @@ does not work as well as what does.
   form; blank keeps the stored value and a box removes it. Limits and counter
   storage have their own controls, so saving the form unchanged stores what was
   there.
+- The Storage screen and each database log handler on the Logging screen offer
+  every way a connection can be given — WordPress's credentials, a DSN or
+  individual parameters, and for storage a preset — and render the DSN and
+  password write-only in the same way. Saving either screen unchanged keeps the
+  connection as stored.
 - The Compiled screen shows every credential in the compiled file as
   `[redacted]`; the file itself keeps them for the library.
 - A user agent rule that asks to verify crawlers but is left with no domain to
@@ -223,7 +245,8 @@ this.
     inside the private directory; the old spelling still resolves anywhere the
     upgrade did not reach.
   - A regular expression is stored as its body rather than `#body#i`, and the
-    `i` flag becomes the condition's case-sensitivity box, so no rule narrows.
+    `i` flag becomes the condition's case-sensitivity box, so no rule narrows
+    or changes case — upgrading from the earliest builds included.
   - Geolocation and ASN condition variables take the library's names:
     `country_name`, `timezone`, `latitude`, `longitude` and `organization`
     become `country.name`, `location.timeZone`, `location.latitude`,
@@ -231,10 +254,18 @@ this.
     nothing. A condition on the ASN `network`, which has no library equivalent,
     is kept rather than dropped — dropping it would widen an "all" rule — and
     reported on the rule and the Status screen.
+  - Request / URL conditions on `referer` and `content_type` become
+    `header.referer` and `header.content-type`, which is how the library reads
+    them; before this a negated one matched every request. Conditions on `uri`,
+    `body` and `server.*`, which the library cannot read at all, are kept and
+    reported on the rule, the Status screen and in Site Health.
   - `storage.record_request`, new in library 2.31.0, is filled in.
 - **Translated at compile time rather than rewritten**, so stored rules work
   without being edited: the operators `gt`, `gte`, `lt`, `lte` and
   `not_contains`, which the library does not know and which matched nothing;
+  the renamed condition variables above, for a document that reaches the
+  compiler without the upgrade; a `port` compared with *is equal to*, *is not
+  equal to* or *is one of*, which is compiled as a number;
   and the geolocation and ASN reader settings, which compiled to keys the
   library never read. So did these, each now compiled to the key the library
   reads:

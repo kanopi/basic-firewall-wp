@@ -17,6 +17,8 @@ use Kanopi\BasicFirewall\RuleType\Condition_Rule_Type_Base;
 use Kanopi\BasicFirewall\Support\Schema;
 use Kanopi\Firewall\Plugins\Asn as LibraryAsn;
 use Kanopi\Firewall\Plugins\GeoLocation;
+use Kanopi\Firewall\Source\SourceDefinition;
+use Kanopi\Firewall\Source\SourceLoader;
 use Symfony\Component\HttpFoundation\Request;
 
 /**
@@ -337,6 +339,63 @@ final class GeoVariableTest extends Settings_Snapshot {
 		$compiler->compile();
 
 		$this->assertNotEmpty( preg_grep( '/"net".*network/', $compiler->problems() ) );
+	}
+
+	/**
+	 * A list of autonomous system numbers matches with equals, one of, and not equal to.
+	 *
+	 * A text list's entries are strings, the record holds an integer, and the
+	 * library compares strictly -- so a list of numbers compared with "is equal
+	 * to" matched nothing, and "is not equal to" matched everything. The list
+	 * is run through the library's own source pipeline here, the way a refresh
+	 * does, and the entries it produces are handed to the library's ASN plugin.
+	 *
+	 * @dataProvider asn_lists
+	 *
+	 * @param string $operator The comparison.
+	 * @param string $format   The list's format.
+	 * @param string $body     The list.
+	 * @param bool   $matches  Whether AS16509 matches.
+	 */
+	public function test_an_asn_list_matches_whole_numbers( string $operator, string $format, string $body, bool $matches ): void {
+		$rule                                   = $this->rule( 'net', 'asn', array(), '' );
+		$rule['settings']['sources'][0]         = array_merge(
+			$this->type( 'asn' )::source_defaults(),
+			array(
+				'url'      => 'https://example.test/networks.' . $format,
+				'format'   => $format,
+				'variable' => 'asn',
+				'operator' => $operator,
+			)
+		);
+		$rule['settings']['reader']['database'] = 'unused.mmdb';
+
+		$entry       = $this->type( 'asn' )->compile( $rule );
+		$declaration = $entry['metadata']['sources'][0];
+		$entries     = ( new SourceLoader( null, null, null, null, null, array(), true ) )->pipeline( SourceDefinition::fromArray( $declaration ), $body );
+
+		$entry['config'] = array_merge( (array) ( $entry['config'] ?? array() ), $entries );
+		unset( $entry['metadata']['sources'] );
+
+		$this->assertSame( $matches, (bool) $this->asn_plugin( $entry )->evaluate( $this->request() ) );
+	}
+
+	/**
+	 * Lists, and whether AS16509 is matched by each.
+	 *
+	 * @return array<string, array{0: string, 1: string, 2: string, 3: bool}>
+	 */
+	public static function asn_lists(): array {
+		return array(
+			'listed, equals'             => array( 'equals', 'txt', "13335\n16509\n", true ),
+			'listed, one of'             => array( 'in', 'txt', "16509\n", true ),
+			'not listed'                 => array( 'equals', 'txt', "13335\n1650\n165090\n", false ),
+			'a JSON list of integers'    => array( 'equals', 'json', '[13335, 16509]', true ),
+			'not equal, not listed'      => array( 'not_equals', 'txt', "13335\n", true ),
+			'not equal, listed'          => array( 'not_equals', 'txt', "16509\n", false ),
+			'a pattern is not a number'  => array( 'equals', 'txt', ".*\n1.*\n", false ),
+			'the prefix is not a number' => array( 'equals', 'txt', "AS16509\n", false ),
+		);
 	}
 
 	/**

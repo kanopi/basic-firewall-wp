@@ -26,6 +26,7 @@ use Symfony\Component\Yaml\Yaml;
  * @covers \Kanopi\BasicFirewall\RuleType\Geo_Reader_Settings
  * @covers \Kanopi\BasicFirewall\RuleType\Types\Geo_Location
  * @covers \Kanopi\BasicFirewall\RuleType\Types\Asn
+ * @covers \Kanopi\BasicFirewall\Compiler\Config_Compiler
  */
 final class GeoReaderSettingsTest extends Settings_Snapshot {
 
@@ -222,6 +223,72 @@ final class GeoReaderSettingsTest extends Settings_Snapshot {
 		Firewall::create( array( Plugin::instance()->paths()->compiled_file() ) );
 
 		$this->addToAssertionCount( 1 );
+	}
+
+	/**
+	 * A database of the wrong type is reported, on the rule and by the compiler.
+	 *
+	 * GeoIP2's reader refuses `city()` on a Country database and `asn()` on
+	 * anything but an ASN one, by throwing; the library catches it and the
+	 * variable resolves to nothing. So such a rule loaded and reported itself
+	 * healthy while matching nobody. The check reads the database's own
+	 * metadata, the way the reader decides.
+	 *
+	 * The databases are written by Mmdb_Fixture: valid, empty, and carrying
+	 * the type under test. Neither vendored MaxMind package ships one, and
+	 * MaxMind's own may not be redistributed.
+	 *
+	 * @dataProvider database_types
+	 *
+	 * @param string $type          Rule type.
+	 * @param string $database_type The database's type, as MaxMind names it.
+	 * @param bool   $reported      Whether that is a problem for the rule.
+	 */
+	public function test_the_database_type_is_checked( string $type, string $database_type, bool $reported ): void {
+		$path = trailingslashit( get_temp_dir() ) . 'bfw-' . wp_generate_password( 8, false ) . '.mmdb';
+
+		if ( '' === $database_type ) {
+			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- a test fixture.
+			file_put_contents( $path, 'not a database' );
+		} else {
+			Mmdb_Fixture::write( $path, $database_type );
+		}
+
+		try {
+			$this->given_rule( $this->rule( $type, array( 'database' => $path ) + $this->database_reader() ) );
+
+			$settings = $this->rule( $type, array( 'database' => $path ) + $this->database_reader() )['settings'];
+			$screen   = preg_grep( '/MaxMind|database the reader/', Plugin::instance()->rule_types()->get( $type )->check_requirements( $settings ) );
+			$meta     = Plugin::instance()->compiled()->meta();
+			$compiled = preg_grep( '/^Rule "geo":.*(MaxMind|database the reader)/', (array) ( $meta['problems'] ?? array() ) );
+
+			if ( $reported ) {
+				$this->assertNotEmpty( $screen, "A $database_type database behind a $type rule was not reported on the rule." );
+				$this->assertNotEmpty( $compiled, "A $database_type database behind a $type rule was not reported by the compiler, so Site Health calls it healthy." );
+			} else {
+				$this->assertSame( array(), array_values( $screen ), "A $database_type database behind a $type rule was reported." );
+				$this->assertSame( array(), array_values( $compiled ) );
+			}
+		} finally {
+			wp_delete_file( $path );
+		}
+	}
+
+	/**
+	 * Database types against the lookups each rule type makes.
+	 *
+	 * @return array<string, array{0: string, 1: string, 2: bool}>
+	 */
+	public static function database_types(): array {
+		return array(
+			'geolocation on City'        => array( 'geolocation', 'GeoLite2-City', false ),
+			'geolocation on GeoIP2 City' => array( 'geolocation', 'GeoIP2-City', false ),
+			'geolocation on Country'     => array( 'geolocation', 'GeoLite2-Country', true ),
+			'geolocation on ASN'         => array( 'geolocation', 'GeoLite2-ASN', true ),
+			'ASN on ASN'                 => array( 'asn', 'GeoLite2-ASN', false ),
+			'ASN on City'                => array( 'asn', 'GeoLite2-City', true ),
+			'not a database'             => array( 'geolocation', '', true ),
+		);
 	}
 
 	/**

@@ -25,7 +25,7 @@ does not work as well as what does.
 **Nine rule types**
 
 * IP address — single addresses, CIDR blocks, ranges, IPv4 and IPv6
-* Request / URL — method, host, path, query, body, headers, cookies
+* Request / URL — method, host, path, port, query parameters, posted fields, headers, cookies
 * User agent — parsed, not string-matched
 * Rate limit — requests per address or per account, per pattern, per window
 * Edge signal — the TLS fingerprint or bot score your CDN computed

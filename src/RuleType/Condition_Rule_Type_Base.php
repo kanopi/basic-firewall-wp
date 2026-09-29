@@ -99,10 +99,36 @@ abstract class Condition_Rule_Type_Base extends Rule_Type_Base {
 	 * reported instead -- on the rule, and by the compiler -- so it stops
 	 * reporting itself healthy.
 	 *
+	 * A key ending in `.*` retires a whole family: `server.*` covers
+	 * `server.SERVER_NAME` and every other member, because a family is read by
+	 * the same code whichever member is named, and none of them can be read
+	 * once the family cannot.
+	 *
 	 * @return array<string, string>
 	 */
 	protected function retired_variables(): array {
 		return array();
+	}
+
+	/**
+	 * What to use instead of a retired variable, or null if it is not retired.
+	 *
+	 * @param string $variable Variable name, already translated by library_variable().
+	 */
+	protected function retirement( string $variable ): ?string {
+		$retired = $this->retired_variables();
+
+		if ( isset( $retired[ $variable ] ) ) {
+			return $retired[ $variable ];
+		}
+
+		$position = strpos( $variable, '.' );
+
+		if ( false !== $position && isset( $retired[ substr( $variable, 0, $position ) . '.*' ] ) ) {
+			return $retired[ substr( $variable, 0, $position ) . '.*' ];
+		}
+
+		return null;
 	}
 
 	/**
@@ -122,9 +148,8 @@ abstract class Condition_Rule_Type_Base extends Rule_Type_Base {
 	 * @return list<string> Variable names, each once.
 	 */
 	public function unreadable_variables( array $settings ): array {
-		$retired = $this->retired_variables();
-		$found   = array();
-		$rows    = array_merge(
+		$found = array();
+		$rows  = array_merge(
 			is_array( $settings['conditions'] ?? null ) ? $settings['conditions'] : array(),
 			is_array( $settings['sources'] ?? null ) ? $settings['sources'] : array()
 		);
@@ -136,7 +161,7 @@ abstract class Condition_Rule_Type_Base extends Rule_Type_Base {
 
 			$variable = $this->library_variable( (string) ( $row['variable'] ?? '' ) );
 
-			if ( isset( $retired[ $variable ] ) ) {
+			if ( '' !== $variable && null !== $this->retirement( $variable ) ) {
 				$found[ $variable ] = $variable;
 			}
 		}
@@ -151,14 +176,13 @@ abstract class Condition_Rule_Type_Base extends Rule_Type_Base {
 	 */
 	public function check_requirements( array $settings ): array {
 		$problems = parent::check_requirements( $settings );
-		$retired  = $this->retired_variables();
 
 		foreach ( $this->unreadable_variables( $settings ) as $variable ) {
 			$problems[] = sprintf(
 				/* translators: 1: variable name, 2: what to use instead. */
 				__( 'A condition on this rule reads %1$s, which the firewall library cannot read. It compares against nothing on every request, so it never matches — or, negated, always does. %2$s', 'basic-firewall' ),
 				$variable,
-				$retired[ $variable ]
+				(string) $this->retirement( $variable )
 			);
 		}
 
@@ -212,6 +236,16 @@ abstract class Condition_Rule_Type_Base extends Rule_Type_Base {
 		$raw = $settings['conditions'] ?? array();
 
 		if ( ! is_array( $raw ) ) {
+			/*
+			 * Said rather than silently emptied. Only a hand-edited document
+			 * gets here -- a condition written as `path@contains:x`, say -- and
+			 * emptying the list quietly would leave a rule that matches nothing
+			 * reporting itself healthy.
+			 */
+			if ( ! is_scalar( $raw ) || '' !== trim( (string) $raw ) ) {
+				$errors['conditions'] = __( 'The conditions are not a list of conditions, so none of them could be read.', 'basic-firewall' );
+			}
+
 			$raw = array();
 		}
 
@@ -325,7 +359,7 @@ abstract class Condition_Rule_Type_Base extends Rule_Type_Base {
 
 			$clean['sources'][ $index ]['variable'] = $variable;
 
-			if ( ! isset( $variables[ $variable ] ) && ! isset( $this->retired_variables()[ $variable ] ) && ! $this->is_prefixed_variable( $variable ) ) {
+			if ( ! isset( $variables[ $variable ] ) && null === $this->retirement( $variable ) && ! $this->is_prefixed_variable( $variable ) ) {
 				$errors[ 'sources.' . $index . '.variable' ] = sprintf(
 					/* translators: %s: the rejected variable. */
 					__( '%s is not something this rule type can read, so every entry in the list would be compared against nothing.', 'basic-firewall' ),
@@ -387,7 +421,7 @@ abstract class Condition_Rule_Type_Base extends Rule_Type_Base {
 	 * @param string $variable Variable name.
 	 */
 	protected function variable_is_known( string $variable ): bool {
-		if ( isset( $this->variable_options()[ $variable ] ) || isset( $this->retired_variables()[ $variable ] ) ) {
+		if ( isset( $this->variable_options()[ $variable ] ) || null !== $this->retirement( $variable ) ) {
 			return true;
 		}
 
@@ -455,6 +489,16 @@ abstract class Condition_Rule_Type_Base extends Rule_Type_Base {
 	 */
 	public function supports_sources(): bool {
 		return true;
+	}
+
+	/**
+	 * Anything particular to this type about matching a list's entries.
+	 *
+	 * Shown under "Match each entry against" on the rule screen. Empty when
+	 * there is nothing beyond what that row already says.
+	 */
+	public function source_note(): string {
+		return '';
 	}
 
 	/**
@@ -565,12 +609,46 @@ abstract class Condition_Rule_Type_Base extends Rule_Type_Base {
 	 * The pattern body, with any delimiters and flags taken back off.
 	 *
 	 * Accepts what this plugin stores and what somebody used to writing regular
-	 * expressions will type anyway. A settings document written before the
-	 * change holds delimited patterns, and this is what lets one load.
+	 * expressions will type anyway: `#foo#i`, `~foo~`, `/foo/i`.
+	 *
+	 * A slash is the one delimiter taken off only when flags follow it. It is
+	 * also the path separator, and a pattern written about paths opens and
+	 * closes with one far more often than it is delimited by them: `/wp-admin/`
+	 * means "the wp-admin directory", and unwrapping it to `wp-admin` widened
+	 * the rule to every path containing those letters -- `/wp-admin-guide`,
+	 * `/blog/wp-admin-tips` -- on the first save, silently, and again on every
+	 * later save of anything, since every settings write re-validates every
+	 * rule. Kept, it compiles to `#/wp-admin/#`, which is what it says.
+	 * `/wp-admin/i` has no such reading, so it is still unwrapped.
 	 *
 	 * @param string $value Stored value.
 	 */
 	public static function regex_body( string $value ): string {
+		return self::unwrap_regex( $value, false );
+	}
+
+	/**
+	 * The body of a pattern stored before bodies were, delimiters and all.
+	 *
+	 * For the upgrade routine only. Before schema 3 the stored value was the
+	 * complete pattern the library ran, so a leading and trailing slash there
+	 * was a delimiter whether or not flags followed -- `/wp-admin/` matched
+	 * `wp-admin` anywhere, and the body that keeps matching the same things is
+	 * `wp-admin`. Read as a body it would narrow the rule instead.
+	 *
+	 * @param string $value Value stored by an earlier release.
+	 */
+	public static function legacy_regex_body( string $value ): string {
+		return self::unwrap_regex( $value, true );
+	}
+
+	/**
+	 * Take delimiters and flags off a pattern, if it has them.
+	 *
+	 * @param string $value            The value.
+	 * @param bool   $bare_slash_wraps Whether `/.../` with no flags counts as delimited.
+	 */
+	private static function unwrap_regex( string $value, bool $bare_slash_wraps ): string {
 		$value = trim( $value );
 
 		if ( strlen( $value ) < 2 ) {
@@ -596,6 +674,10 @@ abstract class Condition_Rule_Type_Base extends Rule_Type_Base {
 		// Anything after the closing delimiter has to look like PCRE flags, or
 		// this was never a delimited pattern in the first place.
 		if ( '' !== $flags && 1 !== preg_match( '/^[imsxuADSUXJn]+$/', $flags ) ) {
+			return $value;
+		}
+
+		if ( '/' === $delimiter && '' === $flags && ! $bare_slash_wraps ) {
 			return $value;
 		}
 

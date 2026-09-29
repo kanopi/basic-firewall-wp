@@ -491,7 +491,7 @@ generated.
 | Rule type | Matches on |
 |---|---|
 | IP address | Client IP — single addresses, CIDR blocks, `start-end` ranges, IPv4 and IPv6 |
-| Request / URL | Method, host, path, scheme, port, query, POST body, headers, cookies |
+| Request / URL | Method, host, path, scheme, port, query parameters, posted fields, headers, cookies |
 | User agent | Automated flag, bot flag, device, browser, OS, brand, model — parsed, not string-matched |
 | Rate limit | Requests per address — or per account, header or field — per time window, per pattern |
 | Edge signal | The TLS fingerprint (JA3, JA4) or bot score your CDN computed. Needs a CDN sending the headers, and trusted proxies |
@@ -508,6 +508,26 @@ when it is rebuilt on the library's scoring model. Until then it is not offered,
 another plugin cannot register a type under its id, and a rule saved by a
 pre-release build is kept as it is — never compiled, and named on the Status
 screen and in Site Health until you delete it.
+
+### What a Request / URL condition reads
+
+`method`, `host`, `path`, `scheme` and `port`, and a member of a family named in
+the second column: `query.<parameter>`, `post.<field>`, `header.<name>` and
+`cookie.<name>`. Those are what the library resolves; anything else resolves to
+nothing, and a condition comparing against nothing never matches — or, negated,
+always does, which on a block rule is every visitor.
+
+- **The Referer and Content-Type headers** are `header.referer` and
+  `header.content-type`. A condition stored as `referer` or `content_type` is
+  compiled, and rewritten on upgrade, as the header it names.
+- **`uri`, `body` and the `server` family are not offered**, because the library
+  cannot read them. Use `path` and `query.<parameter>` for the first, a posted
+  field by name for the second, and `host`, `port`, `scheme` or a header for the
+  third. A stored condition on one is kept as it is — out of an "all" rule,
+  removing a negated condition would widen what the rule matches — and reported
+  on the rule, on the Status screen and in Site Health until you edit it out.
+- **`port` compares as a number** with *is equal to*, *is not equal to* and *is
+  one of*, because the library holds it as one and compares strictly.
 
 ### Responses
 
@@ -868,6 +888,18 @@ identical code, including negation and the operator names this plugin uses. Set
 **Template** by hand if you want something the two selects cannot express, such
 as an AND group; it wins over the selects.
 
+**A list of autonomous system numbers** compared with *is equal to*, *is one of*
+or *is not equal to* is matched number by number: each entry becomes the pattern
+`^16509$` run against the visitor's number, because the library compares a
+number strictly and a text list's entries are strings — compared as written,
+such a list would match nothing. **Write each entry as digits alone.** An entry
+is admitted into that pattern only if it is nothing but digits, so a published
+list cannot smuggle in `.*`; the cost is that an entry written `AS16509` is
+skipped rather than matched, since the prefix cannot be taken off an entry the
+library fills in after the rule is compiled. The rule screen says so beside the
+list. A JSON list of integers works as it is, and for names use *contains* on
+`asn_org`.
+
 One difference from the IP rule is worth knowing: **a relative file reference is
 resolved to an absolute path at compile time.** The library resolves
 `storage.config.*` and log paths against the directory holding the config file,
@@ -1040,6 +1072,12 @@ A **Geolocation** rule reads from one of two places, chosen on the rule under
   file: relative resolves inside the private directory, absolute is used as
   given. A path to a file that is not there yet saves with a warning, because the
   download job may not have run; until it does, the rule matches nothing.
+  **The database has to be the right kind.** Geolocation looks every field up —
+  country included — in a City database (GeoLite2-City or GeoIP2-City); ASN needs
+  GeoLite2-ASN. The reader refuses any other kind on every lookup, so a Country
+  database behind a geolocation rule would match nobody. The database's own type
+  is checked, and the wrong one is reported on the rule, on the Status screen and
+  in Site Health.
 - **The lookup your CDN already did**, read from a request header. Nothing to
   license and no lookup cost — but a geo header is a claim, not a fact. Anything
   that can reach the site directly can send `CF-IPCountry: US`, so the firewall
@@ -1188,6 +1226,13 @@ because anyone who has written regular expressions before will type them out of
 habit. The box still decides the case, so `#foo#i` saved with *Case sensitive*
 ticked compiles to `#foo#`.
 
+**Slashes are the exception.** A pattern that opens and closes with `/` is
+taken as written, because `/` is the path separator: `/wp-admin/` means the
+wp-admin directory and compiles to `#/wp-admin/#`, matching
+`/wp-admin/options.php` and not `/wp-admin-guide`. Only with flags after the
+closing slash — `/wp-admin/i` — is it read as delimiters and unwrapped. Saving
+the rule, or anything else, never changes the pattern you wrote.
+
 Two problems disappear with this, both of which were silent:
 
 **An undelimited pattern used to match nothing.** The field accepted
@@ -1211,9 +1256,10 @@ assembled, with case carried by its flag, which is where a regular expression
 has always expressed it.
 
 Patterns stored by an earlier version are rewritten on upgrade — the delimiters
-come off and an `i` flag becomes an unticked box, so nothing changes about what
-a rule matches. Nothing depends on that having run: a delimited value is
-unwrapped wherever one turns up.
+come off, slashes included since they were delimiters then, and an `i` flag
+becomes an unticked box, so nothing changes about what a rule matches or in
+which case. A value delimited any other way is also unwrapped wherever one
+turns up, so a document that skipped the upgrade still loads.
 
 ## Presets
 
@@ -1317,6 +1363,15 @@ operations, and a baked snapshot goes stale silently:
 block()  -> false          the client is not recorded
 request  -> allowed        the firewall fails open
 ```
+
+Database storage can connect four ways, all chosen on the Storage screen:
+WordPress's credentials, a DSN, individual parameters (driver, host, port,
+database, user, password), or nothing at all so that an enabled preset supplies
+the connection. A DSN and a password are typed and never shown: the field is
+always empty, leaving it blank keeps what is stored, and *Remove the stored
+value* clears it. A stored password is kept only while the driver, host, port
+and user are unchanged. Saving the screen without touching the connection keeps
+it exactly as it is, however it was set.
 
 ### Redis, and why expiry is the interesting part
 
@@ -1526,7 +1581,12 @@ Keep logs in the private directory. A log under a public directory is
 downloadable by anyone and discloses exactly which addresses you are blocking.
 
 The **Database table** handler writes each event as a row and the **Log** screen
-reads them back. A file answers "what happened just now" if you can reach a
+reads them back. It connects the way database storage does — WordPress's
+credentials, a DSN, or individual parameters — chosen on the handler's card,
+with the DSN and the password typed and never shown. A stored DSN is kept while
+the handler's type and table are unchanged, and a password while the driver,
+host, port and user are, so saving the Logging screen never repoints a handler
+at another database. A file answers "what happened just now" if you can reach a
 shell; a table answers the questions that actually get asked — which rule has
 blocked the most clients this week, whether a rule has matched anything at all
 since it was added, what the firewall did to an address before its owner
@@ -1708,6 +1768,18 @@ the preview — on the screen and from `wp basic-firewall import` — names each
 and what changed. A URL exported with `***` is restored from the stored copy when
 the two match apart from the credential. Rules are matched by identifier, so
 reordering them moves nothing to the wrong rule.
+
+### Writing the option directly
+
+`wp option update basic_firewall_settings`, a deploy script or a restored backup
+skips the screens and the importer, and with them every rule type's validator.
+The compiler runs each rule through its type's validator anyway, so settings in
+the shape a person types them — addresses as one string, a rate limit's lines as
+text — compile as the rule screen would have stored them. A rule that could only
+be read by dropping part of it — a condition list written as one shorthand
+string, a condition with an operator the firewall does not know — is skipped
+rather than compiled into a different rule, and named on the Status screen and
+in Site Health. Open it and save it.
 
 ## During an incident
 

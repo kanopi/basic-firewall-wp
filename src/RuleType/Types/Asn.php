@@ -146,6 +146,88 @@ final class Asn extends Condition_Rule_Type_Base {
 	}
 
 	/**
+	 * Whether a list's entries are matched as whole autonomous system numbers.
+	 *
+	 * @param array<string, mixed> $source The referenced list.
+	 */
+	private function source_matches_whole_numbers( array $source ): bool {
+		return '' === trim( (string) ( $source['template'] ?? '' ) )
+			&& 'asn' === $this->library_variable( trim( (string) ( $source['variable'] ?? '' ) ) )
+			&& in_array( (string) ( $source['operator'] ?? '' ), array( 'equals', 'not_equals', 'in' ), true );
+	}
+
+	/**
+	 * {@inheritDoc}
+	 *
+	 * A list of numbers compared with "is equal to" or "is one of" matched
+	 * nothing. A text list's entries are strings, the record holds an integer,
+	 * and the library compares strictly -- and it substitutes the entry into
+	 * the template after this plugin has compiled it, so the integer cast
+	 * above never reaches it.
+	 *
+	 * So such a list is compiled as a pattern instead: each entry becomes
+	 * `#^16509$#`, which the library runs against the number as text, whole,
+	 * and which matches the same numbers "is equal to" says it does. A JSON
+	 * list of integers works the same way. "Is not equal to" is the same
+	 * pattern, inverted.
+	 *
+	 * The entry lands inside a regular expression, which is why
+	 * source_record_guard() admits only entries that are digits and nothing
+	 * else: a published list is somebody else's file, and an entry of `.*`
+	 * must not become a pattern that matches every network there is.
+	 *
+	 * @param array<string, mixed> $source The referenced list.
+	 *
+	 * @return string|array<string, mixed>|null
+	 */
+	protected function source_template( array $source ) {
+		if ( ! $this->source_matches_whole_numbers( $source ) ) {
+			return parent::source_template( $source );
+		}
+
+		return array(
+			'variable'       => 'asn',
+			'operator'       => 'regex',
+			'value'          => '#^{value}$#',
+			'negate'         => ! empty( $source['negate'] ) !== ( 'not_equals' === $source['operator'] ),
+			'case_sensitive' => true,
+		);
+	}
+
+	/**
+	 * {@inheritDoc}
+	 *
+	 * Digits only, for the pattern source_template() builds. An entry written
+	 * `AS16509` is dropped by this rather than matched: the prefix cannot be
+	 * taken off an entry the library substitutes after compilation. The rule
+	 * screen and the README say so.
+	 *
+	 * @param array<string, mixed> $source The referenced list, with defaults.
+	 */
+	protected function source_record_guard( array $source ): array {
+		if ( ! $this->source_matches_whole_numbers( $source ) ) {
+			return array();
+		}
+
+		return array(
+			array(
+				'variable'       => 'value',
+				'operator'       => 'regex',
+				'value'          => '#^[0-9]+$#',
+				'negate'         => false,
+				'case_sensitive' => true,
+			),
+		);
+	}
+
+	/**
+	 * {@inheritDoc}
+	 */
+	public function source_note(): string {
+		return __( 'For an autonomous system number with "is equal to", "is not equal to" or "is one of", each entry is matched as a whole number, and has to be written as digits alone: an entry such as AS16509 is skipped. Use "contains" on the organisation for names.', 'basic-firewall' );
+	}
+
+	/**
 	 * {@inheritDoc}
 	 */
 	public function default_settings(): array {
@@ -196,6 +278,13 @@ final class Asn extends Condition_Rule_Type_Base {
 	 */
 	protected function reader_reads_edge(): bool {
 		return false;
+	}
+
+	/**
+	 * {@inheritDoc}
+	 */
+	protected function reader_lookup(): string {
+		return 'asn';
 	}
 
 	/**

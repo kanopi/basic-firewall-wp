@@ -9,6 +9,7 @@ declare( strict_types = 1 );
 
 namespace Kanopi\BasicFirewall\RuleType;
 
+use GeoIp2\Database\Reader;
 use Kanopi\BasicFirewall\Plugin;
 use Kanopi\Firewall\Utility\GeoHeaderMap;
 
@@ -348,8 +349,109 @@ trait Geo_Reader_Settings {
 				__( 'The MaxMind database at %s cannot be read, so this rule matches nothing.', 'basic-firewall' ),
 				$resolved
 			);
+
+			return $problems;
+		}
+
+		$mismatch = $this->reader_database_problem( $settings );
+
+		if ( null !== $mismatch ) {
+			$problems[] = $mismatch;
 		}
 
 		return $problems;
+	}
+
+	/**
+	 * The GeoIP2 reader method the library's plugin looks a visitor up with.
+	 *
+	 * The geolocation plugin calls `city()` for every variable, country
+	 * included; the ASN plugin calls `asn()`.
+	 */
+	protected function reader_lookup(): string {
+		return 'city';
+	}
+
+	/**
+	 * What each lookup needs a database's type to contain, and what to use.
+	 *
+	 * GeoIP2's reader refuses a lookup on a database whose type does not
+	 * contain the string it expects -- `city()` on anything without `City` in
+	 * its type, `asn()` on anything but `GeoLite2-ASN` -- by throwing, and the
+	 * library catches that and resolves the variable to nothing. So a Country
+	 * database behind a geolocation rule, or a City one behind an ASN rule,
+	 * opened, loaded, reported itself healthy, and matched nobody.
+	 *
+	 * @return array<string, array{0: string, 1: string}> Lookup to the required
+	 *                                                    substring and the
+	 *                                                    databases that have it.
+	 */
+	protected static function reader_database_types(): array {
+		return array(
+			'city' => array( 'City', 'GeoLite2-City or GeoIP2-City' ),
+			'asn'  => array( 'GeoLite2-ASN', 'GeoLite2-ASN' ),
+		);
+	}
+
+	/**
+	 * Why the configured database cannot answer this rule's lookup, or null.
+	 *
+	 * Reads the database's own metadata -- its `databaseType` -- which is
+	 * what the reader decides by. Only a database that exists and is readable
+	 * is checked; a missing one is reported by reader_requirements(), and may
+	 * be a download that has not run yet.
+	 *
+	 * Public because the compiler asks it too, so the problem reaches the
+	 * Status screen and Site Health rather than only the rule's own screen.
+	 *
+	 * @param array<string, mixed> $settings Rule settings.
+	 */
+	public function reader_database_problem( array $settings ): ?string {
+		$reader = is_array( $settings['reader'] ?? null ) ? $settings['reader'] : array();
+
+		if ( $this->reader_reads_edge() && 'edge' === ( $reader['source'] ?? 'database' ) ) {
+			return null;
+		}
+
+		$database = trim( (string) ( $reader['database'] ?? '' ) );
+
+		if ( '' === $database ) {
+			return null;
+		}
+
+		$resolved = Plugin::instance()->paths()->resolve( $database );
+
+		if ( ! is_file( $resolved ) || ! is_readable( $resolved ) ) {
+			return null;
+		}
+
+		$wanted = self::reader_database_types()[ $this->reader_lookup() ] ?? null;
+
+		if ( null === $wanted ) {
+			return null;
+		}
+
+		try {
+			$type = ( new Reader( $resolved ) )->metadata()->databaseType;
+		} catch ( \Throwable $e ) {
+			return sprintf(
+				/* translators: 1: database path, 2: the reader's complaint. */
+				__( 'The file at %1$s is not a MaxMind database the reader can open, so this rule matches nothing: %2$s', 'basic-firewall' ),
+				$resolved,
+				$e->getMessage()
+			);
+		}
+
+		if ( false !== strpos( $type, $wanted[0] ) ) {
+			return null;
+		}
+
+		return sprintf(
+			/* translators: 1: database path, 2: its database type, 3: the databases that would work. */
+			__( 'The MaxMind database at %1$s is a %2$s database, which cannot answer this rule\'s lookups: every one fails, so the rule matches nothing. Use a %3$s database.', 'basic-firewall' ),
+			$resolved,
+			$type,
+			$wanted[1]
+		);
 	}
 }

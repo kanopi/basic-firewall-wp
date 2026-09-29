@@ -90,7 +90,6 @@ final class VariableNameTest extends TestCase {
 			'a header'          => array( 'header', 'x-api-key', 'header.x-api-key' ),
 			'a cookie'          => array( 'cookie', 'wordpress_logged_in', 'cookie.wordpress_logged_in' ),
 			'a posted field'    => array( 'post', 'log', 'post.log' ),
-			'a server variable' => array( 'server', 'request_method', 'server.request_method' ),
 		);
 	}
 
