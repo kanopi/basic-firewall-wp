@@ -45,13 +45,31 @@ final class Upgrader {
 	/**
 	 * Run any routines this site has not run yet.
 	 *
-	 * Hooked to `plugins_loaded` at priority 1, so it is ahead of anything that
-	 * reads settings.
+	 * Hooked to `plugins_loaded` at priority 1, where the check costs one
+	 * autoloaded option on every request. The routines themselves wait for
+	 * `init` at priority 0, still ahead of the admin, WP-CLI commands and
+	 * cron, which are what read settings after that.
+	 *
+	 * They wait because of what they set off. A routine saves settings, a
+	 * save rebuilds the compiled file, and the compiler and the rule types
+	 * translate every problem they report -- and translating before `init`
+	 * makes WordPress 6.7 and later report "translation loading was triggered
+	 * too early" on whichever visitor's request happened to follow an update.
+	 * The runner has already evaluated that request by then, from the
+	 * compiled file on disk, so waiting costs it nothing.
 	 */
 	public static function maybe_upgrade(): void {
 		$stored = (int) get_option( Schema::VERSION_OPTION, 0 );
 
 		if ( $stored >= Schema::VERSION ) {
+			return;
+		}
+
+		if ( ! did_action( 'init' ) && ! doing_action( 'init' ) ) {
+			if ( ! has_action( 'init', array( self::class, 'maybe_upgrade' ) ) ) {
+				add_action( 'init', array( self::class, 'maybe_upgrade' ), 0 );
+			}
+
 			return;
 		}
 

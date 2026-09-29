@@ -41,11 +41,25 @@ final class Runner {
 	public const MARK_SERVER_KEY = 'HTTP_X_FIREWALL_MARK';
 
 	/**
-	 * Why evaluation did not happen, or null.
+	 * Why evaluation did not happen, as a message key, or null.
+	 *
+	 * A key rather than a translated sentence, as in Library_Loader. The
+	 * runner fails at `muplugins_loaded`, long before `init`, and calling
+	 * __() there makes WordPress 6.7 and later report "translation loading
+	 * was triggered too early" -- on every request, for as long as whatever
+	 * stopped the firewall goes unfixed. The sentence is built when it is
+	 * read, which is always an admin screen, Site Health or WP-CLI.
 	 *
 	 * @var string|null
 	 */
 	private static ?string $failure = null;
+
+	/**
+	 * What the failure message is about: an error message, usually.
+	 *
+	 * @var string
+	 */
+	private static string $failure_detail = '';
 
 	/**
 	 * Marks the firewall applied to this request.
@@ -93,7 +107,7 @@ final class Runner {
 		}
 
 		if ( ! Library_Loader::is_usable() ) {
-			self::$failure = Library_Loader::failure() ?? __( 'The firewall library is not available.', 'basic-firewall' );
+			self::$failure = 'library';
 
 			return true;
 		}
@@ -103,7 +117,7 @@ final class Runner {
 		$compiled = Plugin::instance()->paths()->compiled_file();
 
 		if ( ! is_readable( $compiled ) ) {
-			self::$failure = __( 'There is no compiled configuration, so no rules were evaluated. Rebuild the firewall.', 'basic-firewall' );
+			self::$failure = 'no-compiled-file';
 
 			return true;
 		}
@@ -133,11 +147,8 @@ final class Runner {
 			 * and then failed open on. Traffic is treated the same as it would
 			 * have been; the difference is that somebody finds out.
 			 */
-			self::$failure = sprintf(
-				/* translators: %s: error message. */
-				__( 'The firewall could not start, so no rules were evaluated: %s', 'basic-firewall' ),
-				$e->getMessage()
-			);
+			self::$failure        = 'could-not-start';
+			self::$failure_detail = $e->getMessage();
 
 			return true;
 		}
@@ -535,9 +546,31 @@ final class Runner {
 
 	/**
 	 * Why the last evaluation did not happen, or null.
+	 *
+	 * Translated here, when it is read, rather than when it happened; see
+	 * $failure.
 	 */
 	public static function failure(): ?string {
-		return self::$failure;
+		switch ( self::$failure ) {
+			case null:
+				return null;
+
+			case 'library':
+				return Library_Loader::failure() ?? __( 'The firewall library is not available.', 'basic-firewall' );
+
+			case 'no-compiled-file':
+				return __( 'There is no compiled configuration, so no rules were evaluated. Rebuild the firewall.', 'basic-firewall' );
+
+			case 'could-not-start':
+				return sprintf(
+					/* translators: %s: error message. */
+					__( 'The firewall could not start, so no rules were evaluated: %s', 'basic-firewall' ),
+					self::$failure_detail
+				);
+
+			default:
+				return self::$failure;
+		}
 	}
 
 	/**
@@ -546,7 +579,8 @@ final class Runner {
 	 * @internal
 	 */
 	public static function reset(): void {
-		self::$failure = null;
-		self::$marks   = array();
+		self::$failure        = null;
+		self::$failure_detail = '';
+		self::$marks          = array();
 	}
 }
