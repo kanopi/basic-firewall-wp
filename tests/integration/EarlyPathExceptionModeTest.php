@@ -342,6 +342,39 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 	}
 
 	/**
+	 * A failure that is not a verdict fails open, and is reported.
+	 *
+	 * It used to fail open silently on both paths: nothing recorded that the
+	 * request had gone through unfiltered, so Site Health reported a healthy
+	 * firewall on the very request it had just waved through.
+	 */
+	public function test_a_failure_fails_open_and_is_reported(): void {
+		$GLOBALS['basic_firewall_early'] = array(
+			'called'    => true,
+			'evaluated' => true,
+		);
+
+		$this->assertTrue(
+			basic_firewall_answer_outcome( new \RuntimeException( 'the evaluator broke' ), null, basic_firewall_options( array( 'plugin_path' => dirname( __DIR__, 2 ) ) ) ),
+			'A failure of the firewall refused the request instead of failing open.'
+		);
+
+		$this->assertStringContainsString( 'the evaluator broke', (string) ( $GLOBALS['basic_firewall_early']['failure'] ?? '' ), 'The bootstrap did not record the failure.' );
+
+		Runner::reset();
+
+		try {
+			// The runner takes it up when WordPress loads: this process has
+			// BASIC_FIREWALL_EVALUATED defined, as the bootstrap leaves it.
+			$this->assertTrue( ( new Runner() )->evaluate() );
+			$this->assertStringContainsString( 'the evaluator broke', (string) Runner::failure(), 'The runner did not take up the failure, so nothing reports it.' );
+			$this->assertSame( 'critical', Site_Health::check( 'compiled' )['status'] );
+		} finally {
+			Runner::reset();
+		}
+	}
+
+	/**
 	 * A solved challenge is left for the runner, which picks it up.
 	 *
 	 * Setting the pass cookie needs the cookie name from settings, so the

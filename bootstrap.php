@@ -316,6 +316,13 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 		$kind = basic_firewall_outcome_kind( $outcome );
 
 		if ( null === $kind ) {
+			/*
+			 * Failed open, and said so. The runner takes this up once
+			 * WordPress loads, so Site Health reports the failure rather
+			 * than a firewall that evaluated this request and allowed it.
+			 */
+			$GLOBALS['basic_firewall_early']['failure'] = get_class( $outcome ) . ': ' . $outcome->getMessage();
+
 			return true;
 		}
 

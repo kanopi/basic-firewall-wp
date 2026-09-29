@@ -98,6 +98,7 @@ final class Runner {
 			 * anything it could not answer has been waiting to be answered.
 			 */
 			$this->adopt_early_marks();
+			$this->adopt_early_failure();
 
 			return $this->answer_early_outcome();
 		}
@@ -173,8 +174,32 @@ final class Runner {
 		} catch ( \Throwable $e ) {
 			// A blocking exception is the library's way of saying "rejected" in
 			// exception mode. The responder decides what the visitor sees.
-			return ( new Outcome_Responder() )->respond( $e, $request );
+			$allowed = ( new Outcome_Responder() )->respond( $e, $request );
+
+			/*
+			 * The responder ends the request for every verdict, so reaching
+			 * here means what was thrown was not one: the firewall failed
+			 * partway through evaluating, and the request goes on unfiltered.
+			 * That is the fail-open this class promises, and it used to be a
+			 * silent one -- nothing recorded it, so Site Health reported a
+			 * healthy firewall on the request it had just waved through.
+			 */
+			if ( $allowed ) {
+				self::record_evaluation_failure( $e );
+			}
+
+			return $allowed;
 		}
+	}
+
+	/**
+	 * Record that evaluation itself failed, rather than deciding anything.
+	 *
+	 * @param \Throwable $e What the firewall threw.
+	 */
+	private static function record_evaluation_failure( \Throwable $e ): void {
+		self::$failure        = 'evaluation-failed';
+		self::$failure_detail = get_class( $e ) . ': ' . $e->getMessage();
 	}
 
 	/**
@@ -219,6 +244,22 @@ final class Runner {
 			'outcome' => $stash['outcome'],
 			'request' => ( $stash['request'] ?? null ) instanceof Request ? $stash['request'] : null,
 		);
+	}
+
+	/**
+	 * Take up an evaluation failure the wp-config.php path recorded.
+	 *
+	 * The bootstrap fails open on anything the firewall throws that is not a
+	 * verdict, as this class does, and leaves what it caught in its report so
+	 * the failure is not lost with the request it happened on.
+	 */
+	private function adopt_early_failure(): void {
+		$failure = $GLOBALS['basic_firewall_early']['failure'] ?? null;
+
+		if ( is_string( $failure ) && '' !== $failure && null === self::$failure ) {
+			self::$failure        = 'evaluation-failed';
+			self::$failure_detail = $failure;
+		}
 	}
 
 	/**
@@ -560,6 +601,13 @@ final class Runner {
 
 			case 'no-compiled-file':
 				return __( 'There is no compiled configuration, so no rules were evaluated. Rebuild the firewall.', 'basic-firewall' );
+
+			case 'evaluation-failed':
+				return sprintf(
+					/* translators: %s: exception class and message. */
+					__( 'The firewall failed while evaluating the request, and let it through unfiltered: %s', 'basic-firewall' ),
+					self::$failure_detail
+				);
 
 			case 'could-not-start':
 				return sprintf(

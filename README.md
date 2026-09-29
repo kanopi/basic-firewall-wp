@@ -128,7 +128,11 @@ at all. Define `DISABLE_WP_CRON` and add a real cron entry hitting
 or invalid, the request is allowed through and the problem is reported in Site
 Health. A firewall misconfiguration will never be the reason your site is
 unreachable — which also means a broken firewall enforces nothing, and the only
-thing standing between you and not noticing is that the failure is loud.
+thing standing between you and not noticing is that the failure is loud. That
+includes a failure partway through evaluating a request, on either path: in
+`exception` mode anything the library throws that is not a verdict lets the
+request through and is reported as critical, with the exception, under the
+compiled configuration check.
 
 ## Installation
 
