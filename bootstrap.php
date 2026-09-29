@@ -964,7 +964,9 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 
 		// The copy the firewall is built from; see basic_firewall_library_prefix().
 		foreach ( null === $prefix ? array() : array( $prefix . $token_class ) as $class ) {
-			if ( ! class_exists( $class ) || ! method_exists( $class, 'enableUnsafeProcessors' ) ) {
+			$enable = array( $class, 'enableUnsafeProcessors' );
+
+			if ( ! class_exists( $class ) || ! is_callable( $enable ) ) {
 				continue;
 			}
 
@@ -983,7 +985,7 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 				 * why this is wrapped: a typo in the allowlist must not be the
 				 * reason the firewall does not start.
 				 */
-				call_user_func( array( $class, 'enableUnsafeProcessors' ), array( 'file' ), $clean );
+				call_user_func( $enable, array( 'file' ), $clean );
 			} catch ( \Throwable $e ) {
 				// An allowlist that does not resolve is treated as not having
 				// opted in, rather than as permission for everything.
