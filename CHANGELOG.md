@@ -7,7 +7,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
-## [1.0.0]
+## [1.0.0-rc.1]
+
+**Release candidate for 1.0.0.** Published as a GitHub pre-release, so the
+`releases/latest/download` URL does not serve it; install it by its own URL.
+Please try it on a staging site and report anything that surprises you.
 
 First release. The WordPress port of the Drupal module `basic_firewall`, at
 parity with its 2.0.0-beta9, built on `kanopi/firewall` ^2.33.1. The release zip
