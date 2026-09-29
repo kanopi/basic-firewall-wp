@@ -174,6 +174,11 @@ namespace-scoped**, which makes it immune to a collision with any other plugin
 that bundles `kanopi/firewall`. `wp basic-firewall status` reports
 `Collision safe: yes (scoped)`.
 
+It carries only what runs. Development dependencies are never installed into
+it, the plugin's own tests and tooling config are left out, and so is what the
+bundled libraries ship for their own development — their CLI tools (`bin/`),
+documentation, tests and linter config. Each library's licence file is kept.
+
 Immune because both evaluation paths always run the scoped copy. When another
 copy is already loaded — a Bedrock site's own Composer autoloader, required from
 `wp-config.php`, or another plugin — the plugin still registers its own

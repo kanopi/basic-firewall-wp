@@ -38,7 +38,9 @@ SOURCE_SCOPED=( src )
 # move basic_firewall_evaluate() out of the global namespace, which is the
 # function every wp-config.php calls by name.
 SOURCE_VERBATIM=( basic-firewall.php loader.php bootstrap.php uninstall.php )
-SOURCE_DATA=( assets languages mu-plugin LICENSE README.md readme.txt DECISIONS.md )
+# DECISIONS.md is the design log for people working on the plugin; it stays in
+# the repository and out of the zip.
+SOURCE_DATA=( assets languages mu-plugin LICENSE README.md readme.txt )
 
 echo "==> Building ${PLUGIN_SLUG} ${VERSION}"
 
@@ -197,6 +199,42 @@ rm -rf "${STAGE}/vendor/bin" \
        "${STAGE}/phpcs.xml.dist" \
        "${STAGE}/phpstan.neon.dist" \
        "${STAGE}/phpunit.xml.dist"
+
+# Nor the libraries' own. Composer installs each package whole, so the runtime
+# tree arrives carrying its authors' CLI tools, documentation sites and
+# tooling config. None of it is loaded, and a public plugin directory is the
+# wrong place for shell scripts and a firewall's operator CLI even when the web
+# server will not run them. Only paths inside a package are touched, so a
+# directory that happens to share a name elsewhere in vendor/ is left alone,
+# and each package's LICENSE stays.
+echo "==> Pruning what the libraries ship for their own development"
+find "${STAGE}/vendor" -mindepth 3 -maxdepth 3 -type d \
+  \( -name bin -o -name docs -o -name doc -o -name tests -o -name Tests \
+     -o -name .github -o -name examples \) \
+  -prune -exec rm -rf {} +
+find "${STAGE}/vendor" -mindepth 3 -maxdepth 3 -type f \
+  \( -name '*.md' -o -name 'phpunit.xml*' -o -name 'phpstan*.neon*' \
+     -o -name 'phpcs.xml*' -o -name '.phpcs.xml*' -o -name 'psalm.xml*' \
+     -o -name 'rector.php' -o -name 'mkdocs.yml' -o -name 'docker-compose.yml' \
+     -o -name 'Makefile' -o -name '.gitattributes' -o -name '.gitignore' \
+     -o -name '.editorconfig' -o -name '.php-cs-fixer*' \) \
+  -delete
+
+# Put every package's licence back. The scoper's finder leaves LICENSE files
+# out (as the PHP-Scoper example config does), and the prune above takes
+# LICENSE.md with the rest of the Markdown -- but nearly everything bundled
+# here is MIT or BSD, and those licences are conditional on the notice
+# travelling with the code. Copied from the production tree, which still has
+# them, into each package the zip actually carries.
+echo "==> Restoring each bundled package's licence"
+for package in "${STAGE}"/vendor/*/*/; do
+  name="${package#"${STAGE}/vendor/"}"
+  name="${name%/}"
+  [ -d "${SCRATCH}/vendor/${name}" ] || continue
+  find "${SCRATCH}/vendor/${name}" -mindepth 1 -maxdepth 1 -type f \
+    \( -iname 'licen[cs]e*' -o -iname 'copying*' \) \
+    -exec cp {} "${package}" \;
+done
 
 if [ "${BFW_SKIP_SCOPING:-0}" != "1" ]; then
   echo "==> Verifying the scoped build actually works"
