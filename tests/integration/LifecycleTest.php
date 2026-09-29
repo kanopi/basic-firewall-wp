@@ -320,4 +320,41 @@ final class LifecycleTest extends TestCase {
 		$this->assertSame( Schema::VERSION, (int) get_option( Schema::VERSION_OPTION ) );
 		$this->assertNull( Upgrader::failure() );
 	}
+
+	/**
+	 * The "send events to WordPress" settings are gone, from the option too.
+	 *
+	 * Nothing ever forwarded anything. Routine 8 rewrites the option, and
+	 * the settings service drops the keys wherever a document is read or
+	 * written, so an old export cannot bring them back.
+	 */
+	public function test_retired_logging_settings_are_dropped(): void {
+		$document                            = (array) get_option( Schema::OPTION, Schema::defaults() );
+		$document['logging']                 = (array) ( $document['logging'] ?? array() );
+		$document['logging']['to_wordpress'] = true;
+		$document['logging']['wp_level']     = 'error';
+		$document['logging']['redact_extra'] = array( 'header.x-kept' );
+
+		update_option( Schema::OPTION, $document, false );
+		update_option( Schema::VERSION_OPTION, 7, false );
+		Plugin::instance()->settings()->flush();
+
+		$this->assertArrayNotHasKey( 'to_wordpress', Plugin::instance()->settings()->get( 'logging' ), 'A retired setting is still read, and so still exported.' );
+
+		Upgrader::maybe_upgrade();
+
+		$stored = (array) get_option( Schema::OPTION );
+
+		$this->assertSame( Schema::VERSION, (int) get_option( Schema::VERSION_OPTION ) );
+		$this->assertArrayNotHasKey( 'to_wordpress', (array) $stored['logging'], 'The upgrade left the retired setting in the option.' );
+		$this->assertArrayNotHasKey( 'wp_level', (array) $stored['logging'] );
+		$this->assertSame( array( 'header.x-kept' ), $stored['logging']['redact_extra'], 'The upgrade took a live setting with it.' );
+
+		// And a document carrying them, as an old export does, stores without them.
+		$document['logging']['to_wordpress'] = true;
+
+		Plugin::instance()->settings()->replace( $document );
+
+		$this->assertArrayNotHasKey( 'to_wordpress', (array) ( (array) get_option( Schema::OPTION ) )['logging'] );
+	}
 }

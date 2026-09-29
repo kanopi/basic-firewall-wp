@@ -10,6 +10,7 @@ declare( strict_types = 1 );
 namespace Kanopi\BasicFirewall\Install;
 
 use Kanopi\BasicFirewall\Plugin;
+use Kanopi\BasicFirewall\Settings;
 use Kanopi\BasicFirewall\RuleType\Condition_Rule_Type_Base;
 use Kanopi\BasicFirewall\Support\Paths;
 use Kanopi\BasicFirewall\Support\Schema;
@@ -249,6 +250,28 @@ final class Upgrader {
 				self::rename_condition_variables( $values );
 
 				$settings->replace( $values );
+			},
+
+			/*
+			 * 8: drop the "send events to WordPress" settings.
+			 *
+			 * `logging.to_wordpress` and `logging.wp_level` were stored and
+			 * shown on the Logging screen, and nothing forwarded anything:
+			 * WordPress has no log to forward to, and decisions already reach
+			 * it as the `basic_firewall_decision` actions. Settings drops
+			 * retired keys whenever it reads or writes the document; this
+			 * writes the option once, so they leave the database as well.
+			 * Read from the option itself, because all() has already dropped
+			 * them from what it returns.
+			 */
+			8 => static function (): void {
+				$stored = get_option( Schema::OPTION, array() );
+
+				if ( ! is_array( $stored ) || Settings::drop_retired( $stored ) === $stored ) {
+					return;
+				}
+
+				Plugin::instance()->settings()->replace( Plugin::instance()->settings()->all() );
 			},
 		);
 	}

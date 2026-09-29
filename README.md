@@ -1515,6 +1515,12 @@ The firewall logs through Monolog, not through WordPress, because it runs before
 WordPress's logger exists. Blocks — and, in log-only mode, would-be blocks — are
 recorded at `warning`.
 
+There is no "send events to WordPress" option: WordPress has no log to send them
+to. Every decision is announced as an action instead — see
+[Reacting to a decision](#reacting-to-a-decision) — which is what an activity
+log plugin, or a few lines of your own, can record. (An earlier build showed
+such an option and never acted on it; upgrading removes the stored setting.)
+
 Keep logs in the private directory. A log under a public directory is
 downloadable by anyone and discloses exactly which addresses you are blocking.
 

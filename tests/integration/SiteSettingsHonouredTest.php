@@ -129,8 +129,6 @@ final class SiteSettingsHonouredTest extends Honoured_Settings {
 		'challenge.provider_options.recaptcha.send_remoteip' => 'test_remote_challenge_providers',
 		'challenge.provider_options.recaptcha.use_recaptcha_net' => 'test_remote_challenge_providers',
 		'logging.redact_extra'                            => 'test_redact_extra',
-		'logging.to_wordpress'                            => 'unapplied: stored and shown on the Logging screen, but no handler forwards events to WordPress.',
-		'logging.wp_level'                                => 'unapplied: the level for logging.to_wordpress, which nothing applies.',
 		'logger.*.type'                                   => 'test_log_handlers',
 		'logger.*.enabled'                                => 'test_log_handlers',
 		'logger.*.level'                                  => 'test_log_handlers',

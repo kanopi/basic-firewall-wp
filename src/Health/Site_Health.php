@@ -1556,10 +1556,10 @@ final class Site_Health {
 
 		$enabled = array_filter( $handlers, static fn ( $h ): bool => is_array( $h ) && ! empty( $h['enabled'] ) );
 
-		if ( array() === $enabled && ! (bool) Plugin::instance()->settings()->get( 'logging.to_wordpress', false ) ) {
+		if ( array() === $enabled ) {
 			return self::recommended(
 				__( 'The firewall is not logging anywhere', 'basic-firewall' ),
-				esc_html__( 'No log handler is enabled and events are not being forwarded to WordPress, so there is no record of what the firewall has blocked. That is a supported configuration, but it means the log-only workflow — watch for a few days, then switch to blocking — is not available to you.', 'basic-firewall' )
+				esc_html__( 'No log handler is enabled, so there is no record of what the firewall has blocked beyond whatever listens to the basic_firewall_decision action. That is a supported configuration, but it means the log-only workflow — watch for a few days, then switch to blocking — is not available to you.', 'basic-firewall' )
 			);
 		}
 
