@@ -21,6 +21,8 @@ use Kanopi\BasicFirewall\RuleType\Types\Rate_Limit;
 use Kanopi\BasicFirewall\RuleType\Types\User_Agent;
 use Kanopi\BasicFirewall\Runtime\Runner;
 use Kanopi\BasicFirewall\Runtime\Trusted_Proxies;
+use Kanopi\BasicFirewall\Support\Autoloader_Locator;
+use Kanopi\Firewall\Firewall;
 
 /**
  * The translation of `hook_requirements()` and the Drupal status report.
@@ -979,7 +981,7 @@ final class Site_Health {
 				__( 'The wp-config.php snippet is present but is not evaluating requests', 'basic-firewall' ),
 				'<p>' . esc_html__( 'wp-config.php calls the firewall bootstrap, but it returned without evaluating this request. Whatever protection you have is coming from the mu-plugin instead, which loads after advanced-cache.php — so on a cached site, a cache hit is not evaluated at all.', 'basic-firewall' ) . '</p>'
 				. '<p>' . esc_html( self::early_reason_text( self::early_report()['reason'] ) ) . '</p>'
-				. self::rebuild_action()
+				. self::early_reason_action( self::early_report()['reason'] )
 			);
 		}
 
@@ -1189,10 +1191,25 @@ final class Site_Health {
 	 * bootstrap did not say, so a report from a bootstrap that predates the
 	 * question is not read as a failure.
 	 *
-	 * @return array{called: bool, credentials: bool, evaluated: bool, reason: string|null, responder: bool}
+	 * `autoloader` is which Composer autoloader the bootstrap used and where
+	 * it came from -- `plugin`, `option`, `constant`, `site`, `loaded`, or
+	 * `unreadable` and `none` when it found nothing to use -- so a failure can
+	 * name the file it is about. Null from a bootstrap that did not get that
+	 * far, or predates the question.
+	 *
+	 * @return array{called: bool, credentials: bool, evaluated: bool, reason: string|null, responder: bool, autoloader: array{source: string, file: string|null}|null}
 	 */
 	public static function early_report(): array {
 		$report = $GLOBALS['basic_firewall_early'] ?? array();
+
+		$autoloader = null;
+
+		if ( isset( $report['autoloader']['source'] ) && is_string( $report['autoloader']['source'] ) ) {
+			$autoloader = array(
+				'source' => $report['autoloader']['source'],
+				'file'   => isset( $report['autoloader']['file'] ) && is_string( $report['autoloader']['file'] ) ? $report['autoloader']['file'] : null,
+			);
+		}
 
 		return array(
 			'called'      => ! empty( $report['called'] ),
@@ -1200,6 +1217,7 @@ final class Site_Health {
 			'evaluated'   => ! empty( $report['evaluated'] ),
 			'reason'      => isset( $report['reason'] ) ? (string) $report['reason'] : null,
 			'responder'   => ! isset( $report['responder'] ) || ! empty( $report['responder'] ),
+			'autoloader'  => $autoloader,
 		);
 	}
 
@@ -1220,9 +1238,12 @@ final class Site_Health {
 	/**
 	 * Why the bootstrap ran but did not evaluate this request.
 	 *
+	 * Public because `wp basic-firewall status` prints the same sentence: a
+	 * runbook reading a reason code is a runbook that has to look it up.
+	 *
 	 * @param string|null $reason Machine-readable reason recorded by the bootstrap.
 	 */
-	private static function early_reason_text( ?string $reason ): string {
+	public static function early_reason_text( ?string $reason ): string {
 		switch ( $reason ) {
 			case 'disabled':
 				return __( 'BASIC_FIREWALL_ENABLED is defined as false in wp-config.php, which switches the firewall off on both paths.', 'basic-firewall' );
@@ -1235,12 +1256,57 @@ final class Site_Health {
 			case 'no-compiled-file':
 				return __( 'There is no compiled configuration at the path the snippet names. Either the private_path argument is wrong, or the firewall has never been built — the early path cannot build it, because that needs WordPress.', 'basic-firewall' );
 			case 'no-autoloader':
-				return __( 'The plugin\'s vendor autoloader could not be found, so the firewall library was never loaded.', 'basic-firewall' );
+				return __( 'No Composer autoloader was found, so the firewall library was never loaded. The bootstrap looks in the plugin\'s own vendor directory and in a vendor directory beside the WordPress root. If this site installs the plugin with Composer and its composer.json sets vendor-dir somewhere else, add an \'autoloader\' line with that path to the basic_firewall_evaluate() call — or define BASIC_FIREWALL_AUTOLOADER — or require the site\'s autoloader in wp-config.php above the snippet.', 'basic-firewall' );
+			case 'autoloader-unreadable':
+				return self::unreadable_autoloader_text();
 			case 'library-missing':
 				return __( 'The firewall library class was not found after loading the autoloader, which usually means an incomplete install.', 'basic-firewall' );
 			default:
 				return __( 'The bootstrap returned without evaluating and did not say why.', 'basic-firewall' );
 		}
+	}
+
+	/**
+	 * What to say about a named autoloader that cannot be read.
+	 *
+	 * Names the file and where it was named, because the fix is to correct
+	 * that one line, and "an autoloader could not be read" does not say which
+	 * of two places to look in.
+	 */
+	private static function unreadable_autoloader_text(): string {
+		$autoloader = self::early_report()['autoloader'];
+		$file       = (string) ( $autoloader['file'] ?? '' );
+
+		if ( 'constant' === ( $autoloader['source'] ?? null ) ) {
+			return sprintf(
+				/* translators: %s: the path BASIC_FIREWALL_AUTOLOADER names. */
+				__( 'BASIC_FIREWALL_AUTOLOADER names %s as the Composer autoloader, and that file cannot be read, so the firewall library was never loaded. Correct the path, or remove the constant if the plugin\'s own vendor directory or one beside the WordPress root should be used instead.', 'basic-firewall' ),
+				$file
+			);
+		}
+
+		return sprintf(
+			/* translators: %s: the path the snippet's autoloader option names. */
+			__( 'The snippet\'s \'autoloader\' option names %s as the Composer autoloader, and that file cannot be read, so the firewall library was never loaded. Correct the path, or remove the line if the plugin\'s own vendor directory or one beside the WordPress root should be used instead.', 'basic-firewall' ),
+			$file
+		);
+	}
+
+	/**
+	 * What to offer beside the reason the bootstrap did not evaluate.
+	 *
+	 * A rebuild answers a missing compiled file and nothing about a missing
+	 * autoloader, which is fixed in wp-config.php -- so for that the snippet
+	 * is printed, with the autoloader line when this site needs one.
+	 *
+	 * @param string|null $reason Machine-readable reason recorded by the bootstrap.
+	 */
+	private static function early_reason_action( ?string $reason ): string {
+		if ( in_array( $reason, array( 'no-autoloader', 'autoloader-unreadable' ), true ) ) {
+			return '<pre>' . esc_html( self::bootstrap_snippet() ) . '</pre>';
+		}
+
+		return self::rebuild_action();
 	}
 
 	/**
@@ -1304,12 +1370,70 @@ final class Site_Health {
 
 	/**
 	 * The wp-config.php snippet, with this site's real path.
+	 *
+	 * And with the site's Composer autoloader when the bootstrap could not
+	 * find it unaided: a site-level install whose vendor-dir is somewhere
+	 * other than beside the WordPress root. Without that line the snippet
+	 * printed here was one that could never evaluate on exactly that site.
 	 */
 	public static function bootstrap_snippet(): string {
+		$autoloader = self::snippet_autoloader();
+
 		return "require_once ABSPATH . 'wp-content/plugins/basic-firewall/bootstrap.php';\n"
 			. "basic_firewall_evaluate( array(\n"
 			. "    'private_path' => '" . Plugin::instance()->paths()->base() . "',\n"
+			. ( null === $autoloader ? '' : "    'autoloader'   => " . $autoloader . ",\n" )
 			. ') );';
+	}
+
+	/**
+	 * The autoloader line's value as PHP source, or null when none is needed.
+	 *
+	 * Read from where the library running this request was actually
+	 * declared, not from composer.json: that file may not be deployed, and
+	 * what it says is not necessarily what was installed. Only asked on a
+	 * `site-composer` install, which is never scoped, so the class names here
+	 * are the library's and Composer's own.
+	 */
+	private static function snippet_autoloader(): ?string {
+		$mode = (string) Library_Loader::mode();
+
+		if ( 'site-composer' !== $mode || ! class_exists( Firewall::class ) ) {
+			return null;
+		}
+
+		try {
+			$file = ( new \ReflectionClass( Firewall::class ) )->getFileName();
+		} catch ( \Throwable $e ) {
+			return null;
+		}
+
+		/*
+		 * Composer 2's list of loaders by vendor directory. A site still on
+		 * Composer 1 has no such method, and the locator falls back to
+		 * walking up from the class file.
+		 *
+		 * Named by a string assembled at runtime, because the question is
+		 * about the site's Composer, and a literal would be rewritten under
+		 * the vendor prefix in a scoped build -- the reason Library_Loader
+		 * assembles its class names too.
+		 */
+		$vendor_dirs = array();
+		$loader      = implode( '\\', array( 'Composer', 'Autoload', 'ClassLoader' ) );
+		$registered  = array( $loader, 'getRegisteredLoaders' );
+
+		if ( class_exists( $loader, false ) && is_callable( $registered ) ) {
+			$loaders     = call_user_func( $registered );
+			$vendor_dirs = is_array( $loaders ) ? array_map( 'strval', array_keys( $loaders ) ) : array();
+		}
+
+		return Autoloader_Locator::snippet_expression(
+			$mode,
+			false === $file ? null : $file,
+			$vendor_dirs,
+			ABSPATH,
+			BASIC_FIREWALL_DIR
+		);
 	}
 
 	/**
