@@ -336,10 +336,12 @@ it needs a Composer autoloader. It uses the first of these that applies:
 3. **The `BASIC_FIREWALL_AUTOLOADER` constant.** The same thing, said once per
    environment. The option beats it, as every bootstrap option beats the
    constant it defaults to.
-4. **A `vendor/` beside the WordPress root** — `dirname( ABSPATH ) . '/vendor'`,
+4. **A library that is already loaded**, because `wp-config.php` required the
+   site's autoloader above the snippet. Nothing more to require — and nothing
+   else is: a different `vendor/` beside the WordPress root is left alone, so
+   classes cannot end up resolving from two Composer trees at once.
+5. **A `vendor/` beside the WordPress root** — `dirname( ABSPATH ) . '/vendor'`,
    where Bedrock and most Composer-built sites keep it.
-5. **A library that is already loaded**, because `wp-config.php` required the
-   site's autoloader above the snippet. Nothing more to require.
 
 So a site that installs the plugin with Composer and a custom `vendor-dir` adds
 one line:
@@ -440,12 +442,46 @@ from any container: whether the early path was called and evaluated, why not if
 it did not, which autoloader and library copy it used, the verdict it reached,
 any failure (class, message and file:line), and whether it handed a verdict on;
 what the runner itself did; the mode each path's firewall was actually in; the
+rules each path's firewall could not construct (`failed_rules`, as
+`bucket/Class:index` — names only — with `failed_rules_sampled` saying why this
+request asked; see below); the
 compiled file's path, modification time and a hash prefix, as each path saw it;
 and the cache backend on each path. Two are kept: the last request, and the last
-**anomalous** one — a fail-open, an early path that did not evaluate for a
-reason other than `disabled`, `switched-off` or `deferred-login`, or a refusal
-the early path handed on instead of answering — so ordinary traffic does not
-overwrite the one worth reading. Each is kept for a day and written at most once
+**anomalous** one, so ordinary traffic does not overwrite the one worth reading.
+`anomalies` lists everything wrong with a request, most serious first, and
+`anomaly` is the first of them:
+
+| Anomaly | Meaning |
+|---|---|
+| `fail-open` | Either path failed and let the request through unfiltered. |
+| `early-verdict-deferred` | The early path reached a refusal and handed it on instead of answering it. |
+| `failed-rules` | A firewall either path built could not construct one or more rules. The library skips such a rule and carries on, so part of the configuration was not enforced on that request — and a rule that fails only on the web containers (a storage or reputation host only they cannot reach, a missing extension) shows up nowhere else. |
+| `not-evaluated` | The early path was called and did not evaluate, for a reason other than `disabled`, `switched-off` or `deferred-login`. |
+| `mismatch` | A path ran in a mode other than the one last compiled, or the compiled file differed between the paths or from the last compile's hash — the signature of a stale copy of the file on a web container that did not do the compile. Listed under `mismatch`. |
+
+**Failed rules are sampled, not checked on every request.** The library can
+only say which rules failed to construct by constructing all of them, which
+undoes its lazy construction: every visitor would pay for CRS, GeoIP readers
+and the rest even when an earlier rule settled the request. So each path asks
+only with `BASIC_FIREWALL_DEBUG` on (`debug`), on a request that failed open
+(`failure`), or at most once a minute per web container otherwise
+(`interval`, kept in a `.sampled-failed-rules-*` marker file in the private
+directory — one stat when not due). The trade-off: a rule that fails
+intermittently can be missed between samples. On any other request
+`failed_rules` is `null`, meaning "not asked", not "none failed"; the latest
+sample from each path is kept on its own, and `early-report`
+(`failed_rules_sample`) and `status` ("Failed rules (last sample)") show it.
+
+For `mismatch`, the expected mode is the one the last compile wrote into the
+file (so the advanced YAML and `BASIC_FIREWALL_MODE` count), recorded with the
+file's hash prefix in the compile's meta. A panic file, `BASIC_FIREWALL_MODE`
+differing between the container that compiled and the one serving, and
+`lockdown` (which runs as `block`) change a path's mode legitimately; they are
+listed under `mode.overrides` rather than flagged. The early path now records
+the compiled file's hash prefix too (`compiled.early.hash`), and the last
+compile's in `compiled.meta`. Files are not compared within 30 seconds of a
+compile, which a request can straddle honestly.
+ Each is kept for a day and written at most once
 every five seconds; WP-CLI and cron are never recorded. Nothing sensitive is
 kept: the URL path without its query string, the request method, and facts about
 the firewall — no cookies, headers or client address, and credentials in a URL
@@ -457,15 +493,24 @@ wp basic-firewall early-report    # both reports in full, as JSON (--format=yaml
 ```
 
 Site Health's evaluation check raises the last anomaly while it is less than
-six hours old: **critical** for a request let through unfiltered in `block` or
-`exception` mode, or a refusal the early path did not answer; **recommended**
-for an early path that did not evaluate, with the fix for the reason.
+six hours old: **critical** for a request let through unfiltered or rules that
+could not be constructed, in `block` or `exception` mode, and for a refusal the
+early path did not answer; **recommended** for those two in `log` mode, for a
+`mismatch` (with the rebuild), and for an early path that did not evaluate,
+with the fix for the reason. The library
+logs each rule it could not construct, with the reason, as `Firewall rule could
+not be constructed and is NOT active`.
 
 **The PHP error log.** Anything that makes either path let a request through
-unfiltered is logged, every time, and so is an early path that is called and
-does not evaluate — that one at most once every 15 minutes per reason, however
-many containers serve the site (the interval is kept in a marker file in the
-private directory). Search for `Basic Firewall [warning]:`:
+unfiltered is logged: the first time always, then at most once a minute for the
+same exception class from the same file and line, with the next line saying how
+many were held back — `… (12 more since 2026-01-01 12:00:00 UTC)` — so a
+persistent failure on a busy site (a storage outage, say) does not write a line
+per request. An early path that is called and does not evaluate is logged at
+most once every 15 minutes per reason. Both intervals hold however many
+containers serve the site: they are kept in marker files in the private
+directory (`.warned-*`), shared wherever that directory is. Search for
+`Basic Firewall [warning]:`:
 
 ```
 Basic Firewall [warning]: fail-open (early): the firewall threw RuntimeException "…" at /path/to/File.php:123 on the wp-config.php path, so the request was let through unfiltered.
@@ -485,7 +530,7 @@ with the compact report as JSON:
 
 ```bash
 curl -sI "https://example.com/some-path/?nocache=$RANDOM" | grep -i x-basic-firewall-early
-# X-Basic-Firewall-Early: {"early":{"called":true,"evaluated":true,"reason":null,"autoloader":"option","library":"unscoped","mode":"exception","outcome":null,"failure":null,"refused":false,"responder":true},"runner":{...}}
+# X-Basic-Firewall-Early: {"early":{"called":true,"evaluated":true,"reason":null,"autoloader":"option","library":"unscoped","mode":"exception","outcome":null,"failure":null,"refused":false,"responder":true,"failed_rules":[],"failed_rules_sampled":"debug"},"runner":{...}}
 ```
 
 It carries no paths beyond a file name and no message text, but it does tell

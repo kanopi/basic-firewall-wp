@@ -10,6 +10,7 @@ declare( strict_types = 1 );
 namespace Kanopi\BasicFirewall\Tests\integration;
 
 use Kanopi\BasicFirewall\Health\Site_Health;
+use Kanopi\BasicFirewall\Runtime\Diagnostics;
 use Kanopi\BasicFirewall\Runtime\Outcome_Responder;
 use Kanopi\BasicFirewall\Plugin;
 use Kanopi\BasicFirewall\Runtime\Runner;
@@ -119,6 +120,7 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 				'BFW_EARLY_CUSTOM_AUTOLOADER'        => self::$scratch . '/mu-plugins/vendor/autoload.php',
 				'BFW_EARLY_NO_RESPONDER_PLUGIN_PATH' => self::$scratch . '/plugin-no-responder',
 				'BFW_EARLY_ERROR_LOG'                => self::$scratch . '/php-error.log',
+				'BFW_EARLY_SITE_ROOT'                => self::$scratch . '/site',
 			)
 		);
 
@@ -174,6 +176,10 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 			@unlink( self::$scratch . '/php-error.log' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- the fixture's log, or nothing if nothing was logged.
 			@unlink( self::$scratch . '/plugin-no-responder/vendor' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- as above.
 			@rmdir( self::$scratch . '/plugin-no-responder' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- as above.
+			@unlink( self::$scratch . '/site/vendor/autoload.php' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- as above.
+			@rmdir( self::$scratch . '/site/vendor' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- as above.
+			@rmdir( self::$scratch . '/site/wordpress' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- as above.
+			@rmdir( self::$scratch . '/site' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- as above.
 			@unlink( self::$scratch . '/mu-plugins/vendor/autoload.php' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- as above.
 			@rmdir( self::$scratch . '/mu-plugins/vendor' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- as above.
 			@rmdir( self::$scratch . '/mu-plugins' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- as above.
@@ -213,6 +219,17 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 		file_put_contents(
 			$scratch . '/mu-plugins/vendor/autoload.php',
 			"<?php\n\$GLOBALS['basic_firewall_test_custom_autoloader'] = true;\nreturn require " . var_export( dirname( __DIR__, 2 ) . '/vendor/autoload.php', true ) . ";\n" // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_var_export -- writing a PHP literal, not debugging.
+		);
+
+		/*
+		 * A WordPress root with a vendor/ beside it that is not the one the
+		 * site loaded: it records being required and carries no library.
+		 */
+		mkdir( $scratch . '/site/wordpress', 0700, true );
+		mkdir( $scratch . '/site/vendor', 0700, true );
+		file_put_contents(
+			$scratch . '/site/vendor/autoload.php',
+			"<?php\n\$GLOBALS['basic_firewall_test_site_autoloader'] = true;\n"
 		);
 		// phpcs:enable WordPress.WP.AlternativeFunctions
 
@@ -673,6 +690,8 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 	 * firewall on the very request it had just waved through.
 	 */
 	public function test_a_failure_fails_open_and_is_reported(): void {
+		Diagnostics::reset_throttle();
+
 		$GLOBALS['basic_firewall_early'] = array(
 			'called'    => true,
 			'evaluated' => true,
@@ -924,6 +943,41 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 	}
 
 	/**
+	 * A library already loaded is used before a vendor/ beside the WordPress root (#44).
+	 *
+	 * The site required its own autoloader above the snippet, and a different
+	 * vendor/ sits where the bootstrap guesses. Requiring that second one as
+	 * well would register two Composer trees, and classes could then resolve
+	 * from either -- the mixed copy the scoped-first rule exists to prevent.
+	 * So it must never be required, and the request is still evaluated, with
+	 * the library the site loaded.
+	 */
+	public function test_a_loaded_library_beats_a_vendor_dir_beside_the_root(): void {
+		$this->given_rule( 'block', 'block' );
+
+		$headers = array(
+			'X-Bfw-Test-Plugin'     => 'bare',
+			'X-Bfw-Test-Autoloader' => 'preloaded-beside-site',
+		);
+
+		$this->assertSame( 403, $this->request( '/bfw-early-match', $headers )['status'], 'The library the site loaded was not used to evaluate.' );
+
+		$allowed = $this->request_with_autoloader( 'bare', 'preloaded-beside-site' );
+
+		$this->assertSame( 'loaded', $allowed['autoloader'] );
+		$this->assertSame( '', $allowed['autoloader_file'], 'A file was required although the library was already loadable.' );
+		$this->assertSame( 'yes', $allowed['evaluated'] );
+		$this->assertSame( 'yes', $allowed['custom'], 'The fixture did not preload the site\'s autoloader.' );
+		$this->assertSame( 'no', $allowed['site'], 'The vendor/ beside the WordPress root was required on top of the loaded library.' );
+
+		// The plugin's own vendor/ still comes first, preloaded library or not.
+		$own = $this->request_with_autoloader( '', 'preloaded-beside-site' );
+
+		$this->assertSame( 'plugin', $own['autoloader'] );
+		$this->assertSame( 'no', $own['site'] );
+	}
+
+	/**
 	 * The plugin's own vendor/ still wins over an autoloader the site names.
 	 *
 	 * A release zip carries the library scoped, and its compiled file names
@@ -946,14 +1000,18 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 	}
 
 	/**
-	 * A failure on the early path fails open, and is logged -- every time.
+	 * A failure on the early path fails open, and is logged -- then at most once a minute.
 	 *
 	 * The report it leaves reaches Site Health only on the request it
 	 * happened on, which is a visitor's. #34 was a firewall failing on
-	 * visitors' requests with nothing in the PHP error log.
+	 * visitors' requests with nothing in the PHP error log. The first is
+	 * always logged; the same failure again within the minute is counted,
+	 * and the count goes on the next line written (#41).
 	 */
 	public function test_a_failure_on_the_early_path_is_logged(): void {
 		$this->given_rule( 'challenge', 'exception' );
+
+		Diagnostics::reset_throttle();
 
 		$log = $this->error_log();
 
@@ -972,10 +1030,34 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 		$this->assertStringNotContainsString( 'hunter2', $lines[0], 'A password in a DSN reached the log.' );
 		$this->assertStringNotContainsString( '#0 ', $lines[0], 'A trace was logged rather than the origin.' );
 
-		// And again on the next request: a failure is logged every time.
+		// Not again on the next request, within the minute: counted instead.
+		$again = $this->request( '/bfw-early-match', array( 'X-Bfw-Test-Throw' => 'evaluate' ) );
+
+		$this->assertStringContainsString( self::SERVED, $again['body'], 'A held-back log line changed what the visitor got.' );
+		$this->assertCount( 1, $this->logged_since( $log, 'fail-open (early)' ), 'The same failure was logged twice within a minute.' );
+
+		$markers = (array) glob( Plugin::instance()->paths()->base() . '/.warned-fail-open-*' );
+
+		$this->assertCount( 1, $markers, 'The interval is not remembered where every web container can see it.' );
+
+		// A minute on, logged again, with the count.
+		$aged = (string) wp_json_encode(
+			array(
+				'logged'     => time() - 61,
+				'suppressed' => 1,
+			)
+		);
+
+		file_put_contents( (string) $markers[0], $aged ); // phpcs:ignore WordPress.WP.AlternativeFunctions -- ageing the bootstrap's marker.
+
 		$this->request( '/bfw-early-match', array( 'X-Bfw-Test-Throw' => 'evaluate' ) );
 
-		$this->assertCount( 2, $this->logged_since( $log, 'fail-open (early)' ) );
+		$lines = $this->logged_since( $log, 'fail-open (early)' );
+
+		$this->assertCount( 2, $lines );
+		$this->assertStringContainsString( '(1 more since ', $lines[1], 'The line does not say how many were held back.' );
+
+		Diagnostics::reset_throttle();
 	}
 
 	/**
@@ -1083,6 +1165,100 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 		);
 
 		$this->assertStringStartsWith( 'RuntimeException @ fake-request-factory.php:', (string) $failed['early']['failure'] );
+	}
+
+	/**
+	 * A rule the early path's firewall could not construct is recorded (#41).
+	 *
+	 * The library skips such a rule and goes on, so the request it would
+	 * have refused is served -- and before this, nothing a status screen
+	 * could read said so.
+	 */
+	public function test_failed_rules_on_the_early_path_are_recorded(): void {
+		$this->given_rule( 'block', 'block' );
+
+		$marker = Plugin::instance()->paths()->base() . '/.sampled-failed-rules-early';
+
+		wp_delete_file( $marker );
+
+		// The first request samples: the throttle lets it through.
+		$healthy = $this->request( '/bfw-early-other' );
+
+		$this->assertSame( 'none', $healthy['failed_rules'], 'A firewall whose rules all built reported a failed one.' );
+		$this->assertSame( 'interval', $healthy['sampled'] );
+		$this->assertFileExists( $marker );
+
+		// The next, within the minute, does not ask at all.
+		$ordinary = $this->request( '/bfw-early-other', array( 'X-Bfw-Test-Failed-Rule' => '1' ) );
+
+		$this->assertSame( 'unknown', $ordinary['failed_rules'], 'An ordinary request built every rule to ask.' );
+		$this->assertSame( 'no', $ordinary['sampled'] );
+
+		$broken = $this->request(
+			'/bfw-early-match',
+			array(
+				'X-Bfw-Test-Failed-Rule' => '1',
+				'X-Bfw-Test-Debug'       => '1',
+			)
+		);
+
+		$this->assertSame( 200, $broken['status'], 'The fixture\'s rule still ran, so nothing failed to construct.' );
+		$this->assertSame( 'block/Reputation:0', $broken['failed_rules'] );
+		$this->assertSame( 'debug', $broken['sampled'], 'BASIC_FIREWALL_DEBUG did not sample regardless of the interval.' );
+		$this->assertSame( 'yes', $broken['evaluated'] );
+
+		$report = json_decode( $broken['debug'], true );
+
+		$this->assertIsArray( $report );
+		$this->assertSame( array( 'block/Reputation:0' ), $report['early']['failed_rules'], 'The debug header does not name the rule.' );
+		$this->assertStringNotContainsString( 'upstream', $broken['debug'], 'The constructor\'s message reached the header.' );
+
+		// Not evaluated here, so nothing to say rather than nothing failed.
+		$this->assertSame( 'unknown', $this->request( '/bfw-early-other', array( 'X-Bfw-Test-Plugin' => 'bare' ) )['failed_rules'] );
+
+		// A failure samples even with no sample due.
+		$failed = $this->request( '/bfw-early-other', array( 'X-Bfw-Test-Throw' => 'evaluate' ) );
+
+		$this->assertSame( 'failure', $failed['sampled'] );
+		$this->assertSame( 'none', $failed['failed_rules'] );
+
+		wp_delete_file( $marker );
+		Diagnostics::reset_throttle();
+	}
+
+	/**
+	 * The early path records what a mismatch is judged on: the file's hash, and a panic file (#41).
+	 *
+	 * The hash is the same prefix the last compile recorded, so a web
+	 * container reading a stale copy can be told from one reading the
+	 * current file; and a panic file is recorded as what changed the mode,
+	 * so it is reported as an override rather than flagged.
+	 */
+	public function test_the_early_path_records_its_hash_and_a_panic_file(): void {
+		$this->given_rule( 'block', 'block', array( 'panic_file' => 'early-path-test-panic' ) );
+
+		$panic = Plugin::instance()->paths()->base() . '/early-path-test-panic';
+
+		$calm = $this->request( '/bfw-early-other' );
+		$meta = Plugin::instance()->compiled()->meta();
+
+		$this->assertMatchesRegularExpression( '/^[0-9a-f]{12}$/', $calm['hash'] );
+		$this->assertSame( $meta['hash'] ?? null, $calm['hash'], 'The early path\'s hash is not the one the compile recorded.' );
+		$this->assertSame( substr( (string) hash_file( 'sha256', Plugin::instance()->paths()->compiled_file() ), 0, 12 ), $calm['hash'] );
+		$this->assertSame( 'block', $calm['mode'] );
+		$this->assertSame( 'no', $calm['panic'] );
+
+		file_put_contents( $panic, 'log' ); // phpcs:ignore WordPress.WP.AlternativeFunctions -- the fixture's panic file.
+
+		try {
+			$panicked = $this->request( '/bfw-early-match' );
+		} finally {
+			wp_delete_file( $panic );
+		}
+
+		$this->assertSame( 200, $panicked['status'], 'The panic file did not put the early path in log mode.' );
+		$this->assertSame( 'log', $panicked['mode'] );
+		$this->assertSame( 'yes', $panicked['panic'], 'The early path did not record that a panic file changed its mode.' );
 	}
 
 	/**
@@ -1228,7 +1404,7 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 	 * @param string $plugin     `bare` for the copy with no vendor/, or empty for this one.
 	 * @param string $autoloader The fixture's autoloader scenario.
 	 *
-	 * @return array{status: int, body: string, type: string, cache: string, location: string, retry: string, stashed: string, outcome: string, reason: string, evaluated: string, autoloader: string, autoloader_file: string, autoloader_named: string, custom: string, pragma: string, expires: string, surrogate: string, cdn: string, debug: string}
+	 * @return array{status: int, body: string, type: string, cache: string, location: string, retry: string, stashed: string, outcome: string, reason: string, evaluated: string, autoloader: string, autoloader_file: string, autoloader_named: string, custom: string, site: string, failed_rules: string, sampled: string, mode: string, panic: string, hash: string, pragma: string, expires: string, surrogate: string, cdn: string, debug: string}
 	 */
 	private function request_with_autoloader( string $plugin, string $autoloader ): array {
 		$response = $this->request(
@@ -1250,7 +1426,7 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 	 * @param string                $path    Path to request.
 	 * @param array<string, string> $headers Request headers.
 	 *
-	 * @return array{status: int, body: string, type: string, cache: string, location: string, retry: string, stashed: string, outcome: string, reason: string, evaluated: string, autoloader: string, autoloader_file: string, autoloader_named: string, custom: string, pragma: string, expires: string, surrogate: string, cdn: string, debug: string}
+	 * @return array{status: int, body: string, type: string, cache: string, location: string, retry: string, stashed: string, outcome: string, reason: string, evaluated: string, autoloader: string, autoloader_file: string, autoloader_named: string, custom: string, site: string, failed_rules: string, sampled: string, mode: string, panic: string, hash: string, pragma: string, expires: string, surrogate: string, cdn: string, debug: string}
 	 */
 	private function request( string $path, array $headers = array() ): array {
 		$response = wp_remote_get(
@@ -1281,6 +1457,12 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 			'autoloader_file'  => (string) wp_remote_retrieve_header( $response, 'x-early-autoloader-file' ),
 			'autoloader_named' => (string) wp_remote_retrieve_header( $response, 'x-early-autoloader-named' ),
 			'custom'           => (string) wp_remote_retrieve_header( $response, 'x-early-custom-loaded' ),
+			'site'             => (string) wp_remote_retrieve_header( $response, 'x-early-site-loaded' ),
+			'failed_rules'     => (string) wp_remote_retrieve_header( $response, 'x-early-failed-rules' ),
+			'sampled'          => (string) wp_remote_retrieve_header( $response, 'x-early-failed-rules-sampled' ),
+			'mode'             => (string) wp_remote_retrieve_header( $response, 'x-early-mode' ),
+			'panic'            => (string) wp_remote_retrieve_header( $response, 'x-early-panic' ),
+			'hash'             => (string) wp_remote_retrieve_header( $response, 'x-early-compiled-hash' ),
 			'pragma'           => (string) wp_remote_retrieve_header( $response, 'pragma' ),
 			'expires'          => (string) wp_remote_retrieve_header( $response, 'expires' ),
 			'surrogate'        => (string) wp_remote_retrieve_header( $response, 'surrogate-control' ),

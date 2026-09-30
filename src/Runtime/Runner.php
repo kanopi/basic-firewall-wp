@@ -83,15 +83,26 @@ final class Runner {
 	 * itself; `outcome` the verdict it reached (`allowed`, `challenge`,
 	 * `redirect`, `blocked`, `solved`) or null; `mode` the mode the firewall
 	 * it built was actually in; `early_verdict` a verdict the wp-config.php
-	 * path handed on to it rather than answering.
+	 * path handed on to it rather than answering; `failed_rules` the rules
+	 * the firewall it built could not construct, or null when this request
+	 * did not sample them, and `failed_rules_sampled` why it did;
+	 * `panic` whether a panic file was changing that firewall's mode.
 	 *
-	 * @var array{evaluated: bool, outcome: string|null, mode: string|null, early_verdict: string|null}
+	 * @var array{evaluated: bool, outcome: string|null, mode: string|null, early_verdict: string|null, failed_rules: list<string>|null, failed_rules_sampled: string|null, panic: bool}
 	 */
-	private static array $state = array(
-		'evaluated'     => false,
-		'outcome'       => null,
-		'mode'          => null,
-		'early_verdict' => null,
+	private static array $state = self::INITIAL_STATE;
+
+	/**
+	 * The state before anything has happened to the request.
+	 */
+	private const INITIAL_STATE = array(
+		'evaluated'            => false,
+		'outcome'              => null,
+		'mode'                 => null,
+		'early_verdict'        => null,
+		'failed_rules'         => null,
+		'failed_rules_sampled' => null,
+		'panic'                => false,
 	);
 
 	/**
@@ -232,6 +243,17 @@ final class Runner {
 
 		self::$state['evaluated'] = true;
 		self::$state['mode']      = $firewall->getMode()->value;
+		self::$state['panic']     = (bool) ( $firewall->getPanicSwitch()['active'] ?? false );
+
+		/*
+		 * The rules this firewall could not construct (#41) -- sampled, not
+		 * asked on every request, because answering means building every
+		 * rule and undoing the library's lazy construction. See
+		 * Diagnostics::sample_failed_rules(). Asked before evaluating when
+		 * it is asked, since a request the library refuses ends inside
+		 * evaluate().
+		 */
+		self::sample_failed_rules( $firewall, Diagnostics::debug_enabled() ? 'debug' : null );
 
 		/*
 		 * The request is built here rather than left to the library, so that
@@ -281,15 +303,36 @@ final class Runner {
 				self::record_evaluation_failure( $e );
 
 				/*
-				 * Logged as well, every time: the failure recorded above
-				 * reaches Site Health only on the request it happened on,
-				 * which is a visitor's and never the administrator's.
+				 * Logged as well: the failure recorded above reaches Site
+				 * Health only on the request it happened on, which is a
+				 * visitor's and never the administrator's. Rate-limited per
+				 * exception and place, with a count; see warn_fail_open().
 				 */
 				Diagnostics::warn_fail_open( 'runner', $e, 'the firewall failed while evaluating the request' );
+
+				// A failure samples regardless: the cost does not matter here.
+				self::sample_failed_rules( $firewall, 'failure' );
 			}
 
 			return $allowed;
 		}
+	}
+
+	/**
+	 * Record the firewall's failed rules, when this request is one that samples.
+	 *
+	 * @param Firewall    $firewall The firewall.
+	 * @param string|null $reason   `debug` or `failure` to ask regardless, or null when the interval decides.
+	 */
+	private static function sample_failed_rules( Firewall $firewall, ?string $reason ): void {
+		if ( null !== self::$state['failed_rules_sampled'] ) {
+			return;
+		}
+
+		$sample = Diagnostics::sample_failed_rules( $firewall, $reason );
+
+		self::$state['failed_rules']         = $sample['failed_rules'];
+		self::$state['failed_rules_sampled'] = $sample['sampled'];
 	}
 
 	/**
@@ -815,12 +858,7 @@ final class Runner {
 		self::$failure_detail = '';
 		self::$marks          = array();
 		self::$exempt         = false;
-		self::$state          = array(
-			'evaluated'     => false,
-			'outcome'       => null,
-			'mode'          => null,
-			'early_verdict' => null,
-		);
+		self::$state          = self::INITIAL_STATE;
 	}
 
 	/**
@@ -830,7 +868,7 @@ final class Runner {
 	 * not finish, and `failure_detail` what it was about; `exempt` whether an
 	 * exempt role skipped evaluation.
 	 *
-	 * @return array{evaluated: bool, outcome: string|null, mode: string|null, early_verdict: string|null, failure: string|null, failure_detail: string, exempt: bool}
+	 * @return array{evaluated: bool, outcome: string|null, mode: string|null, early_verdict: string|null, failed_rules: list<string>|null, failed_rules_sampled: string|null, panic: bool, failure: string|null, failure_detail: string, exempt: bool}
 	 */
 	public static function state(): array {
 		return self::$state + array(

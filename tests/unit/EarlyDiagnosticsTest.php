@@ -138,9 +138,9 @@ final class EarlyDiagnosticsTest extends TestCase {
 	}
 
 	/**
-	 * A failure the early path fails open on is logged every time, with its origin.
+	 * A fail-open is logged at once, then at most once a minute, with a count (#41).
 	 */
-	public function test_a_fail_open_is_logged_every_time(): void {
+	public function test_a_fail_open_is_logged_once_a_minute_with_a_count(): void {
 		$options = basic_firewall_options( array( 'private_path' => $this->private ) );
 
 		$GLOBALS['basic_firewall_early'] = array(
@@ -148,15 +148,53 @@ final class EarlyDiagnosticsTest extends TestCase {
 			'evaluated' => true,
 		);
 
-		$this->assertTrue( basic_firewall_answer_outcome( new \LogicException( 'broke once' ), null, $options ) );
-		$this->assertTrue( basic_firewall_answer_outcome( new \LogicException( 'broke twice' ), null, $options ) );
+		// Thrown from one place, as a persistent failure is.
+		$broke = static fn ( string $message ): \LogicException => new \LogicException( $message );
+
+		$this->assertTrue( basic_firewall_answer_outcome( $broke( 'broke once' ), null, $options ) );
+		$this->assertTrue( basic_firewall_answer_outcome( $broke( 'broke twice' ), null, $options ), 'A held-back line refused the request.' );
+		$this->assertTrue( basic_firewall_answer_outcome( $broke( 'broke thrice' ), null, $options ) );
 
 		$logged = $this->logged();
 
-		$this->assertSame( 2, substr_count( $logged, 'Basic Firewall [warning]: fail-open (early): the firewall threw LogicException' ) );
-		$this->assertStringContainsString( '"broke twice" at ' . __FILE__ . ':', $logged );
-		$this->assertStringContainsString( 'EarlyDiagnosticsTest.php:', (string) $GLOBALS['basic_firewall_early']['failure_origin'] );
-		$this->assertSame( 'LogicException: broke twice', $GLOBALS['basic_firewall_early']['failure'] );
+		$this->assertSame( 1, substr_count( $logged, 'Basic Firewall [warning]: fail-open (early): the firewall threw LogicException' ), 'Three requests within a minute logged more than one line.' );
+		$this->assertStringContainsString( '"broke once" at ' . __FILE__ . ':', $logged, 'The first occurrence was not the one logged.' );
+		$this->assertSame( 'LogicException: broke thrice', $GLOBALS['basic_firewall_early']['failure'], 'A held-back line was not still recorded in the report.' );
+
+		$markers = (array) glob( $this->private . '/.warned-fail-open-*' );
+
+		$this->assertCount( 1, $markers, 'The interval is not remembered anywhere another process can see.' );
+
+		$state = json_decode( (string) file_get_contents( (string) $markers[0] ), true ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- the bootstrap's marker.
+
+		$this->assertSame( 2, $state['suppressed'] ?? null );
+
+		// A minute on, the next is logged, with how many were held back.
+		$aged = array(
+			'logged'     => time() - 61,
+			'suppressed' => 2,
+		);
+		$aged = (string) json_encode( $aged ); // phpcs:ignore WordPress.WP.AlternativeFunctions.json_encode_json_encode -- no WordPress in the unit suite.
+
+		file_put_contents( (string) $markers[0], $aged ); // phpcs:ignore WordPress.WP.AlternativeFunctions -- ageing the bootstrap's marker.
+
+		basic_firewall_answer_outcome( $broke( 'broke again' ), null, $options );
+
+		$lines = array_values( array_filter( explode( "\n", $this->logged() ), static fn ( string $line ): bool => str_contains( $line, 'fail-open (early)' ) ) );
+
+		$this->assertCount( 2, $lines );
+		$this->assertStringContainsString( '"broke again"', $lines[1] );
+		$this->assertMatchesRegularExpression( '/\(2 more since \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC\)$/', $lines[1], 'The line does not say how many were held back.' );
+
+		// Another exception, or the same one from elsewhere, is its own line.
+		basic_firewall_answer_outcome( new \RuntimeException( 'something else' ), null, $options );
+
+		$this->assertSame( 3, substr_count( $this->logged(), 'fail-open (early)' ) );
+
+		// And with no interval, every time.
+		basic_firewall_answer_outcome( $broke( 'unthrottled' ), null, array( 'fail_open_interval' => 0 ) + $options );
+
+		$this->assertSame( 4, substr_count( $this->logged(), 'fail-open (early)' ) );
 	}
 
 	/**
@@ -182,6 +220,143 @@ final class EarlyDiagnosticsTest extends TestCase {
 		$this->assertStringNotContainsString( '/srv/site', $json );
 		$this->assertStringNotContainsString( 'something private', $json );
 		$this->assertFalse( basic_firewall_debug_enabled(), 'BASIC_FIREWALL_DEBUG is on by default.' );
+	}
+
+	/**
+	 * Rules the firewall could not construct are named, without their messages (#41).
+	 */
+	public function test_failed_rules_are_named_without_messages(): void {
+		$firewall = new class() {
+			/**
+			 * What the library answers.
+			 *
+			 * @return list<array{bucket: string, plugin: string, error: string}>
+			 */
+			public function getFailedRules(): array { // phpcs:ignore WordPress.NamingConventions.ValidFunctionName.MethodNameInvalid -- the library's method name.
+				return array(
+					array(
+						'bucket' => 'block',
+						'plugin' => 'Kanopi\\BasicFirewall\\Vendor\\Kanopi\\Firewall\\Plugins\\Reputation:0',
+						'error'  => 'could not reach https://user:secret@reputation.internal',
+					),
+					array(
+						'bucket' => 'challenge',
+						'plugin' => 'RateLimit:2',
+						'error'  => 'no storage',
+					),
+				);
+			}
+		};
+
+		$this->assertSame( array( 'block/Reputation:0', 'challenge/RateLimit:2' ), basic_firewall_failed_rules( $firewall ) );
+
+		// A library copy too old to say, and one whose answer throws, cannot say.
+		$this->assertNull( basic_firewall_failed_rules( new \stdClass() ) );
+		$this->assertNull(
+			basic_firewall_failed_rules(
+				new class() {
+					/**
+					 * Fail the way a constructor throwing an Error would.
+					 *
+					 * @throws \TypeError Always.
+					 */
+					public function getFailedRules(): array { // phpcs:ignore WordPress.NamingConventions.ValidFunctionName.MethodNameInvalid -- the library's method name. // phpcs:ignore WordPress.NamingConventions.ValidFunctionName.MethodNameInvalid -- the library's method name.
+						throw new \TypeError( 'metadata must be of type array' );
+					}
+				}
+			)
+		);
+
+		// The debug report carries the names, and never a message.
+		$GLOBALS['basic_firewall_early'] = array(
+			'called'       => true,
+			'evaluated'    => true,
+			'failed_rules' => basic_firewall_failed_rules( $firewall ),
+		);
+
+		$report = basic_firewall_debug_report();
+
+		$this->assertSame( array( 'block/Reputation:0', 'challenge/RateLimit:2' ), $report['failed_rules'] );
+		$this->assertStringNotContainsString( 'secret', (string) json_encode( $report ) ); // phpcs:ignore WordPress.WP.AlternativeFunctions.json_encode_json_encode -- no WordPress in the unit suite.
+
+		// Null, not an empty list, when this path built no firewall.
+		$GLOBALS['basic_firewall_early'] = array( 'called' => true );
+
+		$this->assertNull( basic_firewall_debug_report()['failed_rules'] );
+	}
+
+	/**
+	 * The early path samples failed rules, rather than asking on every request (#41).
+	 *
+	 * Asking builds every rule, undoing the library's lazy construction, so
+	 * an ordinary request with no sample due must never ask.
+	 */
+	public function test_failed_rules_are_sampled_on_the_early_path(): void {
+		$options  = basic_firewall_options( array( 'private_path' => $this->private ) );
+		$firewall = new class() {
+			/**
+			 * How many times the library was asked.
+			 *
+			 * @var int
+			 */
+			public int $asked = 0;
+
+			/**
+			 * Count the question.
+			 *
+			 * @return list<array{bucket: string, plugin: string, error: string}>
+			 */
+			public function getFailedRules(): array { // phpcs:ignore WordPress.NamingConventions.ValidFunctionName.MethodNameInvalid -- the library's method name.
+				++$this->asked;
+
+				return array(
+					array(
+						'bucket' => 'block',
+						'plugin' => 'Url:0',
+						'error'  => 'broken',
+					),
+				);
+			}
+		};
+
+		// The throttle lets the first request through.
+		$GLOBALS['basic_firewall_early'] = array( 'called' => true );
+
+		$this->assertTrue( basic_firewall_sample_failed_rules( $firewall, $options ) );
+		$this->assertSame( array( 'block/Url:0' ), $GLOBALS['basic_firewall_early']['failed_rules'] );
+		$this->assertSame( 'interval', $GLOBALS['basic_firewall_early']['failed_rules_sampled'] );
+		$this->assertFileExists( $this->private . '/.sampled-failed-rules-early' );
+
+		// Ordinary requests within the interval never ask.
+		for ( $i = 0; $i < 5; $i++ ) {
+			$GLOBALS['basic_firewall_early'] = array( 'called' => true );
+
+			$this->assertFalse( basic_firewall_sample_failed_rules( $firewall, $options ) );
+			$this->assertNull( $GLOBALS['basic_firewall_early']['failed_rules'] );
+			$this->assertNull( $GLOBALS['basic_firewall_early']['failed_rules_sampled'] );
+		}
+
+		$this->assertSame( 1, $firewall->asked, 'An ordinary request built every rule to ask.' );
+		$this->assertNull( basic_firewall_debug_report()['failed_rules'] );
+
+		// Debug and a failure ask regardless -- once per request.
+		$this->assertTrue( basic_firewall_sample_failed_rules( $firewall, $options, 'failure' ) );
+		$this->assertFalse( basic_firewall_sample_failed_rules( $firewall, $options, 'failure' ), 'One request asked twice.' );
+		$this->assertSame( 'failure', basic_firewall_debug_report()['failed_rules_sampled'] );
+
+		$GLOBALS['basic_firewall_early'] = array( 'called' => true );
+
+		$this->assertTrue( basic_firewall_sample_failed_rules( $firewall, $options, 'debug' ) );
+		$this->assertSame( 3, $firewall->asked );
+
+		// Once the interval has passed, the next ordinary request asks.
+		touch( $this->private . '/.sampled-failed-rules-early', time() - 61 ); // phpcs:ignore WordPress.WP.AlternativeFunctions -- ageing the marker.
+		clearstatcache();
+
+		$GLOBALS['basic_firewall_early'] = array( 'called' => true );
+
+		$this->assertTrue( basic_firewall_sample_failed_rules( $firewall, $options ) );
+		$this->assertSame( 4, $firewall->asked );
 	}
 
 	/**

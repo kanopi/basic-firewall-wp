@@ -120,7 +120,7 @@ TXT;
 			);
 		}
 
-		$this->record_meta( $compiler, $problems, $compiled );
+		$this->record_meta( $compiler, $problems, $compiled, $yaml );
 		$this->write_runtime( $compiler->runtime() );
 
 		/**
@@ -218,8 +218,9 @@ TXT;
 	 * @param Config_Compiler      $compiler The compile.
 	 * @param list<string>         $problems Problems encountered.
 	 * @param array<string, mixed> $compiled What was written, advanced YAML included.
+	 * @param string               $yaml     The file's contents, exactly as written.
 	 */
-	private function record_meta( Config_Compiler $compiler, array $problems, array $compiled = array() ): void {
+	private function record_meta( Config_Compiler $compiler, array $problems, array $compiled = array(), string $yaml = '' ): void {
 		$connection_paths = $compiler->connection_paths();
 
 		$this->write_connection_paths( $connection_paths );
@@ -251,6 +252,18 @@ TXT;
 				 * when no challenge is compiled.
 				 */
 				'pass_cookie'        => self::compiled_pass_cookie( $compiled ),
+
+				/*
+				 * What was written, for Diagnostics to compare each web
+				 * request's view of the file against (#41). The compile may
+				 * run in one container and every web request in others; a
+				 * web container reading a file whose hash is not this one is
+				 * reading a stale copy. The mode is the file's own, after the
+				 * advanced YAML and BASIC_FIREWALL_MODE have had their say,
+				 * which is the mode a firewall built from it should be in.
+				 */
+				'hash'               => '' === $yaml ? null : substr( hash( 'sha256', $yaml ), 0, 12 ),
+				'mode'               => is_string( $compiled['global']['mode'] ?? null ) ? $compiled['global']['mode'] : null,
 			),
 			false
 		);

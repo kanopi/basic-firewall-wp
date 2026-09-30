@@ -326,6 +326,10 @@ final class Commands {
 				'value'   => Diagnostics::summary( Diagnostics::last_anomaly() ),
 			),
 			array(
+				'setting' => 'Failed rules (last sample)',
+				'value'   => Diagnostics::sample_summary( Diagnostics::last_sample() ),
+			),
+			array(
 				'setting' => 'Proxy posture',
 				'value'   => $this->proxy_summary(),
 			),
@@ -364,9 +368,12 @@ final class Commands {
 	 * WP-CLI is not a web request: on a host that runs it in its own
 	 * container, it is not even the same machine. The runner saves a report
 	 * from each web request that reaches WordPress -- the last one, and the
-	 * last anomalous one (a fail-open, an early path that did not evaluate,
-	 * a verdict handed on instead of answered) -- and this prints both in
-	 * full. Nothing in them is secret: no query strings, cookies or client
+	 * last anomalous one (a fail-open, a verdict handed on instead of
+	 * answered, rules a firewall could not construct, an early path that did
+	 * not evaluate, a mode or compiled file that does not match the last
+	 * compile) -- and this prints both in full, with the latest sample of
+	 * the rules each path could not construct (sampled at most once a minute
+	 * per container, since asking builds every rule). Nothing in them is secret: no query strings, cookies or client
 	 * addresses.
 	 *
 	 * ## OPTIONS
@@ -392,8 +399,13 @@ final class Commands {
 	 */
 	public function early_report( array $args, array $assoc_args ): void {
 		$reports = array(
-			'last_request' => Diagnostics::last(),
-			'last_anomaly' => Diagnostics::last_anomaly(),
+			'last_request'        => Diagnostics::last(),
+			'last_anomaly'        => Diagnostics::last_anomaly(),
+
+			// Most requests do not ask for failed rules, so a report's
+			// `failed_rules: null` means "not sampled"; this is the latest
+			// answer from each path.
+			'failed_rules_sample' => Diagnostics::last_sample(),
 		);
 
 		if ( 'yaml' === ( $assoc_args['format'] ?? 'json' ) ) {
