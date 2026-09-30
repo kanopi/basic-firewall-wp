@@ -9,6 +9,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **The rule screen warns about a rate-limit line that can never run**
+  because an earlier line in the same rule covers it (`/log*` before
+  `/login`, `/login` before `/LOGIN`), naming the line that takes its
+  requests: the cases `firewall-check --lint` reports from 2.35.1. The rule
+  still saves.
+
 - **The "verification cookie did not come back" notice in `block` mode**
   (#46). A visitor challenged within two minutes of solving a challenge,
   carrying the `<cookie_name>_solved` marker but not the pass, is told why, as
@@ -113,6 +119,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **The rate-limit pairing check judges coverage by the line that runs**, as
+  `firewall-check --lint` does from kanopi/firewall 2.35.1. On save and in
+  Site Health, an identity-keyed line that an earlier line in its rule covers
+  is no longer reported as unpaired (it never runs); a companion is the line
+  of another enabled rule that actually takes the request, found with the
+  library's `RateLimit::patternToRegex()`; paths are compared without regard
+  to case; and a disabled rule never counts as coverage.
 - **WordPress in its own directory: presets fire, and Site Health flags only
   the site's own rules** (#45). kanopi/firewall 2.35.0 made `wordpress.yml`
   and `search-bots.yml` match WordPress's paths at any depth, so the crawler

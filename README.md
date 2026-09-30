@@ -1507,11 +1507,26 @@ two lines for `/wp-login.php` in the same rule leave the second doing nothing:
 /wp-login.php 50 300
 ```
 
-The screen refuses the same pattern twice in one rule for that reason. (The
-library's own documentation shows the pair as two entries in one list, and its
-linter accepts that; both are wrong about what the evaluator does.) The pairing
-check compares patterns as written, so `/wp-*` in another rule is not recognised
-as covering `/wp-login.php` even where it would.
+The screen refuses the same pattern twice in one rule for that reason, and
+warns (and saves) when a line can never run because an earlier line in the same
+rule covers it: `/log*` before `/login`, `/api*` before `/api/v1/*`, or
+`/login` before `/LOGIN`, since patterns ignore case. The warning names the line
+that takes the requests. Patterns written as a regular expression are left
+alone, because whether one arbitrary regex covers another cannot be decided.
+These are the same cases `firewall-check --lint` reports from kanopi/firewall
+2.35.1, asked of the library's own pattern matcher
+(`RateLimit::patternToRegex()`), so the two cannot disagree.
+
+The pairing check (on save and in Site Health) judges coverage the way the
+library does since 2.35.1: by the line that actually runs. A line an earlier one
+covers neither needs a companion nor counts as one; a companion is the line of
+another **enabled** rule that takes the request, so a switched-off address
+limit no longer silences the warning; and paths are compared without regard to
+case, so `/LOGIN` in another rule pairs `/login`. For an exact path the check
+asks which line of the other rule matches it first, so an address-keyed
+`/wp-*` in another rule is recognised as covering `/wp-login.php` (the library's
+lint, which compares paths as written, still warns about that one). A wildcard
+or regex pattern is paired only by the same pattern.
 
 It also counts every attempt against the named account from anywhere, which
 means anyone can spend that account's budget for it: five failed logins as

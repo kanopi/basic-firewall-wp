@@ -846,19 +846,130 @@ final class Rate_Limit extends Rule_Type_Base {
 	}
 
 	/**
+	 * The earlier pattern that stops this one from ever running, if one certainly does.
+	 *
+	 * A rate limit uses the first line whose pattern matches, so a later line
+	 * never runs when an earlier pattern matches every path it covers. The
+	 * rules are the library's lint's (`ConfigLinter::shadowedBy()`,
+	 * kanopi/firewall 2.35.1), so the rule screen and `firewall-check --lint`
+	 * agree, and reported only where that is certain:
+	 *
+	 * - a later exact path is covered by any earlier exact or wildcard
+	 *   pattern that matches it, tested with the regex the limit itself runs
+	 *   (`/log*` before `/login`, and `/login` before `/LOGIN`, since patterns
+	 *   ignore case);
+	 * - a later wildcard is covered by an earlier identical one, ignoring
+	 *   case, or an earlier single trailing `*` whose prefix it starts with
+	 *   (`/api*` before `/api/v1/*`);
+	 * - a pattern written as a regular expression is left alone on either
+	 *   side: whether one arbitrary regex covers another cannot be decided.
+	 *
+	 * @param string       $pattern The line's pattern.
+	 * @param list<string> $earlier The patterns before it in the same rule.
+	 */
+	public static function shadowed_by( string $pattern, array $earlier ): ?string {
+		if ( self::is_regex_pattern( $pattern ) ) {
+			return null;
+		}
+
+		foreach ( $earlier as $candidate ) {
+			if ( self::is_regex_pattern( $candidate ) ) {
+				continue;
+			}
+
+			if ( ! str_contains( $pattern, '*' ) ) {
+				if ( self::pattern_matches( $candidate, $pattern ) ) {
+					return $candidate;
+				}
+
+				continue;
+			}
+
+			if ( 0 === strcasecmp( $candidate, $pattern ) ) {
+				return $candidate;
+			}
+
+			$prefix = strtolower( substr( $candidate, 0, -1 ) );
+
+			if ( 1 === substr_count( $candidate, '*' ) && str_ends_with( $candidate, '*' ) && str_starts_with( strtolower( $pattern ), $prefix ) ) {
+				return $candidate;
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * The lines of a rule that can never run, each with the line that takes its requests.
+	 *
+	 * @param array<string, mixed> $settings Rule settings.
+	 *
+	 * @return list<array{pattern: string, shadow: string}>
+	 */
+	public static function unreachable_limits( array $settings ): array {
+		$unreachable = array();
+		$earlier     = array();
+
+		foreach ( self::limits( $settings ) as $limit ) {
+			$shadow    = self::shadowed_by( $limit['pattern'], $earlier );
+			$earlier[] = $limit['pattern'];
+
+			if ( null !== $shadow ) {
+				$unreachable[] = array(
+					'pattern' => $limit['pattern'],
+					'shadow'  => $shadow,
+				);
+			}
+		}
+
+		return $unreachable;
+	}
+
+	/**
+	 * The lines of a rule that run: those no earlier line in the same rule covers.
+	 *
+	 * @param array<string, mixed> $settings Rule settings.
+	 *
+	 * @return list<array{pattern: string, limit: int, window: int, key: list<string>}>
+	 */
+	private static function reachable_limits( array $settings ): array {
+		$reachable = array();
+		$earlier   = array();
+
+		foreach ( self::limits( $settings ) as $limit ) {
+			$shadow    = self::shadowed_by( $limit['pattern'], $earlier );
+			$earlier[] = $limit['pattern'];
+
+			if ( null === $shadow ) {
+				$reachable[] = $limit;
+			}
+		}
+
+		return $reachable;
+	}
+
+	/**
 	 * Identity-keyed limits with no address-keyed limit beside them.
 	 *
-	 * The pairing the library's documentation asks for, checked the way the
-	 * library actually evaluates: a companion has to be in a *different* rate
-	 * limit rule, because within one rule only the first matching line is
-	 * used. An address-keyed line on the same pattern in the same rule is
-	 * never reached, and pairing with it would be pairing with nothing.
+	 * The pairing the library's documentation asks for, judged the way the
+	 * library's lint judges it as of kanopi/firewall 2.35.1:
 	 *
-	 * The pattern has to be the same, written the same way. `/wp-*` in another
-	 * rule does cover `/wp-login.php`, but proving that one pattern covers
-	 * another is a question with enough edge cases to be wrong in both
-	 * directions, and a warning that is occasionally too cautious is the
-	 * cheaper mistake.
+	 * - **By the line that runs.** Within one rule only the first line whose
+	 *   pattern matches is used, so a line an earlier one covers never runs:
+	 *   it neither needs a companion nor counts as one (the rule screen
+	 *   reports it as unreachable instead). A companion therefore has to be in
+	 *   a different rule, and for an exact path it is whichever line of that
+	 *   rule actually takes the request -- asked of the limit's own matcher,
+	 *   `RateLimit::patternToRegex()` -- so `/wp-*` in another rule, keyed by
+	 *   address, covers `/wp-login.php`, while an address line behind a
+	 *   `/wp-*` that counts something else does not. A wildcard or regex
+	 *   pattern is paired only by the same pattern, since whether one covers
+	 *   another is not decidable in general.
+	 * - **Ignoring case.** Rate limit patterns ignore case (2.35.0), so
+	 *   `/login` in one rule and `/LOGIN` in another are one path.
+	 * - **Enabled rules only.** A switched-off rule limits nothing, so it
+	 *   covers nothing; switching the address limit off while debugging must
+	 *   not silence the warning that brute-force protection is gone.
 	 *
 	 * @param array<int|string, mixed> $rules Every stored rule.
 	 *
@@ -872,7 +983,7 @@ final class Rate_Limit extends Rule_Type_Base {
 				continue;
 			}
 
-			$by_rule[ (string) ( $rule['id'] ?? '' ) ] = self::limits( (array) ( $rule['settings'] ?? array() ) );
+			$by_rule[ (string) ( $rule['id'] ?? '' ) ] = self::reachable_limits( (array) ( $rule['settings'] ?? array() ) );
 		}
 
 		$unpaired = array();
@@ -890,12 +1001,12 @@ final class Rate_Limit extends Rule_Type_Base {
 						continue;
 					}
 
-					foreach ( $others as $candidate ) {
-						if ( $candidate['pattern'] === $limit['pattern'] && ! self::counts_an_identity( $candidate['key'] ) ) {
-							$paired = true;
+					$runs = self::line_that_runs( $limit['pattern'], $others );
 
-							break 2;
-						}
+					if ( null !== $runs && ! self::counts_an_identity( $runs['key'] ) ) {
+						$paired = true;
+
+						break;
 					}
 				}
 
@@ -906,6 +1017,29 @@ final class Rate_Limit extends Rule_Type_Base {
 		}
 
 		return $unpaired;
+	}
+
+	/**
+	 * The line of a rule that takes the requests a pattern names, if that can be said.
+	 *
+	 * For an exact path, the first line whose pattern matches it. For a
+	 * wildcard or a regular expression, the same pattern, ignoring case.
+	 *
+	 * @param string                                                                   $pattern The pattern asked about.
+	 * @param list<array{pattern: string, limit: int, window: int, key: list<string>}> $limits  Another rule's lines that run, in order.
+	 *
+	 * @return array{pattern: string, limit: int, window: int, key: list<string>}|null
+	 */
+	private static function line_that_runs( string $pattern, array $limits ): ?array {
+		$exact = ! str_contains( $pattern, '*' ) && ! self::is_regex_pattern( $pattern );
+
+		foreach ( $limits as $limit ) {
+			if ( $exact ? self::pattern_matches( $limit['pattern'], $pattern ) : 0 === strcasecmp( $limit['pattern'], $pattern ) ) {
+				return $limit;
+			}
+		}
+
+		return null;
 	}
 
 	/**
@@ -925,6 +1059,29 @@ final class Rate_Limit extends Rule_Type_Base {
 		 */
 		if ( array() !== $keyed && ! ( new \Kanopi\BasicFirewall\Library_Capabilities() )->has_composable_rate_limit_key() ) {
 			$problems[] = __( 'Some limits here name what to count, which the installed firewall library cannot do. They count the client address instead. Needs kanopi/firewall 2.27.0 or later.', 'basic-firewall' );
+		}
+
+		/*
+		 * A warning, as `firewall-check --lint` gives it, rather than a
+		 * refusal: the rule works, the line just does nothing. An identical
+		 * pattern is still refused when the rule is saved (validate_settings());
+		 * this catches the ones that differ only in case, or that an earlier
+		 * wildcard takes.
+		 */
+		foreach ( self::unreachable_limits( $settings ) as $unreachable ) {
+			$problems[] = 0 === strcasecmp( $unreachable['pattern'], $unreachable['shadow'] )
+				? sprintf(
+					/* translators: 1: the unreachable pattern, 2: the earlier pattern. */
+					__( 'The line for %1$s never runs: %2$s comes first, and patterns ignore case, so they are the same path. Only the first line whose pattern matches a request is used. Remove one, or put the second limit in a rate limit rule of its own.', 'basic-firewall' ),
+					$unreachable['pattern'],
+					$unreachable['shadow']
+				)
+				: sprintf(
+					/* translators: 1: the unreachable pattern, 2: the earlier pattern. */
+					__( 'The line for %1$s never runs, because %2$s comes first and matches every request it would. Only the first line whose pattern matches a request is used. Put %1$s before %2$s, or in a rate limit rule of its own.', 'basic-firewall' ),
+					$unreachable['pattern'],
+					$unreachable['shadow']
+				);
 		}
 
 		return $problems;
