@@ -32,6 +32,7 @@ use PHPUnit\Framework\TestCase;
 final class UninstallLeftoversTest extends TestCase {
 
 	use Uninstall_Harness;
+	use Test_Services;
 
 	/**
 	 * A scratch directory for this test, outside the site.
@@ -326,11 +327,10 @@ final class UninstallLeftoversTest extends TestCase {
 	/**
 	 * The Redis block list and rate limit counters are deleted by prefix, and nothing else.
 	 *
-	 * Needs a Redis server. Point BASIC_FIREWALL_TEST_REDIS at one as
-	 * `host:port`; it defaults to 127.0.0.1:6379 and the test skips when
-	 * nothing answers, which is the case in the DDEV site this suite usually
-	 * runs in (ext-redis is loaded, no server is). Every key it writes carries
-	 * a random prefix, so a shared server is safe to use.
+	 * Needs a Redis server: see Test_Services::redis_server(). CI runs one;
+	 * the DDEV site this suite usually runs in has ext-redis and no server, so
+	 * it skips there unless BASIC_FIREWALL_TEST_REDIS points at one. Every key
+	 * it writes carries a random prefix, so a shared server is safe to use.
 	 */
 	public function test_redis_keys_under_the_plugins_prefixes_are_deleted(): void {
 		list( $host, $port ) = $this->redis_server();
@@ -437,9 +437,7 @@ final class UninstallLeftoversTest extends TestCase {
 	 * The plugin's APCu entries are deleted, and no others.
 	 */
 	public function test_apcu_entries_are_deleted(): void {
-		if ( ! function_exists( 'apcu_enabled' ) || ! apcu_enabled() ) {
-			$this->markTestSkipped( 'APCu is not enabled in this SAPI (apc.enable_cli is usually off).' );
-		}
+		$this->requires_apcu();
 
 		apcu_store( 'basic_firewall_agents:bfwtest', 'cached' );
 		apcu_store( 'bfwtest_other:bfwtest', 'cached' );
@@ -456,9 +454,7 @@ final class UninstallLeftoversTest extends TestCase {
 	 * On a network, every site is visited.
 	 */
 	public function test_every_site_of_a_network_is_uninstalled(): void {
-		if ( ! is_multisite() ) {
-			$this->markTestSkipped( 'Not a multisite install.' );
-		}
+		$this->requires_multisite();
 
 		$sites = array_map(
 			'intval',
@@ -582,38 +578,6 @@ final class UninstallLeftoversTest extends TestCase {
 		}
 
 		$this->fail( sprintf( "Uninstall left %s without saying so. It said:\n%s", $needle, implode( "\n", $notes ) ) );
-	}
-
-	/**
-	 * The Redis server to test against, or skip.
-	 *
-	 * @return array{0: string, 1: int}
-	 */
-	private function redis_server(): array {
-		if ( ! class_exists( 'Redis' ) ) {
-			$this->markTestSkipped( 'ext-redis is not loaded.' );
-		}
-
-		$spec = getenv( 'BASIC_FIREWALL_TEST_REDIS' );
-		$spec = is_string( $spec ) && '' !== $spec ? $spec : '127.0.0.1:6379';
-
-		$parts = explode( ':', $spec, 2 );
-		$host  = $parts[0];
-		$port  = isset( $parts[1] ) && (int) $parts[1] > 0 ? (int) $parts[1] : 6379;
-
-		try {
-			$probe = new \Redis();
-
-			if ( ! $probe->connect( $host, $port, 0.5 ) || ! $probe->ping() ) {
-				$this->markTestSkipped( sprintf( 'No Redis server answered at %s:%d. Set BASIC_FIREWALL_TEST_REDIS to host:port to run this.', $host, $port ) );
-			}
-
-			$probe->close();
-		} catch ( \RedisException $e ) {
-			$this->markTestSkipped( sprintf( 'No Redis server answered at %s:%d (%s). Set BASIC_FIREWALL_TEST_REDIS to host:port to run this.', $host, $port, $e->getMessage() ) );
-		}
-
-		return array( $host, $port );
 	}
 
 	/**

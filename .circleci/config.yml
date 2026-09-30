@@ -14,6 +14,11 @@ PHP_TOOLS: &PHP_TOOLS "8.3"
 
 MYSQL_IMAGE: &MYSQL_IMAGE "cimg/mysql:8.0"
 
+# A live Redis for the Redis block list, the rate-limit counters and
+# uninstall's SCAN/DEL, which otherwise only ever ran against nothing and
+# skipped. Unauthenticated: nothing but the job can reach it.
+REDIS_IMAGE: &REDIS_IMAGE "cimg/redis:7.2"
+
 # Release tags: 1.0.0, v1.0.0, and pre-releases such as 1.1.0-rc.1.
 #
 # CircleCI does not run a job for a tag unless that job carries a tag filter,
@@ -133,34 +138,102 @@ jobs:
         environment:
           MYSQL_ROOT_PASSWORD: << pipeline.parameters.db_password >>
           MYSQL_DATABASE: wordpress_test
+      - image: *REDIS_IMAGE
     parameters:
       php:
         type: string
       wordpress:
         type: string
+
+      # ext-redis and ext-apcu, which the cimg/php images do not carry, with
+      # APCu switched on for the CLI. Not in every cell on purpose: a few
+      # tests assert what happens WITHOUT them (Redis refused on the Storage
+      # screen, APCu reported critical by Site Health), and an extension
+      # cannot be unloaded mid-run. So the cells that install them run the
+      # live Redis and APCu tests, and the ones that do not run the absence
+      # tests -- and each side declares itself, so a test that should have
+      # run fails instead of skipping (see tests/integration/Test_Services).
+      extensions:
+        type: boolean
+        default: false
+
+      # A subdirectory network with a second site, the plugin network-
+      # activated, and BASIC_FIREWALL_MULTISITE=1 so the network tests are
+      # required to run and the single-site assertions step aside.
+      multisite:
+        type: boolean
+        default: false
     steps:
       - checkout
       - composer_install:
           php: << parameters.php >>
       - install_wp_cli
+      - when:
+          condition: << parameters.extensions >>
+          steps:
+            - run:
+                name: Install ext-redis and ext-apcu
+                command: |
+                  sudo pecl channel-update pecl.php.net
+                  # pecl asks about optional features; the defaults are fine.
+                  printf '\n\n\n\n\n\n\n\n\n\n' | sudo pecl install -f redis
+                  printf '\n\n\n\n' | sudo pecl install -f apcu
+                  # pecl enables both in the image's scanned ini; APCu is off
+                  # in the CLI by default, which is where PHPUnit runs.
+                  echo 'apc.enable_cli=1' | sudo tee /etc/php.d/zz-apcu-cli.ini
+                  php -m | grep -qx redis
+                  php -r 'exit( function_exists( "apcu_enabled" ) && apcu_enabled() ? 0 : 1 );'
+                  echo 'export BASIC_FIREWALL_TEST_REDIS=127.0.0.1:6379' >> "$BASH_ENV"
+                  echo 'export BASIC_FIREWALL_TEST_APCU=1' >> "$BASH_ENV"
+            - run:
+                name: Wait for Redis
+                command: dockerize -wait tcp://127.0.0.1:6379 -timeout 1m
       - run:
           name: Wait for MySQL
           command: dockerize -wait tcp://127.0.0.1:3306 -timeout 2m
       - run:
-          name: Install WordPress << parameters.wordpress >>
+          name: Download WordPress << parameters.wordpress >>
           command: |
             wp core download --version=<< parameters.wordpress >> --path=/tmp/wp --allow-root
             wp config create --path=/tmp/wp --dbname=wordpress_test --dbuser=root \
               --dbpass='<< pipeline.parameters.db_password >>' --dbhost=127.0.0.1 --allow-root
-            wp core install --path=/tmp/wp --url=http://localhost:8080 \
-              --title=CI --admin_user=admin --admin_password=password \
-              --admin_email=ci@example.com --skip-email --allow-root
-      - run:
-          name: Link the plugin into the site
-          command: |
-            mkdir -p /tmp/wp/wp-content/plugins
-            ln -s "$PWD" /tmp/wp/wp-content/plugins/basic-firewall
-            wp plugin activate basic-firewall --path=/tmp/wp --allow-root
+      - unless:
+          condition: << parameters.multisite >>
+          steps:
+            - run:
+                name: Install WordPress
+                command: |
+                  wp core install --path=/tmp/wp --url=http://localhost:8080 \
+                    --title=CI --admin_user=admin --admin_password=password \
+                    --admin_email=ci@example.com --skip-email --allow-root
+            - run:
+                name: Link the plugin into the site
+                command: |
+                  mkdir -p /tmp/wp/wp-content/plugins
+                  ln -s "$PWD" /tmp/wp/wp-content/plugins/basic-firewall
+                  wp plugin activate basic-firewall --path=/tmp/wp --allow-root
+      - when:
+          condition: << parameters.multisite >>
+          steps:
+            - run:
+                name: Install a WordPress network
+                # The URL the end-to-end suite requests: a network answers only
+                # the domain it was installed on, so it cannot be localhost
+                # here and 127.0.0.1 there as a single site can.
+                command: |
+                  wp core multisite-install --path=/tmp/wp --url=http://127.0.0.1:8080 \
+                    --title=CI --admin_user=admin --admin_password=password \
+                    --admin_email=ci@example.com --skip-email --allow-root
+                  wp site create --path=/tmp/wp --slug=second --title=Second --allow-root
+                  wp site list --path=/tmp/wp --fields=blog_id,url --allow-root
+                  echo 'export BASIC_FIREWALL_MULTISITE=1' >> "$BASH_ENV"
+            - run:
+                name: Link the plugin into the network and network-activate it
+                command: |
+                  mkdir -p /tmp/wp/wp-content/plugins
+                  ln -s "$PWD" /tmp/wp/wp-content/plugins/basic-firewall
+                  wp plugin activate basic-firewall --network --path=/tmp/wp --allow-root
+                  test -f /tmp/wp/wp-content/mu-plugins/basic-firewall-loader.php
       - run:
           name: Integration tests
           command: |
@@ -367,21 +440,37 @@ workflows:
           name: integration-wp6.4-php8.1
           filters: *RELEASE_TAGS
 
-      # Current WordPress on current PHP.
+      # Current WordPress on current PHP, with Redis and APCu live.
       - integration:
           matrix:
             parameters:
               php: ["8.3"]
               wordpress: ["latest"]
+          extensions: true
           name: integration-wplatest-php8.3
           filters: *RELEASE_TAGS
 
+      # The same cell as a multisite network: the early path stepping aside,
+      # the network-wide mu-loader, Site Health on a network, and uninstall
+      # visiting every site (#43).
+      - integration:
+          matrix:
+            parameters:
+              php: ["8.3"]
+              wordpress: ["latest"]
+          extensions: true
+          multisite: true
+          name: integration-multisite-wplatest-php8.3
+          filters: *RELEASE_TAGS
+
       # Next WordPress, so a break is found before a release rather than after.
+      # Redis and APCu live here too, so they are proved on two PHP versions.
       - integration:
           matrix:
             parameters:
               php: ["8.4"]
               wordpress: ["nightly"]
+          extensions: true
           name: integration-wpnightly-php8.4
           filters: *RELEASE_TAGS
 
@@ -417,6 +506,7 @@ workflows:
             - unit-php-8.5
             - integration-wp6.4-php8.1
             - integration-wplatest-php8.3
+            - integration-multisite-wplatest-php8.3
             - integration-wpnightly-php8.4
             - integration-wpnightly-php8.5
             - package
