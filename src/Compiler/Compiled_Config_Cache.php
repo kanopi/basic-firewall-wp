@@ -11,6 +11,7 @@ namespace Kanopi\BasicFirewall\Compiler;
 
 use Kanopi\BasicFirewall\Challenge\Pass_Cookie;
 use Kanopi\BasicFirewall\Plugin;
+use Kanopi\BasicFirewall\Redis_Password;
 use Kanopi\BasicFirewall\Transfer\Secret_Paths;
 use Symfony\Component\Yaml\Yaml;
 
@@ -222,13 +223,24 @@ TXT;
 	 */
 	private function record_meta( Config_Compiler $compiler, array $problems, array $compiled = array(), string $yaml = '' ): void {
 		$connection_paths = $compiler->connection_paths();
+		$redis_auth_paths = $compiler->redis_auth_paths();
 
 		$this->write_connection_paths( $connection_paths );
+		$this->write_redis_auth_paths( $redis_auth_paths );
 
 		update_option(
 			self::META_OPTION,
 			array(
 				'connection_paths'   => $connection_paths,
+
+				/*
+				 * Where BASIC_FIREWALL_REDIS_PASSWORD belongs, and whether it
+				 * was defined when the file was written -- which is whether
+				 * the file holds a Redis password or leaves it to be
+				 * injected. Site Health compares that with now.
+				 */
+				'redis_auth_paths'   => $redis_auth_paths,
+				'redis_constant'     => Redis_Password::is_overridden(),
 
 				/*
 				 * Where the object cache belongs, if the site chose it. Kept in
@@ -314,6 +326,33 @@ TXT;
 	}
 
 	/**
+	 * Mirror the Redis auth paths into the private directory.
+	 *
+	 * For the wp-config.php path, which injects BASIC_FIREWALL_REDIS_PASSWORD
+	 * at these paths and cannot read the option. Paths and ACL usernames only,
+	 * never a password. Removed when there is no Redis connection.
+	 *
+	 * @param array<string, string> $paths Property-access path => username.
+	 */
+	private function write_redis_auth_paths( array $paths ): void {
+		$path = Plugin::instance()->paths()->redis_auth_paths_file();
+
+		if ( array() === $paths ) {
+			if ( file_exists( $path ) ) {
+				wp_delete_file( $path );
+			}
+
+			return;
+		}
+
+		$json = wp_json_encode( $paths );
+
+		if ( is_string( $json ) ) {
+			$this->write_atomically( $path, $json );
+		}
+	}
+
+	/**
 	 * Mirror what the wp-config.php path needs into the runtime sidecar.
 	 *
 	 * Only after the compiled file itself was written, so the two always
@@ -383,6 +422,31 @@ TXT;
 		$paths = $this->meta()['connection_paths'] ?? array();
 
 		return is_array( $paths ) ? array_values( array_map( 'strval', $paths ) ) : array();
+	}
+
+	/**
+	 * Where a Redis password belongs, with the username that goes with it.
+	 *
+	 * @return array<string, string>
+	 */
+	public function redis_auth_paths(): array {
+		$paths = $this->meta()['redis_auth_paths'] ?? array();
+		$clean = array();
+
+		foreach ( is_array( $paths ) ? $paths : array() as $path => $username ) {
+			if ( is_string( $path ) && '' !== $path ) {
+				$clean[ $path ] = is_string( $username ) ? $username : '';
+			}
+		}
+
+		return $clean;
+	}
+
+	/**
+	 * Whether the file in force was written while the Redis password constant was defined.
+	 */
+	public function compiled_with_redis_constant(): bool {
+		return true === ( $this->meta()['redis_constant'] ?? false );
 	}
 
 	/**
@@ -483,7 +547,7 @@ TXT;
 			wp_delete_file( $path );
 		}
 
-		foreach ( array( Plugin::instance()->paths()->connection_paths_file(), Plugin::instance()->paths()->runtime_file() ) as $sidecar ) {
+		foreach ( array( Plugin::instance()->paths()->connection_paths_file(), Plugin::instance()->paths()->redis_auth_paths_file(), Plugin::instance()->paths()->runtime_file() ) as $sidecar ) {
 			if ( file_exists( $sidecar ) ) {
 				wp_delete_file( $sidecar );
 			}

@@ -1212,5 +1212,9 @@ final class Commands {
 		foreach ( (array) ( $summary['credentials_withheld'] ?? array() ) as $withheld ) {
 			WP_CLI::warning( (string) $withheld );
 		}
+
+		foreach ( (array) ( $summary['advanced_credentials'] ?? array() ) as $path ) {
+			WP_CLI::warning( sprintf( 'advanced_yaml: %s is a credential in plain text; it is stored as written. Consider a %%env(NAME)%% token.', (string) $path ) );
+		}
 	}
 }

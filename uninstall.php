@@ -683,11 +683,12 @@ if ( ! function_exists( 'basic_firewall_uninstall_site' ) ) {
 		}
 
 		// The files Paths writes at the top level: the compiled configuration,
-		// the connection-paths sidecar, and anything a reachability probe left.
+		// the connection-paths and Redis-auth sidecars, and anything a reachability
+		// probe left.
 		// And the markers that throttle the diagnostics: Diagnostics' report
 		// writes, and the bootstrap's "did not evaluate" warnings.
 		$names = array_merge(
-			array( 'firewall.yml', 'connection-paths.json', 'reachability-probe.yml', 'reachability-probe.data', '.report-last', '.report-anomaly' ),
+			array( 'firewall.yml', 'connection-paths.json', 'redis-auth-paths.json', 'reachability-probe.yml', 'reachability-probe.data', '.report-last', '.report-anomaly' ),
 			array_map( 'basename', (array) glob( $dir . '/.warned-*' ) )
 		);
 

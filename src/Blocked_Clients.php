@@ -73,7 +73,7 @@ final class Blocked_Clients {
 				$config['connection'] = array( 'dsn' => trim( (string) $database['dsn'] ) );
 			}
 		} elseif ( 'redis' === $backend ) {
-			$config = array( 'redis' => Config_Compiler::redis_storage_options( (array) $settings->get( 'storage.redis', array() ) ) );
+			$config = array( 'redis' => Config_Compiler::redis_storage_options( (array) $settings->get( 'storage.redis', array() ), true ) );
 		} else {
 			$paths  = Plugin::instance()->paths();
 			$file   = (array) $settings->get( 'storage.file', array() );

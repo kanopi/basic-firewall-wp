@@ -65,6 +65,21 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   and mode of what it wrote in its meta, and the early path records the
   compiled file's hash prefix alongside its modification time.
 
+- **`BASIC_FIREWALL_REDIS_PASSWORD`** (#48): the password for every Redis
+  connection — block list storage and rate limit counters — supplied from
+  wp-config.php and injected at request time on both evaluation paths, the way
+  the `DB_*` credentials are. With it defined the compiled file holds no Redis
+  password; the compiler records only where each connection's `auth` belongs,
+  in the compile metadata and a `redis-auth-paths.json` sidecar (paths and ACL
+  usernames, never a password). The Storage screen shows the field as set in
+  wp-config.php while it is defined, and the rate limit editor says it is
+  overridden.
+- **Site Health: "Basic Firewall Redis password"** (#48). *Recommended* when a
+  Redis password is written into the compiled file in plain text (define the
+  constant or use `%env()%`), or when the constant was defined after the last
+  rebuild; *critical* when the file was built with the constant and it has
+  since been removed.
+
 ### Changed
 
 - **`fail-open (early|runner)` log lines are rate-limited** (#41). They were
@@ -78,6 +93,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   every failure.
 
 ### Fixed
+
+- **The block list screen and WP-CLI resolve a `%env()%` Redis password**
+  rather than sending the token itself as the password (#48).
 
 - **The early path no longer requires a second Composer autoloader when the
   library is already loaded** (#44). A site whose `wp-config.php` required one
@@ -100,6 +118,28 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - **An early path that is called and does not evaluate is logged**, at most
   once every 15 minutes per reason across every web container (a marker file in
   the private directory): `Basic Firewall [warning]: not-evaluated (early)`.
+
+### Security
+
+- **Credentials in the Advanced YAML are no longer shown or exported** (#47).
+  The box was a free-form pass-through, outside the redaction #17 and #23
+  applied, so a Redis password, API key, token or DSN typed there went back
+  into the page and into every export in the clear. A value under a
+  credential-shaped key (`*password*`, `*secret*`, `*token*`, `auth`,
+  `api_key` and a few more; never a bare `key`), a credential header, and the
+  password in a URL are now shown as `[redacted]`, and `%env()%`/`%file()%`
+  tokens stay visible. A placeholder saved back unchanged keeps the stored
+  value; one that moved, or whose host changed beside it, refuses the save
+  rather than storing `[redacted]`. An export masks them and lists each as
+  `advanced_yaml: <path>`; an import restores them from the receiving site's
+  own block or drops and reports them, and names any credential an imported
+  block carries in the clear. The Compiled screen hides them too.
+- **The Redis password can be kept out of the compiled file** (#48), which
+  lives under uploads and is web-readable on some servers: define
+  `BASIC_FIREWALL_REDIS_PASSWORD` (injected at runtime, never written) or use a
+  `%env()%` token (only the name is written). A password typed literally is
+  still written, because the wp-config.php path cannot read the settings, and
+  Site Health now recommends against it.
 
 ## [1.0.0-rc.4]
 

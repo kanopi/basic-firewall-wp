@@ -12,6 +12,7 @@ namespace Kanopi\BasicFirewall\RuleType\Types;
 use Kanopi\BasicFirewall\Compiler\Library_Map;
 use Kanopi\BasicFirewall\Database_Credentials;
 use Kanopi\BasicFirewall\Plugin;
+use Kanopi\BasicFirewall\Redis_Password;
 use Kanopi\BasicFirewall\RuleType\Rule_Type_Base;
 use Kanopi\Firewall\Plugins\RateLimit;
 
@@ -214,9 +215,20 @@ final class Rate_Limit extends Rule_Type_Base {
 						'show_when' => $storage . ':redis',
 					),
 					'redis_password'    => array(
-						'label'     => __( 'Redis password', 'basic-firewall' ),
-						'secret'    => true,
-						'show_when' => $storage . ':redis',
+						'label'       => __( 'Redis password', 'basic-firewall' ),
+						'secret'      => true,
+						'description' => Redis_Password::is_overridden()
+							? sprintf(
+								/* translators: %s: constant name. */
+								__( 'Overridden: the <code>%s</code> constant in wp-config.php supplies the password for every Redis connection, and anything stored here is not used while it is defined. It is injected on each request and never written to the compiled file.', 'basic-firewall' ),
+								esc_html( Redis_Password::CONSTANT )
+							)
+							: sprintf(
+								/* translators: %s: constant name. */
+								__( 'Typed here, the password is written into the compiled file in plain text, because requests answered before WordPress loads can read nothing else. Defining <code>%s</code> in wp-config.php keeps it out of every file, for this and the block list.', 'basic-firewall' ),
+								esc_html( Redis_Password::CONSTANT )
+							),
+						'show_when'   => $storage . ':redis',
 					),
 					'key_prefix'        => array(
 						'label'       => __( 'Key prefix', 'basic-firewall' ),

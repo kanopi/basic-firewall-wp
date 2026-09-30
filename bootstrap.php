@@ -1238,6 +1238,10 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 			'secret_directories'    => defined( 'BASIC_FIREWALL_SECRET_DIRECTORIES' ) ? BASIC_FIREWALL_SECRET_DIRECTORIES : array(),
 			// Runtime overrides, as Symfony property-access paths.
 			'overrides'             => array(),
+			// The password for every Redis connection, injected at request
+			// time rather than written to the compiled file. Define the
+			// constant above the snippet; see Redis_Password.
+			'redis_password'        => defined( 'BASIC_FIREWALL_REDIS_PASSWORD' ) ? BASIC_FIREWALL_REDIS_PASSWORD : null,
 			// True on a multisite network, where this path steps aside for
 			// the mu-plugin. MULTISITE and SUBDOMAIN_INSTALL say so as well.
 			'multisite'             => false,
@@ -1649,7 +1653,67 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 			}
 		}
 
+		/*
+		 * The Redis password, the same way. With the constant defined the
+		 * compiler leaves it out of the file, and records in a second sidecar
+		 * where each Redis connection's `auth` belongs and the ACL username
+		 * that goes with it. The sidecar is read only when there is a
+		 * password to inject, so a site without the constant pays nothing.
+		 */
+		$redis_password = $options['redis_password'];
+
+		if ( is_string( $redis_password ) && '' !== $redis_password ) {
+			foreach ( basic_firewall_redis_auth_paths( $options ) as $path => $username ) {
+				if ( ! isset( $overrides[ $path ] ) ) {
+					$overrides[ $path ] = '' === $username ? $redis_password : array( $username, $redis_password );
+				}
+			}
+		}
+
 		return $overrides;
+	}
+
+	/**
+	 * Where the compiled configuration wants the Redis password injected.
+	 *
+	 * Read from the sidecar the compiler writes beside the compiled file: a
+	 * map of property-access path to ACL username, never a password. Absent or
+	 * unreadable means no injection, and a Redis connection compiled without
+	 * its password then fails to authenticate -- which the library reports as
+	 * a degraded backend and Site Health names.
+	 *
+	 * @param array<string, mixed> $options Bootstrap options.
+	 *
+	 * @return array<string, string>
+	 */
+	function basic_firewall_redis_auth_paths( array $options ) {
+		$compiled = basic_firewall_compiled_path( $options );
+
+		if ( null === $compiled ) {
+			return array();
+		}
+
+		$sidecar = dirname( $compiled ) . '/redis-auth-paths.json';
+
+		if ( ! is_readable( $sidecar ) ) {
+			return array();
+		}
+
+		$decoded = json_decode( (string) file_get_contents( $sidecar ), true ); // phpcs:ignore WordPress.WP.AlternativeFunctions -- a local file, and WP_Filesystem does not exist on this path.
+
+		if ( ! is_array( $decoded ) ) {
+			return array();
+		}
+
+		$paths = array();
+
+		foreach ( $decoded as $path => $username ) {
+			if ( is_string( $path ) && '' !== $path ) {
+				$paths[ $path ] = is_string( $username ) ? $username : '';
+			}
+		}
+
+		return $paths;
 	}
 
 	/**
