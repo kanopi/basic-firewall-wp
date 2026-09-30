@@ -19,6 +19,7 @@ use Kanopi\BasicFirewall\Compiler\Compiled_Config_Cache;
 use Kanopi\BasicFirewall\Health\Site_Health;
 use Kanopi\BasicFirewall\RuleType\Registry;
 use Kanopi\BasicFirewall\Runtime\Decision_Dispatcher;
+use Kanopi\BasicFirewall\Runtime\Diagnostics;
 use Kanopi\BasicFirewall\Runtime\Runner;
 use Kanopi\BasicFirewall\Sources\Refresher;
 use Kanopi\BasicFirewall\Support\Paths;
@@ -181,7 +182,16 @@ final class Plugin {
 	 * Evaluate the current request.
 	 */
 	public function evaluate(): void {
+		/*
+		 * Before evaluating, so the report is saved even when the runner
+		 * ends the request: see Diagnostics. Only for web requests.
+		 */
+		Diagnostics::watch();
+
 		$this->runner()->evaluate();
+
+		// Reached only by a request that goes on to WordPress.
+		Diagnostics::send_header();
 	}
 
 	/**

@@ -123,6 +123,13 @@ printf 'wp-cli: reporting commands\n'
 
 expect ok 'status reports the library version' 'Library' status
 expect ok 'status renders as json' '"Enabled"' status --format=json
+# The last web request's report, saved by the runner, because WP-CLI's own
+# process is not a web request and may not even be on a web server (#34).
+expect ok 'status reports the last web request' 'Last web request' status
+expect ok 'status reports the last anomaly' 'Last anomaly' status
+expect ok 'early-report dumps both reports as json' '"last_anomaly"' early-report
+expect ok 'early-report renders as yaml' 'last_request:' early-report --format=yaml
+expect fail 'early-report refuses an unknown format' '' early-report --format=table
 # The listing claims evaluation order, so it has to carry the library's
 # partitioning -- position and stage -- rather than a weight sort. A site with
 # no rules says so instead, which is also a pass.

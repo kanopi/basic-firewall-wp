@@ -151,9 +151,7 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 		$GLOBALS['basic_firewall_early']['responder'] = null !== basic_firewall_responder_file( $options );
 
 		if ( ! $options['enabled'] ) {
-			$GLOBALS['basic_firewall_early']['reason'] = 'disabled';
-
-			return true;
+			return basic_firewall_not_evaluated( 'disabled', $options );
 		}
 
 		/*
@@ -171,18 +169,27 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 		 * says the snippet is doing nothing and can go.
 		 */
 		if ( basic_firewall_is_multisite( $options ) ) {
-			$GLOBALS['basic_firewall_early']['reason'] = 'multisite';
-
-			return true;
+			return basic_firewall_not_evaluated( 'multisite', $options );
 		}
 
 		$compiled = basic_firewall_compiled_path( $options );
 
 		if ( null === $compiled ) {
-			$GLOBALS['basic_firewall_early']['reason'] = 'no-compiled-file';
-
-			return true;
+			return basic_firewall_not_evaluated( 'no-compiled-file', $options );
 		}
+
+		/*
+		 * `compiled` -- which file this path read, and when it was written.
+		 * The compiler may run in another container from the one serving
+		 * requests (WP-CLI through a hosting CLI, say), and a report taken
+		 * there says nothing about what a web container is reading. The
+		 * runner saves this beside its own view of the file, so the two can
+		 * be compared; see Diagnostics.
+		 */
+		$GLOBALS['basic_firewall_early']['compiled'] = array(
+			'path'  => $compiled,
+			'mtime' => (int) filemtime( $compiled ),
+		);
 
 		$runtime = basic_firewall_runtime( $options );
 
@@ -195,9 +202,7 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 		 * firewall somebody switched off runs at all.
 		 */
 		if ( false === $runtime['enabled'] ) {
-			$GLOBALS['basic_firewall_early']['reason'] = 'switched-off';
-
-			return true;
+			return basic_firewall_not_evaluated( 'switched-off', $options );
 		}
 
 		/*
@@ -208,9 +213,7 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 		 * without the cookie is evaluated here as usual; see Role_Bypass.
 		 */
 		if ( $runtime['defer_login'] && basic_firewall_carries_login_cookie( $options ) ) {
-			$GLOBALS['basic_firewall_early']['reason'] = 'deferred-login';
-
-			return true;
+			return basic_firewall_not_evaluated( 'deferred-login', $options );
 		}
 
 		/*
@@ -225,15 +228,11 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 		$GLOBALS['basic_firewall_early']['autoloader'] = $autoload;
 
 		if ( 'unreadable' === $autoload['source'] ) {
-			$GLOBALS['basic_firewall_early']['reason'] = 'autoloader-unreadable';
-
-			return true;
+			return basic_firewall_not_evaluated( 'autoloader-unreadable', $options );
 		}
 
 		if ( 'none' === $autoload['source'] ) {
-			$GLOBALS['basic_firewall_early']['reason'] = 'no-autoloader';
-
-			return true;
+			return basic_firewall_not_evaluated( 'no-autoloader', $options );
 		}
 
 		if ( null !== $autoload['file'] ) {
@@ -243,12 +242,18 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 		$prefix = basic_firewall_library_prefix();
 
 		if ( null === $prefix ) {
-			$GLOBALS['basic_firewall_early']['reason'] = 'library-missing';
-
-			return true;
+			return basic_firewall_not_evaluated( 'library-missing', $options );
 		}
 
+		// `library` -- which copy of the library this path runs.
+		$GLOBALS['basic_firewall_early']['library'] = '' === $prefix ? 'unscoped' : 'scoped';
+
 		basic_firewall_define_cache_constants( $options );
+
+		// `cache_dir` -- where the library's file caches go on this path,
+		// which is the only backend it has: the object cache cannot be
+		// handed to it before WordPress. See Cache_Backend.
+		$GLOBALS['basic_firewall_early']['cache_dir'] = defined( 'KANOPI_FIREWALL_CACHE_DIR' ) ? (string) constant( 'KANOPI_FIREWALL_CACHE_DIR' ) : null;
 		basic_firewall_enable_file_secrets( $options );
 		basic_firewall_set_trusted_proxies( $options );
 		basic_firewall_apply_redaction( $options, $runtime['redact'] );
@@ -274,6 +279,13 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 				basic_firewall_build_overrides( $options ),
 				basic_firewall_decision_dispatcher( $options )
 			);
+
+			/*
+			 * `mode` -- the mode the firewall this path built is actually in,
+			 * panic file and BASIC_FIREWALL_MODE included. The settings say
+			 * what was asked for; this is what a web request got.
+			 */
+			$GLOBALS['basic_firewall_early']['mode'] = basic_firewall_firewall_mode( $firewall );
 
 			/*
 			 * The request is built here rather than left to the library, so the
@@ -303,6 +315,8 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 			if ( is_array( $marks ) && array() !== $marks ) {
 				$GLOBALS['basic_firewall_marks'] = array_values( array_map( 'strval', $marks ) );
 			}
+
+			basic_firewall_send_debug_header();
 
 			return $allowed;
 		} catch ( \Throwable $e ) {
@@ -359,6 +373,236 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 	}
 
 	/**
+	 * Return without evaluating, and say why.
+	 *
+	 * Records the reason in the bootstrap's report, as every early return
+	 * always has, and -- for a reason that means the snippet is not doing
+	 * the job it was added for -- writes it to the PHP error log as well.
+	 * The report lives only as long as the request, and the status screens
+	 * read the report of *their own* request: an admin screen, or WP-CLI in
+	 * another container altogether. So a web server whose early path never
+	 * evaluated anything could look healthy from every screen (#34).
+	 *
+	 * At most once per interval per reason, because a misconfiguration is
+	 * the same on every request and a log line per request buries it.
+	 *
+	 * @param string               $reason  Why this request was not evaluated here.
+	 * @param array<string, mixed> $options Bootstrap options.
+	 *
+	 * @return bool Always true: the request continues, for the mu-plugin.
+	 */
+	function basic_firewall_not_evaluated( $reason, array $options ) {
+		$GLOBALS['basic_firewall_early']['reason'] = $reason;
+
+		if ( ! in_array( $reason, basic_firewall_benign_reasons(), true ) ) {
+			$file = (string) ( $GLOBALS['basic_firewall_early']['autoloader']['file'] ?? '' );
+
+			basic_firewall_warn_once(
+				$reason,
+				sprintf(
+					'not-evaluated (early): the wp-config.php path did not evaluate this request (%s%s), so the mu-plugin evaluates it instead, after any page cache. Run `wp basic-firewall early-report` for the last web request\'s report. Logged at most once every %d minutes.',
+					$reason,
+					in_array( $reason, array( 'autoloader-unreadable', 'library-missing' ), true ) && '' !== $file ? ': ' . $file : '',
+					(int) ceil( basic_firewall_warn_interval( $options ) / 60 )
+				),
+				$options
+			);
+		}
+
+		basic_firewall_send_debug_header();
+
+		return true;
+	}
+
+	/**
+	 * Reasons for not evaluating that are the configuration working as meant.
+	 *
+	 * `disabled` and `switched-off` are the firewall being off on both paths,
+	 * which the operating-mode checks report. `deferred-login` is a request
+	 * with a login cookie on a site with an exempt role, handed to the runner
+	 * on purpose. Everything else means the snippet is present and doing
+	 * nothing. Diagnostics::BENIGN_REASONS must agree with this.
+	 *
+	 * @return list<string>
+	 */
+	function basic_firewall_benign_reasons() {
+		return array( 'disabled', 'switched-off', 'deferred-login' );
+	}
+
+	/**
+	 * How long a not-evaluated warning stays quiet after it is logged, in seconds.
+	 *
+	 * @param array<string, mixed> $options Bootstrap options.
+	 *
+	 * @return int
+	 */
+	function basic_firewall_warn_interval( array $options ) {
+		return isset( $options['warn_interval'] ) && is_numeric( $options['warn_interval'] ) ? max( 0, (int) $options['warn_interval'] ) : 900;
+	}
+
+	/**
+	 * Write a warning to the PHP error log.
+	 *
+	 * The only log reachable before WordPress, and the one a host keeps: the
+	 * firewall's own logger is configured by the compiled file, which is what
+	 * may have failed.
+	 *
+	 * @param string $message What happened.
+	 *
+	 * @return void
+	 */
+	function basic_firewall_warn( $message ) {
+		// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- no WordPress and no firewall logger before wp-settings.php.
+		error_log( 'Basic Firewall [warning]: ' . $message );
+	}
+
+	/**
+	 * Write a warning, unless the same one was written within the interval.
+	 *
+	 * Remembered in a marker file's modification time, in the private
+	 * directory when there is one -- which on a host with several web
+	 * containers is shared storage, so the interval holds across all of them
+	 * -- and in the system temporary directory otherwise. A file rather than
+	 * APCu because APCu is per container and often per worker pool, and it is
+	 * not there at all on plenty of hosts. Checking costs one stat.
+	 *
+	 * A marker that cannot be written means the warning is logged every time,
+	 * which is noisy and never silent.
+	 *
+	 * @param string               $key     What the warning is about: a reason code.
+	 * @param string               $message The warning.
+	 * @param array<string, mixed> $options Bootstrap options.
+	 *
+	 * @return bool True when it was logged.
+	 */
+	function basic_firewall_warn_once( $key, $message, array $options ) {
+		$private = basic_firewall_private_path( $options );
+		$key     = preg_replace( '/[^a-z0-9-]/', '', strtolower( (string) $key ) );
+		$marker  = null !== $private
+			? $private . '/.warned-' . $key
+			: rtrim( sys_get_temp_dir(), '/' ) . '/basic-firewall-warned-' . md5( (string) $options['plugin_path'] ) . '-' . $key;
+
+		// phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- no marker yet is the ordinary answer.
+		$written = @filemtime( $marker );
+
+		if ( false !== $written && time() - $written < basic_firewall_warn_interval( $options ) ) {
+			return false;
+		}
+
+		// phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, WordPress.WP.AlternativeFunctions -- best effort, and WP_Filesystem does not exist on this path.
+		@touch( $marker );
+
+		basic_firewall_warn( $message );
+
+		return true;
+	}
+
+	/**
+	 * What a throwable was, for a log line or a report.
+	 *
+	 * Class, message and where it was thrown -- not a trace, which is long,
+	 * mostly the library's own frames, and carries argument values. The
+	 * message has any `user:password@` in a URL masked, since a storage
+	 * backend that cannot connect may name the DSN it tried, and it is cut
+	 * short so one exception cannot fill a log line or a header.
+	 *
+	 * @param \Throwable $e What was thrown.
+	 *
+	 * @return array{class: string, message: string, origin: string}
+	 */
+	function basic_firewall_describe_throwable( \Throwable $e ) {
+		$message = (string) preg_replace( '#(://[^/\s:@]*):[^@\s/]*@#', '$1:***@', $e->getMessage() );
+		$message = trim( (string) preg_replace( '/\s+/', ' ', $message ) );
+
+		if ( strlen( $message ) > 300 ) {
+			$message = substr( $message, 0, 300 ) . '...';
+		}
+
+		return array(
+			'class'   => get_class( $e ),
+			'message' => $message,
+			'origin'  => $e->getFile() . ':' . $e->getLine(),
+		);
+	}
+
+	/**
+	 * The mode a firewall is actually in, or null when it cannot say.
+	 *
+	 * @param object $firewall The firewall.
+	 *
+	 * @return string|null
+	 */
+	function basic_firewall_firewall_mode( $firewall ) {
+		if ( ! is_callable( array( $firewall, 'getMode' ) ) ) {
+			return null;
+		}
+
+		$mode = call_user_func( array( $firewall, 'getMode' ) );
+
+		return $mode instanceof \BackedEnum ? (string) $mode->value : null;
+	}
+
+	/**
+	 * Whether BASIC_FIREWALL_DEBUG asks for the diagnostic response header.
+	 *
+	 * @return bool
+	 */
+	function basic_firewall_debug_enabled() {
+		return defined( 'BASIC_FIREWALL_DEBUG' ) && (bool) constant( 'BASIC_FIREWALL_DEBUG' );
+	}
+
+	/**
+	 * The bootstrap's report, compact, for the debug header.
+	 *
+	 * No secrets: no paths but a file name and line, no message text, no
+	 * request data. Diagnostics::compact_early() writes the same shape on the
+	 * runner path.
+	 *
+	 * @return array<string, mixed>
+	 */
+	function basic_firewall_debug_report() {
+		$early  = isset( $GLOBALS['basic_firewall_early'] ) && is_array( $GLOBALS['basic_firewall_early'] ) ? $GLOBALS['basic_firewall_early'] : array();
+		$origin = isset( $early['failure_origin'] ) ? (string) $early['failure_origin'] : '';
+
+		return array(
+			'called'     => ! empty( $early['called'] ),
+			'evaluated'  => ! empty( $early['evaluated'] ),
+			'reason'     => $early['reason'] ?? null,
+			'autoloader' => $early['autoloader']['source'] ?? null,
+			'library'    => $early['library'] ?? null,
+			'mode'       => $early['mode'] ?? null,
+			'outcome'    => $early['outcome'] ?? null,
+			'failure'    => isset( $early['failure'] ) ? strtok( (string) $early['failure'], ':' ) . ( '' !== $origin ? ' @ ' . basename( $origin ) : '' ) : null,
+			'refused'    => ! empty( $early['refused'] ),
+			'responder'  => ! empty( $early['responder'] ),
+		);
+	}
+
+	/**
+	 * Add the X-Basic-Firewall-Early header, when BASIC_FIREWALL_DEBUG asks.
+	 *
+	 * For troubleshooting only: it tells anybody who can make a request how
+	 * the firewall is deployed. Off unless the constant is defined truthy.
+	 * Sent from every exit of the early path, so it is on the responses the
+	 * bootstrap writes itself and on a page served from a cache that runs
+	 * before the runner; the runner replaces it with a fuller one on any
+	 * request that reaches WordPress.
+	 *
+	 * @return void
+	 */
+	function basic_firewall_send_debug_header() {
+		if ( ! basic_firewall_debug_enabled() || headers_sent() ) {
+			return;
+		}
+
+		$json = json_encode( array( 'early' => basic_firewall_debug_report() ), JSON_UNESCAPED_SLASHES ); // phpcs:ignore WordPress.WP.AlternativeFunctions.json_encode_json_encode -- no WordPress yet.
+
+		if ( is_string( $json ) ) {
+			header( 'X-Basic-Firewall-Early: ' . $json, true );
+		}
+	}
+
+	/**
 	 * Answer what `exception` mode threw, or fail open on anything else.
 	 *
 	 * **Answered here, not later.** The tempting design stashes the verdict and
@@ -404,8 +648,30 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 			 * Failed open, and said so. The runner takes this up once
 			 * WordPress loads, so Site Health reports the failure rather
 			 * than a firewall that evaluated this request and allowed it.
+			 *
+			 * And logged, every time. The report above only lives as long
+			 * as this request, and reaches Site Health only when this
+			 * request is the one Site Health is rendering -- so a firewall
+			 * that failed on every visitor's request and never on an
+			 * administrator's left no trace anywhere (#34). The PHP error
+			 * log is the one place this path can write to that somebody
+			 * investigating later will read.
 			 */
-			$GLOBALS['basic_firewall_early']['failure'] = get_class( $outcome ) . ': ' . $outcome->getMessage();
+			$failure = basic_firewall_describe_throwable( $outcome );
+
+			$GLOBALS['basic_firewall_early']['failure']        = $failure['class'] . ': ' . $failure['message'];
+			$GLOBALS['basic_firewall_early']['failure_origin'] = $failure['origin'];
+
+			basic_firewall_warn(
+				sprintf(
+					'fail-open (early): the firewall threw %s "%s" at %s on the wp-config.php path, so the request was let through unfiltered.',
+					$failure['class'],
+					$failure['message'],
+					$failure['origin']
+				)
+			);
+
+			basic_firewall_send_debug_header();
 
 			return true;
 		}
@@ -436,6 +702,9 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 		}
 
 		unset( $GLOBALS['basic_firewall_outcome'] );
+
+		// Queued before the responder writes anything, which it does not replace.
+		basic_firewall_send_debug_header();
 
 		try {
 			// Ends the request for every verdict it is handed.
@@ -488,8 +757,9 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 	function basic_firewall_refuse( $kind, $why ) {
 		$GLOBALS['basic_firewall_early']['refused'] = $why;
 
-		// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- no WordPress and no firewall logger before wp-settings.php.
-		error_log( sprintf( 'Basic Firewall [warning]: a %s verdict on the wp-config.php path could not be answered (%s), so the request was refused.', $kind, $why ) );
+		basic_firewall_warn( sprintf( 'a %s verdict on the wp-config.php path could not be answered (%s), so the request was refused.', $kind, $why ) );
+
+		basic_firewall_send_debug_header();
 
 		if ( ! headers_sent() ) {
 			// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- compared against a fixed list and replaced unless it matches exactly.
@@ -720,6 +990,9 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 			// True on a multisite network, where this path steps aside for
 			// the mu-plugin. MULTISITE and SUBDOMAIN_INSTALL say so as well.
 			'multisite'          => false,
+			// Seconds a "did not evaluate" warning stays quiet once logged.
+			// See basic_firewall_warn_once().
+			'warn_interval'      => 900,
 		);
 
 		return array_merge( $defaults, $options );

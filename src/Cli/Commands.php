@@ -18,10 +18,12 @@ use Kanopi\BasicFirewall\Library_Capabilities;
 use Kanopi\BasicFirewall\Library_Loader;
 use Kanopi\BasicFirewall\Plugin;
 use Kanopi\BasicFirewall\RuleType\Rule_Type;
+use Kanopi\BasicFirewall\Runtime\Diagnostics;
 use Kanopi\BasicFirewall\Runtime\Trusted_Proxies;
 use Kanopi\BasicFirewall\Sources\Refresher;
 use Kanopi\BasicFirewall\Transfer\Exporter;
 use Kanopi\BasicFirewall\Transfer\Importer;
+use Symfony\Component\Yaml\Yaml;
 use WP_CLI;
 use WP_CLI\Utils;
 
@@ -316,6 +318,14 @@ final class Commands {
 				'value'   => $this->evaluation_summary(),
 			),
 			array(
+				'setting' => 'Last web request',
+				'value'   => Diagnostics::summary( Diagnostics::last() ),
+			),
+			array(
+				'setting' => 'Last anomaly',
+				'value'   => Diagnostics::summary( Diagnostics::last_anomaly() ),
+			),
+			array(
 				'setting' => 'Proxy posture',
 				'value'   => $this->proxy_summary(),
 			),
@@ -345,6 +355,54 @@ final class Commands {
 			WP_CLI::log( '' );
 			WP_CLI::log( 'Mode is "log": rules are evaluated and matches recorded, but nothing is blocked.' );
 		}
+	}
+
+	/**
+	 * Show what the last web requests looked like to both evaluation paths.
+	 *
+	 * `status` reports the wp-config.php path as *this* process saw it, and
+	 * WP-CLI is not a web request: on a host that runs it in its own
+	 * container, it is not even the same machine. The runner saves a report
+	 * from each web request that reaches WordPress -- the last one, and the
+	 * last anomalous one (a fail-open, an early path that did not evaluate,
+	 * a verdict handed on instead of answered) -- and this prints both in
+	 * full. Nothing in them is secret: no query strings, cookies or client
+	 * addresses.
+	 *
+	 * ## OPTIONS
+	 *
+	 * [--format=<format>]
+	 * : Render output in a particular format.
+	 * ---
+	 * default: json
+	 * options:
+	 *   - json
+	 *   - yaml
+	 * ---
+	 *
+	 * ## EXAMPLES
+	 *
+	 *     wp basic-firewall early-report
+	 *     wp basic-firewall early-report --format=yaml
+	 *
+	 * @subcommand early-report
+	 *
+	 * @param array<int, string>    $args       Positional arguments.
+	 * @param array<string, string> $assoc_args Flags.
+	 */
+	public function early_report( array $args, array $assoc_args ): void {
+		$reports = array(
+			'last_request' => Diagnostics::last(),
+			'last_anomaly' => Diagnostics::last_anomaly(),
+		);
+
+		if ( 'yaml' === ( $assoc_args['format'] ?? 'json' ) ) {
+			WP_CLI::log( rtrim( Yaml::dump( $reports, 6, 2 ) ) );
+
+			return;
+		}
+
+		WP_CLI::log( (string) wp_json_encode( $reports, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES ) );
 	}
 
 	/**
