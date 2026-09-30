@@ -1137,6 +1137,42 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 	}
 
 	/**
+	 * A rule the early path's firewall could not construct is recorded (#41).
+	 *
+	 * The library skips such a rule and goes on, so the request it would
+	 * have refused is served -- and before this, nothing a status screen
+	 * could read said so.
+	 */
+	public function test_failed_rules_on_the_early_path_are_recorded(): void {
+		$this->given_rule( 'block', 'block' );
+
+		$healthy = $this->request( '/bfw-early-other' );
+
+		$this->assertSame( 'none', $healthy['failed_rules'], 'A firewall whose rules all built reported a failed one.' );
+
+		$broken = $this->request(
+			'/bfw-early-match',
+			array(
+				'X-Bfw-Test-Failed-Rule' => '1',
+				'X-Bfw-Test-Debug'       => '1',
+			)
+		);
+
+		$this->assertSame( 200, $broken['status'], 'The fixture\'s rule still ran, so nothing failed to construct.' );
+		$this->assertSame( 'block/Reputation:0', $broken['failed_rules'] );
+		$this->assertSame( 'yes', $broken['evaluated'] );
+
+		$report = json_decode( $broken['debug'], true );
+
+		$this->assertIsArray( $report );
+		$this->assertSame( array( 'block/Reputation:0' ), $report['early']['failed_rules'], 'The debug header does not name the rule.' );
+		$this->assertStringNotContainsString( 'upstream', $broken['debug'], 'The constructor\'s message reached the header.' );
+
+		// Not evaluated here, so nothing to say rather than nothing failed.
+		$this->assertSame( 'unknown', $this->request( '/bfw-early-other', array( 'X-Bfw-Test-Plugin' => 'bare' ) )['failed_rules'] );
+	}
+
+	/**
 	 * Where the fixture's PHP error log ends now, to read what follows.
 	 */
 	private function error_log(): int {
@@ -1279,7 +1315,7 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 	 * @param string $plugin     `bare` for the copy with no vendor/, or empty for this one.
 	 * @param string $autoloader The fixture's autoloader scenario.
 	 *
-	 * @return array{status: int, body: string, type: string, cache: string, location: string, retry: string, stashed: string, outcome: string, reason: string, evaluated: string, autoloader: string, autoloader_file: string, autoloader_named: string, custom: string, site: string, pragma: string, expires: string, surrogate: string, cdn: string, debug: string}
+	 * @return array{status: int, body: string, type: string, cache: string, location: string, retry: string, stashed: string, outcome: string, reason: string, evaluated: string, autoloader: string, autoloader_file: string, autoloader_named: string, custom: string, site: string, failed_rules: string, pragma: string, expires: string, surrogate: string, cdn: string, debug: string}
 	 */
 	private function request_with_autoloader( string $plugin, string $autoloader ): array {
 		$response = $this->request(
@@ -1301,7 +1337,7 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 	 * @param string                $path    Path to request.
 	 * @param array<string, string> $headers Request headers.
 	 *
-	 * @return array{status: int, body: string, type: string, cache: string, location: string, retry: string, stashed: string, outcome: string, reason: string, evaluated: string, autoloader: string, autoloader_file: string, autoloader_named: string, custom: string, site: string, pragma: string, expires: string, surrogate: string, cdn: string, debug: string}
+	 * @return array{status: int, body: string, type: string, cache: string, location: string, retry: string, stashed: string, outcome: string, reason: string, evaluated: string, autoloader: string, autoloader_file: string, autoloader_named: string, custom: string, site: string, failed_rules: string, pragma: string, expires: string, surrogate: string, cdn: string, debug: string}
 	 */
 	private function request( string $path, array $headers = array() ): array {
 		$response = wp_remote_get(
@@ -1333,6 +1369,7 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 			'autoloader_named' => (string) wp_remote_retrieve_header( $response, 'x-early-autoloader-named' ),
 			'custom'           => (string) wp_remote_retrieve_header( $response, 'x-early-custom-loaded' ),
 			'site'             => (string) wp_remote_retrieve_header( $response, 'x-early-site-loaded' ),
+			'failed_rules'     => (string) wp_remote_retrieve_header( $response, 'x-early-failed-rules' ),
 			'pragma'           => (string) wp_remote_retrieve_header( $response, 'pragma' ),
 			'expires'          => (string) wp_remote_retrieve_header( $response, 'expires' ),
 			'surrogate'        => (string) wp_remote_retrieve_header( $response, 'surrogate-control' ),

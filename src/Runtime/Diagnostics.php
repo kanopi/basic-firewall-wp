@@ -220,7 +220,7 @@ final class Diagnostics {
 	/**
 	 * This request's report.
 	 *
-	 * @return array{time: int, method: string, path: string, anomaly: string|null, early: array<string, mixed>, runner: array<string, mixed>, library: array<string, mixed>, compiled: array<string, mixed>, cache: array<string, mixed>, mode: array<string, mixed>}
+	 * @return array{time: int, method: string, path: string, anomaly: string|null, anomalies: list<string>, early: array<string, mixed>, runner: array<string, mixed>, library: array<string, mixed>, compiled: array<string, mixed>, cache: array<string, mixed>, mode: array<string, mixed>}
 	 */
 	public static function build(): array {
 		$early  = self::early();
@@ -228,36 +228,38 @@ final class Diagnostics {
 		$file   = Plugin::instance()->paths()->compiled_file();
 
 		$report = array(
-			'time'     => time(),
-			'method'   => self::method(),
-			'path'     => self::path(),
-			'anomaly'  => null,
-			'early'    => $early,
-			'runner'   => $runner,
-			'mode'     => array(
+			'time'      => time(),
+			'method'    => self::method(),
+			'path'      => self::path(),
+			'anomaly'   => null,
+			'anomalies' => array(),
+			'early'     => $early,
+			'runner'    => $runner,
+			'mode'      => array(
 				'configured' => self::configured_mode(),
 				'early'      => $early['mode'],
 				'runner'     => $runner['mode'],
 			),
-			'library'  => array(
+			'library'   => array(
 				'copy'    => Library_Loader::is_scoped_build() ? 'scoped' : 'unscoped',
 				'loader'  => Library_Loader::mode(),
 				'version' => Library_Loader::version(),
 				'early'   => $early['library'],
 			),
-			'compiled' => array(
+			'compiled'  => array(
 				'path'  => $file,
 				'mtime' => is_readable( $file ) ? (int) filemtime( $file ) : null,
 				'hash'  => is_readable( $file ) ? substr( (string) hash_file( 'sha256', $file ), 0, 12 ) : null,
 				'early' => $early['compiled'],
 			),
-			'cache'    => array(
+			'cache'     => array(
 				'early'  => null === $early['cache_dir'] ? null : 'files in ' . $early['cache_dir'],
 				'runner' => self::runner_cache(),
 			),
 		);
 
-		$report['anomaly'] = self::anomaly( $report );
+		$report['anomalies'] = self::anomalies( $report );
+		$report['anomaly']   = $report['anomalies'][0] ?? null;
 
 		return $report;
 	}
@@ -265,37 +267,116 @@ final class Diagnostics {
 	/**
 	 * What made a report worth keeping apart, or null for an ordinary one.
 	 *
-	 * `fail-open` -- either path failed and let the request through.
-	 * `early-verdict-deferred` -- the early path reached a refusal and handed
-	 * it on instead of answering it (a solved challenge is handed on by
-	 * design, and is not one). `not-evaluated` -- the snippet ran and did not
-	 * evaluate, for a reason that is not the configuration working as meant.
+	 * The most serious of anomalies(), which is the one Site Health raises.
 	 *
 	 * @param array<string, mixed> $report A report from build().
 	 */
 	public static function anomaly( array $report ): ?string {
+		return self::anomalies( $report )[0] ?? null;
+	}
+
+	/**
+	 * Everything that made a report worth keeping apart, most serious first.
+	 *
+	 * `fail-open` -- either path failed and let the request through.
+	 * `early-verdict-deferred` -- the early path reached a refusal and handed
+	 * it on instead of answering it (a solved challenge is handed on by
+	 * design, and is not one). `failed-rules` -- a firewall either path built
+	 * could not construct one or more rules, so part of the configuration
+	 * was not enforced on that request. `not-evaluated` -- the snippet ran
+	 * and did not evaluate, for a reason that is not the configuration
+	 * working as meant.
+	 *
+	 * A list, so a request with two things wrong keeps both: the report is
+	 * kept for the one somebody investigates, and the second problem is
+	 * often the cause of the first.
+	 *
+	 * @param array<string, mixed> $report A report from build().
+	 *
+	 * @return list<string>
+	 */
+	public static function anomalies( array $report ): array {
 		$early  = (array) ( $report['early'] ?? array() );
 		$runner = (array) ( $report['runner'] ?? array() );
+		$found  = array();
 
 		if ( null !== ( $early['failure'] ?? null ) || in_array( $runner['failure'] ?? null, array( 'evaluation-failed', 'could-not-start' ), true ) ) {
-			return 'fail-open';
+			$found[] = 'fail-open';
 		}
 
 		if ( in_array( $runner['early_verdict'] ?? null, array( 'challenge', 'redirect', 'blocked' ), true ) || ! empty( $early['refused'] ) ) {
-			return 'early-verdict-deferred';
+			$found[] = 'early-verdict-deferred';
+		}
+
+		if ( array() !== (array) ( $early['failed_rules'] ?? array() ) || array() !== (array) ( $runner['failed_rules'] ?? array() ) ) {
+			$found[] = 'failed-rules';
 		}
 
 		if ( ! empty( $early['called'] ) && empty( $early['evaluated'] ) && ! in_array( $early['reason'] ?? null, self::BENIGN_REASONS, true ) ) {
-			return 'not-evaluated';
+			$found[] = 'not-evaluated';
 		}
 
-		return null;
+		return $found;
+	}
+
+	/**
+	 * The rules a firewall could not construct, by name, or null when it cannot say.
+	 *
+	 * `bucket/Class:index`, the namespace dropped, exactly as
+	 * basic_firewall_failed_rules() names them on the wp-config.php path so
+	 * the two halves of a report compare. Names only: the constructor's
+	 * message may carry a host or a DSN, and the library logs it already.
+	 *
+	 * Never throws. Asking builds every rule, and a constructor failing with
+	 * an Error rather than an Exception escapes the library; evaluation
+	 * reports that one as a fail-open.
+	 *
+	 * @param object $firewall The firewall.
+	 *
+	 * @return list<string>|null
+	 */
+	public static function failed_rules( object $firewall ): ?array {
+		if ( ! method_exists( $firewall, 'getFailedRules' ) ) {
+			return null;
+		}
+
+		try {
+			$failed = $firewall->getFailedRules();
+		} catch ( \Throwable $e ) {
+			return null;
+		}
+
+		$names = array();
+
+		foreach ( is_array( $failed ) ? $failed : array() as $entry ) {
+			if ( ! is_array( $entry ) ) {
+				continue;
+			}
+
+			$plugin = (string) ( $entry['plugin'] ?? '' );
+			$slash  = strrpos( $plugin, '\\' );
+
+			$names[] = (string) ( $entry['bucket'] ?? '?' ) . '/' . ( false === $slash ? $plugin : substr( $plugin, $slash + 1 ) );
+		}
+
+		return $names;
+	}
+
+	/**
+	 * A list of rule names from a report, or null when the path did not say.
+	 *
+	 * @param mixed $names What the report holds.
+	 *
+	 * @return list<string>|null
+	 */
+	private static function names( $names ): ?array {
+		return is_array( $names ) ? array_values( array_map( 'strval', array_filter( $names, 'is_scalar' ) ) ) : null;
 	}
 
 	/**
 	 * The bootstrap's report on this request, normalised.
 	 *
-	 * @return array{called: bool, evaluated: bool, reason: string|null, credentials: bool, responder: bool, autoloader: array{source: string|null, file: string|null, named: string|null}, library: string|null, mode: string|null, compiled: array{path: string, mtime: int}|null, cache_dir: string|null, outcome: string|null, deferred: bool, failure: string|null, failure_origin: string|null, refused: string|null}
+	 * @return array{called: bool, evaluated: bool, reason: string|null, credentials: bool, responder: bool, autoloader: array{source: string|null, file: string|null, named: string|null}, library: string|null, mode: string|null, compiled: array{path: string, mtime: int}|null, cache_dir: string|null, outcome: string|null, deferred: bool, failure: string|null, failure_origin: string|null, refused: string|null, failed_rules: list<string>|null}
 	 */
 	public static function early(): array {
 		$early = isset( $GLOBALS['basic_firewall_early'] ) && is_array( $GLOBALS['basic_firewall_early'] ) ? $GLOBALS['basic_firewall_early'] : array();
@@ -329,13 +410,14 @@ final class Diagnostics {
 			'failure'        => null === $failure ? null : self::mask( $failure ),
 			'failure_origin' => $string( 'failure_origin' ),
 			'refused'        => $string( 'refused' ),
+			'failed_rules'   => self::names( $early['failed_rules'] ?? null ),
 		);
 	}
 
 	/**
 	 * The runner's own report on this request.
 	 *
-	 * @return array{evaluated: bool, outcome: string|null, mode: string|null, early_verdict: string|null, failure: string|null, failure_detail: string|null, exempt: bool}
+	 * @return array{evaluated: bool, outcome: string|null, mode: string|null, early_verdict: string|null, failure: string|null, failure_detail: string|null, exempt: bool, failed_rules: list<string>|null}
 	 */
 	public static function runner(): array {
 		$state = Runner::state();
@@ -348,6 +430,7 @@ final class Diagnostics {
 			'failure'        => $state['failure'],
 			'failure_detail' => '' === $state['failure_detail'] ? null : self::mask( $state['failure_detail'] ),
 			'exempt'         => $state['exempt'],
+			'failed_rules'   => $state['failed_rules'],
 		);
 	}
 
@@ -392,16 +475,17 @@ final class Diagnostics {
 
 		return array(
 			'early'  => array(
-				'called'     => $early['called'],
-				'evaluated'  => $early['evaluated'],
-				'reason'     => $early['reason'],
-				'autoloader' => $early['autoloader']['source'],
-				'library'    => $early['library'],
-				'mode'       => $early['mode'],
-				'outcome'    => $early['outcome'],
-				'failure'    => self::short_failure( $early['failure'], $early['failure_origin'] ),
-				'refused'    => null !== $early['refused'],
-				'responder'  => $early['responder'],
+				'called'       => $early['called'],
+				'evaluated'    => $early['evaluated'],
+				'reason'       => $early['reason'],
+				'autoloader'   => $early['autoloader']['source'],
+				'library'      => $early['library'],
+				'mode'         => $early['mode'],
+				'outcome'      => $early['outcome'],
+				'failure'      => self::short_failure( $early['failure'], $early['failure_origin'] ),
+				'refused'      => null !== $early['refused'],
+				'responder'    => $early['responder'],
+				'failed_rules' => $early['failed_rules'],
 			),
 			'runner' => array(
 				'evaluated'     => $runner['evaluated'],
@@ -409,6 +493,7 @@ final class Diagnostics {
 				'mode'          => $runner['mode'],
 				'early_verdict' => $runner['early_verdict'],
 				'failure'       => $runner['failure'],
+				'failed_rules'  => $runner['failed_rules'],
 			),
 		);
 	}
@@ -518,8 +603,21 @@ final class Diagnostics {
 			$parts[] = 'runner failure: ' . (string) $runner['failure'] . ( isset( $runner['failure_detail'] ) ? ' (' . (string) $runner['failure_detail'] . ')' : '' );
 		}
 
-		if ( null !== ( $report['anomaly'] ?? null ) ) {
-			array_unshift( $parts, strtoupper( (string) $report['anomaly'] ) );
+		foreach ( array(
+			'early'  => $early,
+			'runner' => $runner,
+		) as $where => $half ) {
+			$failed = self::names( $half['failed_rules'] ?? null );
+
+			if ( null !== $failed && array() !== $failed ) {
+				$parts[] = sprintf( '%s failed rules: %d (%s)', $where, count( $failed ), implode( ', ', $failed ) );
+			}
+		}
+
+		$anomalies = self::names( $report['anomalies'] ?? null ) ?? ( null !== ( $report['anomaly'] ?? null ) ? array( (string) $report['anomaly'] ) : array() );
+
+		if ( array() !== $anomalies ) {
+			array_unshift( $parts, strtoupper( implode( ', ', $anomalies ) ) );
 		}
 
 		return implode( '; ', $parts );

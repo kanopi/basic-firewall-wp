@@ -83,15 +83,24 @@ final class Runner {
 	 * itself; `outcome` the verdict it reached (`allowed`, `challenge`,
 	 * `redirect`, `blocked`, `solved`) or null; `mode` the mode the firewall
 	 * it built was actually in; `early_verdict` a verdict the wp-config.php
-	 * path handed on to it rather than answering.
+	 * path handed on to it rather than answering; `failed_rules` the rules
+	 * the firewall it built could not construct, or null when it built none;
+	 * `panic` whether a panic file was changing that firewall's mode.
 	 *
-	 * @var array{evaluated: bool, outcome: string|null, mode: string|null, early_verdict: string|null}
+	 * @var array{evaluated: bool, outcome: string|null, mode: string|null, early_verdict: string|null, failed_rules: list<string>|null, panic: bool}
 	 */
-	private static array $state = array(
+	private static array $state = self::INITIAL_STATE;
+
+	/**
+	 * The state before anything has happened to the request.
+	 */
+	private const INITIAL_STATE = array(
 		'evaluated'     => false,
 		'outcome'       => null,
 		'mode'          => null,
 		'early_verdict' => null,
+		'failed_rules'  => null,
+		'panic'         => false,
 	);
 
 	/**
@@ -232,6 +241,15 @@ final class Runner {
 
 		self::$state['evaluated'] = true;
 		self::$state['mode']      = $firewall->getMode()->value;
+		self::$state['panic']     = (bool) ( $firewall->getPanicSwitch()['active'] ?? false );
+
+		/*
+		 * The rules this firewall could not construct (#41), asked before
+		 * evaluating for the reason the bootstrap asks then: a request the
+		 * library refuses ends inside evaluate(), and the rules built here
+		 * are the ones evaluate() goes on to use.
+		 */
+		self::$state['failed_rules'] = Diagnostics::failed_rules( $firewall );
 
 		/*
 		 * The request is built here rather than left to the library, so that
@@ -815,12 +833,7 @@ final class Runner {
 		self::$failure_detail = '';
 		self::$marks          = array();
 		self::$exempt         = false;
-		self::$state          = array(
-			'evaluated'     => false,
-			'outcome'       => null,
-			'mode'          => null,
-			'early_verdict' => null,
-		);
+		self::$state          = self::INITIAL_STATE;
 	}
 
 	/**
@@ -830,7 +843,7 @@ final class Runner {
 	 * not finish, and `failure_detail` what it was about; `exempt` whether an
 	 * exempt role skipped evaluation.
 	 *
-	 * @return array{evaluated: bool, outcome: string|null, mode: string|null, early_verdict: string|null, failure: string|null, failure_detail: string, exempt: bool}
+	 * @return array{evaluated: bool, outcome: string|null, mode: string|null, early_verdict: string|null, failed_rules: list<string>|null, panic: bool, failure: string|null, failure_detail: string, exempt: bool}
 	 */
 	public static function state(): array {
 		return self::$state + array(

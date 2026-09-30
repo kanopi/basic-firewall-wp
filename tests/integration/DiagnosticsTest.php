@@ -156,6 +156,93 @@ final class DiagnosticsTest extends Settings_Snapshot {
 	}
 
 	/**
+	 * A rule the runner's firewall could not construct is recorded, and is an anomaly (#41).
+	 */
+	public function test_failed_rules_on_the_runner_path_are_recorded(): void {
+		$this->given_exception_mode();
+
+		// Rule 0 turned into a reputation rule with no provider: its
+		// constructor throws, and the library skips it.
+		$break = static fn ( array $overrides ): array => array( '[plugins][0][plugin]' => 'Kanopi\\Firewall\\Plugins\\Reputation' ) + $overrides;
+
+		add_filter( 'basic_firewall_config_overrides', $break );
+
+		try {
+			$this->assertTrue( $this->evaluate_compiled( Plugin::instance()->paths()->compiled_file(), Request::create( '/bfw-diagnostics-match' ) ) );
+		} finally {
+			remove_filter( 'basic_firewall_config_overrides', $break );
+		}
+
+		$this->assertSame( array( 'challenge/Reputation:0' ), Runner::state()['failed_rules'] );
+		$this->assertSame( array( 'challenge/Reputation:0' ), Diagnostics::compact()['runner']['failed_rules'], 'The debug header does not name the rule.' );
+
+		$GLOBALS['basic_firewall_early'] = array( 'called' => false );
+
+		Diagnostics::persist();
+
+		$report = Diagnostics::last_anomaly();
+
+		$this->assertIsArray( $report, 'A request that ran without a rule was not kept as an anomaly.' );
+		$this->assertSame( 'failed-rules', $report['anomaly'] );
+		$this->assertSame( array( 'failed-rules' ), $report['anomalies'] );
+		$this->assertSame( array( 'challenge/Reputation:0' ), $report['runner']['failed_rules'] );
+		$this->assertNull( $report['early']['failed_rules'], 'An early path that built no firewall reported an empty list.' );
+		$this->assertStringNotContainsString( 'upstream', (string) wp_json_encode( $report ), 'The constructor\'s message reached the report.' );
+		$this->assertStringContainsString( 'runner failed rules: 1 (challenge/Reputation:0)', Diagnostics::summary( $report ) );
+
+		// A healthy firewall records an empty list, which is not an anomaly.
+		Runner::reset();
+
+		$this->evaluate_compiled( Plugin::instance()->paths()->compiled_file(), Request::create( '/nothing-matches-this' ) );
+
+		$this->assertSame( array(), Runner::state()['failed_rules'] );
+	}
+
+	/**
+	 * Site Health raises recent failed rules, critical where the mode refuses (#41).
+	 */
+	public function test_site_health_reports_recent_failed_rules(): void {
+		$GLOBALS['basic_firewall_early'] = array( 'called' => false );
+
+		$this->given_anomaly(
+			array(
+				'anomaly'   => 'failed-rules',
+				'anomalies' => array( 'failed-rules' ),
+				'early'     => array(
+					'called'       => true,
+					'evaluated'    => true,
+					'failed_rules' => array( 'block/Reputation:0' ),
+				),
+			)
+		);
+
+		$check = Site_Health::check( 'evaluation' );
+
+		$this->assertSame( 'critical', $check['status'], 'A block-mode firewall running without a rule is not critical.' );
+		$this->assertSame( 'The firewall recently ran without some of its rules', $check['label'] );
+		$this->assertStringContainsString( 'block/Reputation:0', $check['description'] );
+		$this->assertStringContainsString( 'wp-config.php path', $check['description'] );
+
+		// In log mode nothing is refused either way, so it is a recommendation.
+		$this->given_anomaly(
+			array(
+				'anomaly' => 'failed-rules',
+				'mode'    => array(
+					'configured' => 'log',
+					'early'      => 'log',
+					'runner'     => null,
+				),
+				'runner'  => array(
+					'evaluated'    => true,
+					'failed_rules' => array( 'block/Reputation:0' ),
+				),
+			)
+		);
+
+		$this->assertSame( 'recommended', Site_Health::check( 'evaluation' )['status'] );
+	}
+
+	/**
 	 * The last request and the last anomaly are kept apart.
 	 */
 	public function test_the_last_anomaly_survives_ordinary_requests(): void {
@@ -323,6 +410,22 @@ final class DiagnosticsTest extends Settings_Snapshot {
 				)
 			),
 			'A site with no snippet is not an anomaly.'
+		);
+		$this->assertNull( Diagnostics::anomaly( $early( array( 'evaluated' => true, 'failed_rules' => array() ) ) ), 'Every rule built is not an anomaly.' ); // phpcs:ignore WordPress.Arrays.ArrayDeclarationSpacing.AssociativeArrayFound -- one line per case.
+		$this->assertSame( 'failed-rules', Diagnostics::anomaly( $early( array( 'evaluated' => true, 'failed_rules' => array( 'block/Url:0' ) ) ) ) ); // phpcs:ignore WordPress.Arrays.ArrayDeclarationSpacing.AssociativeArrayFound -- as above.
+
+		// Both problems are kept, the more serious first.
+		$this->assertSame(
+			array( 'fail-open', 'failed-rules' ),
+			Diagnostics::anomalies(
+				array(
+					'early'  => array(),
+					'runner' => array(
+						'failure'      => 'evaluation-failed',
+						'failed_rules' => array( 'block/Url:0' ),
+					),
+				)
+			)
 		);
 	}
 

@@ -109,6 +109,15 @@ if ( isset( $_SERVER['HTTP_X_BFW_TEST_THROW'] ) ) {
 }
 
 /*
+ * A rule the library cannot construct: the first compiled rule turned into a
+ * reputation rule with no provider, through the snippet's own `overrides`.
+ * The library skips it and goes on, which is what #41 reports.
+ */
+if ( isset( $_SERVER['HTTP_X_BFW_TEST_FAILED_RULE'] ) ) {
+	$basic_firewall_bootstrap['overrides'] = array( '[plugins][0][plugin]' => 'Kanopi\\Firewall\\Plugins\\Reputation' );
+}
+
+/*
  * A responder that fails to answer, standing in for the real one: see
  * fake-responder.php. And a plugin copy with no responder at all.
  */
@@ -150,6 +159,8 @@ header( 'X-Early-Autoloader-Named: ' . (string) ( $GLOBALS['basic_firewall_early
 // WordPress sets $pagenow from it.
 header( 'X-Early-Php-Self: ' . (string) ( $_SERVER['PHP_SELF'] ?? '' ) ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput -- echoed to a test, in a fixture with no WordPress to sanitize with.
 header( 'X-Early-Custom-Loaded: ' . ( empty( $GLOBALS['basic_firewall_test_custom_autoloader'] ) ? 'no' : 'yes' ) );
+$basic_firewall_failed = $GLOBALS['basic_firewall_early']['failed_rules'] ?? null;
+header( 'X-Early-Failed-Rules: ' . ( is_array( $basic_firewall_failed ) ? ( array() === $basic_firewall_failed ? 'none' : implode( ',', $basic_firewall_failed ) ) : 'unknown' ) );
 header( 'X-Early-Site-Loaded: ' . ( empty( $GLOBALS['basic_firewall_test_site_autoloader'] ) ? 'no' : 'yes' ) );
 
 echo 'SERVED BY WORDPRESS';

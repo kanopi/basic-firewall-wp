@@ -288,6 +288,18 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 			$GLOBALS['basic_firewall_early']['mode'] = basic_firewall_firewall_mode( $firewall );
 
 			/*
+			 * `failed_rules` -- the rules this path's firewall could not
+			 * construct, which the library skips and logs rather than fatals
+			 * on (#41). A rule that fails only on the web containers -- a
+			 * storage host only they cannot reach, an extension only the CLI
+			 * image has -- showed up nowhere a status screen could see.
+			 * Asked before evaluating, so a request the library then refuses
+			 * and exits on is still reported; building the rules here is
+			 * work evaluate() reuses rather than repeats.
+			 */
+			$GLOBALS['basic_firewall_early']['failed_rules'] = basic_firewall_failed_rules( $firewall );
+
+			/*
 			 * The request is built here rather than left to the library, so the
 			 * marks can be read back off it.
 			 *
@@ -543,6 +555,51 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 	}
 
 	/**
+	 * The rules a firewall could not construct, by name, or null when it cannot say.
+	 *
+	 * Each is `bucket/Class:index` -- the bucket it was configured in and the
+	 * library's own name for it, with the namespace dropped so a scoped and
+	 * an unscoped copy name a rule alike. Names only: the constructor's
+	 * message can carry a host or a DSN, and the library already logs it.
+	 *
+	 * Never throws. The library's answer is built by constructing every rule,
+	 * and a constructor that fails with an Error rather than an Exception is
+	 * not caught by the library; that is a failure the evaluation that
+	 * follows reports as a fail-open, so here it is only "cannot say".
+	 * Diagnostics::failed_rules() does the same on the runner path.
+	 *
+	 * @param object $firewall The firewall.
+	 *
+	 * @return list<string>|null
+	 */
+	function basic_firewall_failed_rules( $firewall ) {
+		if ( ! is_callable( array( $firewall, 'getFailedRules' ) ) ) {
+			return null;
+		}
+
+		try {
+			$failed = call_user_func( array( $firewall, 'getFailedRules' ) );
+		} catch ( \Throwable $e ) {
+			return null;
+		}
+
+		$names = array();
+
+		foreach ( is_array( $failed ) ? $failed : array() as $entry ) {
+			if ( ! is_array( $entry ) ) {
+				continue;
+			}
+
+			$plugin = (string) ( $entry['plugin'] ?? '' );
+			$slash  = strrpos( $plugin, '\\' );
+
+			$names[] = (string) ( $entry['bucket'] ?? '?' ) . '/' . ( false === $slash ? $plugin : substr( $plugin, $slash + 1 ) );
+		}
+
+		return $names;
+	}
+
+	/**
 	 * Whether BASIC_FIREWALL_DEBUG asks for the diagnostic response header.
 	 *
 	 * @return bool
@@ -565,16 +622,19 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 		$origin = isset( $early['failure_origin'] ) ? (string) $early['failure_origin'] : '';
 
 		return array(
-			'called'     => ! empty( $early['called'] ),
-			'evaluated'  => ! empty( $early['evaluated'] ),
-			'reason'     => $early['reason'] ?? null,
-			'autoloader' => $early['autoloader']['source'] ?? null,
-			'library'    => $early['library'] ?? null,
-			'mode'       => $early['mode'] ?? null,
-			'outcome'    => $early['outcome'] ?? null,
-			'failure'    => isset( $early['failure'] ) ? strtok( (string) $early['failure'], ':' ) . ( '' !== $origin ? ' @ ' . basename( $origin ) : '' ) : null,
-			'refused'    => ! empty( $early['refused'] ),
-			'responder'  => ! empty( $early['responder'] ),
+			'called'       => ! empty( $early['called'] ),
+			'evaluated'    => ! empty( $early['evaluated'] ),
+			'reason'       => $early['reason'] ?? null,
+			'autoloader'   => $early['autoloader']['source'] ?? null,
+			'library'      => $early['library'] ?? null,
+			'mode'         => $early['mode'] ?? null,
+			'outcome'      => $early['outcome'] ?? null,
+			'failure'      => isset( $early['failure'] ) ? strtok( (string) $early['failure'], ':' ) . ( '' !== $origin ? ' @ ' . basename( $origin ) : '' ) : null,
+			'refused'      => ! empty( $early['refused'] ),
+			'responder'    => ! empty( $early['responder'] ),
+
+			// Names only, and null when this path built no firewall.
+			'failed_rules' => isset( $early['failed_rules'] ) && is_array( $early['failed_rules'] ) ? array_values( array_map( 'strval', $early['failed_rules'] ) ) : null,
 		);
 	}
 

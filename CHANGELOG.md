@@ -36,6 +36,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   that reach WordPress. Troubleshooting only, and off by default: it tells
   anybody who can make a request how the firewall is deployed.
 
+- **Rules that failed to construct, per path** (#41). The library skips a rule
+  whose constructor throws and carries on, so a rule failing only on the web
+  containers showed up nowhere. Both paths now record their firewall's
+  `getFailedRules()` as `bucket/Class:index` names (`failed_rules`; no
+  messages) in the saved report, `early-report`, the `status` summary and the
+  debug header. Any failed rule makes the request a new `failed-rules`
+  anomaly, which Site Health raises as critical in `block` or `exception` mode
+  and as recommended in `log` mode. Reports now also carry `anomalies`, every
+  anomaly a request had, most serious first.
+
 ### Fixed
 
 - **The early path no longer requires a second Composer autoloader when the

@@ -185,6 +185,69 @@ final class EarlyDiagnosticsTest extends TestCase {
 	}
 
 	/**
+	 * Rules the firewall could not construct are named, without their messages (#41).
+	 */
+	public function test_failed_rules_are_named_without_messages(): void {
+		$firewall = new class() {
+			/**
+			 * What the library answers.
+			 *
+			 * @return list<array{bucket: string, plugin: string, error: string}>
+			 */
+			public function getFailedRules(): array { // phpcs:ignore WordPress.NamingConventions.ValidFunctionName.MethodNameInvalid -- the library's method name.
+				return array(
+					array(
+						'bucket' => 'block',
+						'plugin' => 'Kanopi\\BasicFirewall\\Vendor\\Kanopi\\Firewall\\Plugins\\Reputation:0',
+						'error'  => 'could not reach https://user:secret@reputation.internal',
+					),
+					array(
+						'bucket' => 'challenge',
+						'plugin' => 'RateLimit:2',
+						'error'  => 'no storage',
+					),
+				);
+			}
+		};
+
+		$this->assertSame( array( 'block/Reputation:0', 'challenge/RateLimit:2' ), basic_firewall_failed_rules( $firewall ) );
+
+		// A library copy too old to say, and one whose answer throws, cannot say.
+		$this->assertNull( basic_firewall_failed_rules( new \stdClass() ) );
+		$this->assertNull(
+			basic_firewall_failed_rules(
+				new class() {
+					/**
+					 * Fail the way a constructor throwing an Error would.
+					 *
+					 * @throws \TypeError Always.
+					 */
+					public function getFailedRules(): array { // phpcs:ignore WordPress.NamingConventions.ValidFunctionName.MethodNameInvalid -- the library's method name. // phpcs:ignore WordPress.NamingConventions.ValidFunctionName.MethodNameInvalid -- the library's method name.
+						throw new \TypeError( 'metadata must be of type array' );
+					}
+				}
+			)
+		);
+
+		// The debug report carries the names, and never a message.
+		$GLOBALS['basic_firewall_early'] = array(
+			'called'       => true,
+			'evaluated'    => true,
+			'failed_rules' => basic_firewall_failed_rules( $firewall ),
+		);
+
+		$report = basic_firewall_debug_report();
+
+		$this->assertSame( array( 'block/Reputation:0', 'challenge/RateLimit:2' ), $report['failed_rules'] );
+		$this->assertStringNotContainsString( 'secret', (string) json_encode( $report ) ); // phpcs:ignore WordPress.WP.AlternativeFunctions.json_encode_json_encode -- no WordPress in the unit suite.
+
+		// Null, not an empty list, when this path built no firewall.
+		$GLOBALS['basic_firewall_early'] = array( 'called' => true );
+
+		$this->assertNull( basic_firewall_debug_report()['failed_rules'] );
+	}
+
+	/**
 	 * What was logged.
 	 */
 	private function logged(): string {

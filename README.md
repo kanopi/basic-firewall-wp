@@ -442,12 +442,21 @@ from any container: whether the early path was called and evaluated, why not if
 it did not, which autoloader and library copy it used, the verdict it reached,
 any failure (class, message and file:line), and whether it handed a verdict on;
 what the runner itself did; the mode each path's firewall was actually in; the
+rules each path's firewall could not construct (`failed_rules`, as
+`bucket/Class:index` — names only, `null` when that path built no firewall); the
 compiled file's path, modification time and a hash prefix, as each path saw it;
 and the cache backend on each path. Two are kept: the last request, and the last
-**anomalous** one — a fail-open, an early path that did not evaluate for a
-reason other than `disabled`, `switched-off` or `deferred-login`, or a refusal
-the early path handed on instead of answering — so ordinary traffic does not
-overwrite the one worth reading. Each is kept for a day and written at most once
+**anomalous** one, so ordinary traffic does not overwrite the one worth reading.
+`anomalies` lists everything wrong with a request, most serious first, and
+`anomaly` is the first of them:
+
+| Anomaly | Meaning |
+|---|---|
+| `fail-open` | Either path failed and let the request through unfiltered. |
+| `early-verdict-deferred` | The early path reached a refusal and handed it on instead of answering it. |
+| `failed-rules` | A firewall either path built could not construct one or more rules. The library skips such a rule and carries on, so part of the configuration was not enforced on that request — and a rule that fails only on the web containers (a storage or reputation host only they cannot reach, a missing extension) shows up nowhere else. |
+| `not-evaluated` | The early path was called and did not evaluate, for a reason other than `disabled`, `switched-off` or `deferred-login`. |
+ Each is kept for a day and written at most once
 every five seconds; WP-CLI and cron are never recorded. Nothing sensitive is
 kept: the URL path without its query string, the request method, and facts about
 the firewall — no cookies, headers or client address, and credentials in a URL
@@ -459,9 +468,12 @@ wp basic-firewall early-report    # both reports in full, as JSON (--format=yaml
 ```
 
 Site Health's evaluation check raises the last anomaly while it is less than
-six hours old: **critical** for a request let through unfiltered in `block` or
-`exception` mode, or a refusal the early path did not answer; **recommended**
-for an early path that did not evaluate, with the fix for the reason.
+six hours old: **critical** for a request let through unfiltered or rules that
+could not be constructed, in `block` or `exception` mode, and for a refusal the
+early path did not answer; **recommended** for those two in `log` mode and for
+an early path that did not evaluate, with the fix for the reason. The library
+logs each rule it could not construct, with the reason, as `Firewall rule could
+not be constructed and is NOT active`.
 
 **The PHP error log.** Anything that makes either path let a request through
 unfiltered is logged, every time, and so is an early path that is called and
@@ -487,7 +499,7 @@ with the compact report as JSON:
 
 ```bash
 curl -sI "https://example.com/some-path/?nocache=$RANDOM" | grep -i x-basic-firewall-early
-# X-Basic-Firewall-Early: {"early":{"called":true,"evaluated":true,"reason":null,"autoloader":"option","library":"unscoped","mode":"exception","outcome":null,"failure":null,"refused":false,"responder":true},"runner":{...}}
+# X-Basic-Firewall-Early: {"early":{"called":true,"evaluated":true,"reason":null,"autoloader":"option","library":"unscoped","mode":"exception","outcome":null,"failure":null,"refused":false,"responder":true,"failed_rules":[]},"runner":{...}}
 ```
 
 It carries no paths beyond a file name and no message text, but it does tell

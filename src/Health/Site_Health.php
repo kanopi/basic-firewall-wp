@@ -1276,9 +1276,9 @@ final class Site_Health {
 	 * path, and which on a host with several web servers may not even have
 	 * reached the one a visitor did. The runner saves the last anomalous web
 	 * request's report (see Diagnostics), and this raises it while it is
-	 * recent: critical for a request let through unfiltered or a verdict
-	 * the early path handed on in a mode that refuses, recommended for an
-	 * early path that did not evaluate.
+	 * recent: critical for a request let through unfiltered, a verdict the
+	 * early path handed on, or rules that could not be built, in a mode that
+	 * refuses; recommended for an early path that did not evaluate.
 	 *
 	 * @return array{status: string, label: string, description: string, actions: string}|null
 	 */
@@ -1326,6 +1326,39 @@ final class Site_Health {
 					. ( null !== ( $early['refused'] ?? null ) ? '<p>' . esc_html( (string) $early['refused'] ) . '</p>' : '' )
 					. $capture
 				);
+
+			case 'failed-rules':
+				/*
+				 * A rule the library could not construct is skipped, so on
+				 * that request part of the configuration was not enforced --
+				 * for a block rule, a fail-open for exactly the traffic it
+				 * names. Critical where the mode refuses, as a fail-open is.
+				 * The compiled-configuration check reports rules the compiler
+				 * itself left out; these compiled and then failed to build on
+				 * a web request, which that check, run from this request,
+				 * cannot see.
+				 */
+				$lines = '';
+
+				foreach ( array(
+					'early'  => __( 'On the wp-config.php path', 'basic-firewall' ),
+					'runner' => __( 'On the mu-plugin path', 'basic-firewall' ),
+				) as $half => $where ) {
+					$names = array_map( 'strval', (array) ( ( 'early' === $half ? $early : $runner )['failed_rules'] ?? array() ) );
+
+					if ( array() !== $names ) {
+						$lines .= '<li>' . esc_html( $where ) . ': <code>' . implode( '</code>, <code>', array_map( 'esc_html', $names ) ) . '</code></li>';
+					}
+				}
+
+				$body = '<p>' . $when . esc_html__( 'was evaluated by a firewall that could not construct some of its rules, so those rules did not run. The library skips a rule whose constructor fails rather than stopping, so everything else went on working — which is why nothing else looks wrong.', 'basic-firewall' ) . '</p>'
+					. '<ul>' . $lines . '</ul>'
+					. '<p>' . esc_html__( 'A rule that fails on web requests and not here usually depends on something only the web servers lack: a storage or reputation host they cannot reach, a PHP extension, a file. The library logs each one with its reason, as "Firewall rule could not be constructed and is NOT active".', 'basic-firewall' ) . '</p>'
+					. $capture;
+
+				return in_array( $mode, array( 'block', 'exception' ), true )
+					? self::critical( __( 'The firewall recently ran without some of its rules', 'basic-firewall' ), $body )
+					: self::recommended( __( 'The firewall recently ran without some of its rules', 'basic-firewall' ), $body );
 
 			case 'not-evaluated':
 				$reason = isset( $early['reason'] ) ? (string) $early['reason'] : null;
