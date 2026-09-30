@@ -713,4 +713,124 @@ final class HttpEvaluationTest extends TestCase {
 		$this->assertNotContains( 429, array_slice( $statuses, 0, $limit ), 'A login within the allowance was refused: ' . implode( ', ', $statuses ) );
 		$this->assertSame( 429, $statuses[ $limit ], 'Direct requests for wp-login.php were never counted: ' . implode( ', ', $statuses ) );
 	}
+
+	/**
+	 * Every spelling of wp-login.php the web server runs it for is counted and refused.
+	 *
+	 * The web server decodes and normalises the URL before it chooses a file,
+	 * so `/./wp-login.php`, `/%77p-login.php`, `//wp-login.php` and
+	 * `/x/../wp-login.php` all run wp-login.php. The request rewrite this
+	 * plugin used before read the path out of the raw URL, so each reached the
+	 * rules as itself, uncounted and unrefused. The compiled
+	 * `path_source: script_name` reads the file that ran. Sent over a raw
+	 * socket, because an HTTP client may tidy the path first.
+	 */
+	public function test_alternate_spellings_of_the_login_page_are_caught(): void {
+		$spellings = array( '/wp-login.php', '/./wp-login.php', '/%77p-login.php', '//wp-login.php', '/x/../wp-login.php', '/wp-login.php' );
+
+		$this->given_rules(
+			array(
+				array(
+					'id'       => 'e2e_spelling_rate',
+					'type'     => 'rate_limit',
+					'label'    => 'End-to-end spelling rate limit',
+					'enabled'  => true,
+					'response' => 'block',
+					'weight'   => 0,
+					'record'   => 'no',
+					'settings' => array(
+						'paths'                => array(
+							array(
+								'pattern' => '/wp-login.php',
+								'limit'   => 5,
+								'window'  => 60,
+							),
+						),
+						'default_limit'        => 60,
+						'default_window'       => 60,
+						'limit_unlisted_paths' => false,
+						'status_code'          => 429,
+						'storage'              => array(
+							'backend' => 'file',
+							'file'    => 'private://e2e-ratelimit.data',
+						),
+					),
+				),
+			)
+		);
+
+		$statuses = array();
+
+		foreach ( $spellings as $index => $spelling ) {
+			$statuses[ $index . ' ' . $spelling ] = $this->raw_request( $spelling );
+		}
+
+		$this->assertNotContains( 429, array_slice( array_values( $statuses ), 0, 5 ), 'A login within the allowance was refused: ' . wp_json_encode( $statuses ) );
+		$this->assertSame( 429, array_values( $statuses )[5], 'The spellings were not counted against the /wp-login.php limit: ' . wp_json_encode( $statuses ) );
+
+		$this->given_rules(
+			array(
+				array(
+					'id'       => 'e2e_spelling_block',
+					'type'     => 'url',
+					'label'    => 'End-to-end spelling block',
+					'enabled'  => true,
+					'response' => 'block',
+					'weight'   => 0,
+					'record'   => 'no',
+					'settings' => array(
+						'match_type' => 'any',
+						'conditions' => array(
+							array(
+								'variable' => 'path',
+								'operator' => 'equals',
+								'value'    => '/wp-login.php',
+							),
+						),
+					),
+				),
+			)
+		);
+
+		foreach ( array_unique( $spellings ) as $spelling ) {
+			$this->assertSame( 403, $this->raw_request( $spelling ), $spelling . ' ran wp-login.php and got past a block on /wp-login.php.' );
+		}
+	}
+
+	/**
+	 * Make a request with the path sent exactly as given, and return the status.
+	 *
+	 * @param string $path Request target, sent verbatim.
+	 */
+	private function raw_request( string $path ): int {
+		$parts  = wp_parse_url( $this->base );
+		$secure = 'https' === ( $parts['scheme'] ?? 'http' );
+		$host   = (string) ( $parts['host'] ?? '127.0.0.1' );
+		$port   = (int) ( $parts['port'] ?? ( $secure ? 443 : 80 ) );
+
+		$context = stream_context_create(
+			array(
+				'ssl' => array(
+					'verify_peer'      => false,
+					'verify_peer_name' => false,
+				),
+			)
+		);
+
+		// phpcs:disable WordPress.WP.AlternativeFunctions -- a raw socket, so no client normalises the path.
+		$socket = stream_socket_client( ( $secure ? 'ssl://' : 'tcp://' ) . $host . ':' . $port, $errno, $errstr, 5, STREAM_CLIENT_CONNECT, $context );
+
+		if ( false === $socket ) {
+			$this->fail( 'Could not connect to the site: ' . $errstr );
+		}
+
+		stream_set_timeout( $socket, 15 );
+		fwrite( $socket, 'GET ' . $path . " HTTP/1.0\r\nHost: " . $host . "\r\nUser-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Safari/605.1.15\r\nConnection: close\r\n\r\n" );
+
+		$status = (string) fgets( $socket );
+		fclose( $socket );
+		// phpcs:enable WordPress.WP.AlternativeFunctions
+
+		return 1 === preg_match( '#^HTTP/\S+ (\d{3})#', $status, $match ) ? (int) $match[1] : 0;
+	}
 }

@@ -323,13 +323,12 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 	/**
 	 * The current request, as the firewall should see it.
 	 *
-	 * WordPress serves pages from files other than index.php -- wp-login.php,
-	 * xmlrpc.php, every wp-admin screen -- and for those Symfony reads the
-	 * requested file as the front controller and reports the path as `/`, so
-	 * no path rule or rate limit could ever match one. The plugin's
-	 * Request_Factory corrects that in the request's own copy of the server
-	 * values, and is the same class the mu-plugin builds its request with, so
-	 * the two paths cannot see one request differently.
+	 * Built by the plugin's Request_Factory, the same class the mu-plugin
+	 * builds its request with, so the two paths cannot see one request
+	 * differently. The request is Symfony's own, unedited: which path the
+	 * rules match for a directly requested file -- wp-login.php, xmlrpc.php,
+	 * a wp-admin screen -- is the library's job, under the compiled
+	 * `path_source: script_name`.
 	 *
 	 * Loaded by hand for the reason Decision_Dispatcher is: the release
 	 * build's autoloader carries the vendored tree and not this plugin's own

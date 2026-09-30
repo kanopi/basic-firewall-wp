@@ -19,18 +19,20 @@ use Kanopi\Firewall\Plugins\UserAgent;
  * The one thing to know before writing a rule here is the difference between
  * `bot` and `automated`, because it decides whether the rule stops scanners:
  *
- * | Agent                  | `bot:true` | `automated:true` |
- * |------------------------|------------|------------------|
- * | `sqlmap/1.7`           | allowed    | **blocked**      |
- * | `Nikto/2.5.0`          | allowed    | **blocked**      |
- * | `curl/8.0`             | allowed    | **blocked**      |
- * | `python-requests/2.31` | allowed    | **blocked**      |
- * | `Googlebot/2.1`        | blocked    | blocked          |
- * | iPhone Safari          | allowed    | allowed          |
+ * | Agent                  | `bot:true`  | `automated:true` |
+ * |------------------------|-------------|------------------|
+ * | `sqlmap/1.7`           | allowed     | **blocked**      |
+ * | Nikto's default agent  | **blocked** | **blocked**      |
+ * | `curl/8.0`             | allowed     | **blocked**      |
+ * | `python-requests/2.31` | allowed     | **blocked**      |
+ * | `Googlebot/2.1`        | blocked     | blocked          |
+ * | iPhone Safari          | allowed     | allowed          |
  *
  * `bot` is backed by a curated database of known crawlers, which does not
- * classify scanners or generic HTTP client libraries. **A rule written as
- * `bot equals true` has been letting sqlmap and nikto straight through.**
+ * classify most scanners or generic HTTP client libraries. **A rule written as
+ * `bot equals true` lets sqlmap, curl and python-requests straight through.**
+ * Nikto's default agent is the exception: device-detector 6.5.2, the minimum
+ * kanopi/firewall 2.34.0 requires, added it to the database.
  * `automated` is that database plus a broader crawler list, and is almost always
  * the condition somebody means.
  *
@@ -195,7 +197,7 @@ final class User_Agent extends Condition_Rule_Type_Base {
 		 */
 		return array(
 			'automated'      => __( 'Automated — the curated bot database plus the wider crawler list. This is the one that stops scanners.', 'basic-firewall' ),
-			'bot'            => __( 'Bot — the curated crawler database only. Does not classify sqlmap, nikto, curl or python-requests.', 'basic-firewall' ),
+			'bot'            => __( 'Bot — the curated crawler database only. Does not classify sqlmap, curl or python-requests.', 'basic-firewall' ),
 			'bot.name'       => __( 'Bot name', 'basic-firewall' ),
 			'bot.category'   => __( 'Bot category — only populated by the curated database', 'basic-firewall' ),
 			'bot.producer'   => __( 'Bot producer — only populated by the curated database', 'basic-firewall' ),

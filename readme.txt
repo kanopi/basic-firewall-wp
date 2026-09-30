@@ -108,7 +108,7 @@ Two causes account for almost all of it. A geolocation or edge signal rule
 reading your CDN's headers on a site that has not declared its trusted proxies:
 the headers are ignored, and the rule warns. Or a user agent rule using `bot`
 rather than `automated`: `bot` is a curated crawler database that does not
-classify sqlmap, nikto, curl or python-requests. Use the Test screen; it shows
+classify sqlmap, curl or python-requests. Use the Test screen; it shows
 exactly what was compared against what. A rule with an activity window matches
 nothing while it is asleep, and the rule list says when that is.
 

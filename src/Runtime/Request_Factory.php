@@ -14,45 +14,34 @@ use Symfony\Component\HttpFoundation\Request;
 /**
  * The one place a request for the firewall is made.
  *
- * **Why this exists.** The library matches `path`, rate limit patterns, the
- * block records it writes and the `path` it logs against Symfony's
- * `getPathInfo()`: the URL path with the front controller's base URL taken off.
- * Symfony finds that base URL from `SCRIPT_NAME`, which is right for an
- * application where every request goes through `index.php`. WordPress is not
- * one. It serves real pages from the file that was requested -- `wp-login.php`,
- * `xmlrpc.php`, `wp-cron.php`, every `wp-admin/*.php`, and whatever custom
- * endpoint a site drops in its root -- and for those `SCRIPT_NAME` *is* the
- * requested file. Symfony takes the whole path as the base URL and the path
- * the rules see is `/`. A `/wp-login.php` rate limit never counted a login, a
- * rule on `/wp-admin` never matched a screen, and a negated path condition
- * matched every one of them (#30).
+ * **Why it is one place.** The wp-config.php path, the mu-plugin's runner
+ * (including a logged-in request deferred to `plugins_loaded`) and the
+ * lockdown screen's address check all build the request the library
+ * evaluates, and the wp-config.php path has to build it from the same copy of
+ * the library -- scoped or not -- that it built the firewall from. Keeping the
+ * construction here means none of them can see one request differently.
  *
- * **What it does.** It builds the request from the globals as Symfony would,
- * then points `SCRIPT_NAME` and `PHP_SELF` at the front controller and
- * `SCRIPT_FILENAME` at `ABSPATH . 'index.php'` in *the request's own* server
- * bag. A direct request then looks the way an `index.php`-routed one already
- * does, and `getPathInfo()` is the requested path. The real `$_SERVER` is never
- * touched: WordPress derives `$pagenow` from `PHP_SELF`, and the login form's
- * action and the admin's redirects follow from that.
- *
- * **The front controller is worked out, not assumed.** A site served from
- * `/blog/` has its front controller at `/blog/index.php`, and a direct request
- * says so: `SCRIPT_NAME` is `/blog/wp-admin/edit.php` and `SCRIPT_FILENAME` is
- * `ABSPATH . 'wp-admin/edit.php'`, so the web prefix is what is left of the
- * one once the other's path under `ABSPATH` is taken off its end. When the two
- * cannot be reconciled -- a script outside `ABSPATH`, a server that reports
- * something else in `SCRIPT_NAME`, the CLI -- the request is left exactly as
- * Symfony built it. A wrong guess would move every path rule somewhere nobody
- * configured it; leaving it alone is the behaviour the site already had.
+ * **What it no longer does.** The library matched `path` against Symfony's
+ * `getPathInfo()`, which is `/` for a file the web server runs directly --
+ * `wp-login.php`, `xmlrpc.php`, every `wp-admin/*.php` (#30). This factory used
+ * to work around that by pointing the request's own `SCRIPT_NAME` at
+ * `index.php`, so `getPathInfo()` returned the path out of the raw
+ * `REQUEST_URI`. That was bypassable: the web server decodes and normalises
+ * the URL before it chooses a file, so `/./wp-login.php`, `/%77p-login.php`,
+ * `//wp-login.php`, `/x/../wp-login.php` and `/wp-login.php;x` all run
+ * wp-login.php, and each reached the rules as the raw string rather than
+ * `/wp-login.php`. kanopi/firewall 2.34.0 fixed it where it belongs: the
+ * compiled `global.path_source: script_name` matches the file the server ran.
+ * So the request is now built exactly as Symfony builds it, with no edits to
+ * its server values, and the real `$_SERVER` is never touched either.
  *
  * **WordPress-free.** The wp-config.php path loads this file by hand, before
- * WordPress exists, and builds the request from the same copy of the library
- * it built the firewall from. Nothing here may call a WordPress function.
+ * WordPress exists. Nothing here may call a WordPress function.
  */
 final class Request_Factory {
 
 	/**
-	 * The front controller, as a path under ABSPATH.
+	 * The front controller's file name.
 	 */
 	private const FRONT_CONTROLLER = 'index.php';
 
@@ -60,11 +49,7 @@ final class Request_Factory {
 	 * The current request, as the firewall should see it.
 	 */
 	public static function from_globals(): Request {
-		$request = Request::createFromGlobals();
-
-		self::normalise( $request );
-
-		return $request;
+		return Request::createFromGlobals();
 	}
 
 	/**
@@ -79,171 +64,86 @@ final class Request_Factory {
 	 * @return object The request, an instance of `$request_class`.
 	 */
 	public static function from_globals_of( string $request_class ): object {
-		$request = call_user_func( array( $request_class, 'createFromGlobals' ) );
-
-		self::normalise( $request );
-
-		return $request;
-	}
-
-	/**
-	 * Point a freshly built request's server bag at the front controller.
-	 *
-	 * Only on a request nothing has asked for its path yet: Symfony works the
-	 * base URL out once and keeps it. A request built by createFromGlobals()
-	 * or create() and handed straight here is in that state.
-	 *
-	 * @param object $request A Symfony Request.
-	 */
-	public static function normalise( object $request ): void {
-		if ( ! isset( $request->server ) || ! is_object( $request->server ) || ! method_exists( $request->server, 'all' ) ) {
-			return;
-		}
-
-		$replacement = self::front_controller( $request->server->all(), self::abspath() );
-
-		foreach ( null === $replacement ? array() : $replacement as $key => $value ) {
-			$request->server->set( $key, $value );
-		}
-	}
-
-	/**
-	 * The server values that make a direct request look `index.php`-routed.
-	 *
-	 * A pure function of its arguments, so every case can be tested without
-	 * a web server. Null means "leave the request alone": it is already
-	 * routed through the front controller, or the values do not describe a
-	 * file under `$abspath` in a way that can be trusted.
-	 *
-	 * @param array<string, mixed> $server  Server values, as `$_SERVER` has them.
-	 * @param string               $abspath The WordPress root, ABSPATH.
-	 *
-	 * @return array{SCRIPT_NAME: string, PHP_SELF: string, SCRIPT_FILENAME: string}|null
-	 */
-	public static function front_controller( array $server, string $abspath ): ?array {
-		$script_name = $server['SCRIPT_NAME'] ?? null;
-		$script_file = $server['SCRIPT_FILENAME'] ?? null;
-
-		if ( ! is_string( $script_name ) || ! is_string( $script_file ) || '' === $script_name || '' === $script_file || '' === $abspath ) {
-			return null;
-		}
-
-		$relative = self::relative_path( $script_file, $abspath );
-
-		// Already the front controller, including `/index.php/some/path`:
-		// Symfony handles that shape itself.
-		if ( null === $relative || '' === $relative || self::FRONT_CONTROLLER === $relative ) {
-			return null;
-		}
-
-		/*
-		 * The web prefix is SCRIPT_NAME with the file's path under ABSPATH
-		 * taken off its end. If SCRIPT_NAME does not end that way, the server
-		 * is describing the request in terms this cannot map back -- a rewrite
-		 * that changed the script name, `cgi.fix_pathinfo` folding PATH_INFO
-		 * into it -- and the request is left as it was built.
-		 */
-		$suffix = '/' . $relative;
-
-		if ( strlen( $script_name ) < strlen( $suffix ) || substr( $script_name, -strlen( $suffix ) ) !== $suffix ) {
-			return null;
-		}
-
-		$prefix = substr( $script_name, 0, -strlen( $suffix ) );
-
-		if ( '' !== $prefix && '/' !== $prefix[0] ) {
-			return null;
-		}
-
-		$front     = $prefix . '/' . self::FRONT_CONTROLLER;
-		$path_info = $server['PATH_INFO'] ?? '';
-
-		return array(
-			'SCRIPT_NAME'     => $front,
-
-			// PHP_SELF is SCRIPT_NAME followed by any PATH_INFO, as the
-			// server would have reported it for the front controller.
-			'PHP_SELF'        => $front . ( is_string( $path_info ) ? $path_info : '' ),
-			'SCRIPT_FILENAME' => rtrim( $abspath, '/\\' ) . '/' . self::FRONT_CONTROLLER,
-		);
+		return call_user_func( array( $request_class, 'createFromGlobals' ) );
 	}
 
 	/**
 	 * The server values a web server gives a request for a path on this site.
 	 *
 	 * For the requests this plugin makes up -- the request tester and the
-	 * Site Health check -- so they are built the way a real request is and
-	 * then go through front_controller() like one. A path naming a PHP file
-	 * that exists under `$abspath` is a direct request for it; anything else
-	 * is routed through `index.php`, as the web server's rewrite would.
+	 * Site Health check -- so the library resolves their path the way it
+	 * resolves a real one. A path naming a PHP file that exists under
+	 * `$abspath`, where WordPress's files are served, is a direct request for
+	 * it: `SCRIPT_NAME` is that file and anything after it is `PATH_INFO`.
+	 * Anything else is routed through the front controller, as the web
+	 * server's rewrite would, with `SCRIPT_NAME` `<base>/index.php`.
 	 *
-	 * @param string $path      The path relative to the site, e.g. `/wp-login.php?x=1`.
-	 * @param string $site_path The site's own path on the host: `` or `/blog`.
+	 * The server's own normalisation is not simulated: the path is taken as
+	 * the file it names, which is what the server would have run.
+	 *
+	 * @param string $path      The path relative to the base path, e.g. `/wp-login.php?x=1`.
+	 * @param string $base_path Where the front controller's directory is served: `` or `/blog`.
+	 * @param string $core_path Where ABSPATH is served: `` , `/blog` or `/wp`.
 	 * @param string $abspath   The WordPress root, ABSPATH.
 	 *
-	 * @return array{REQUEST_URI: string, SCRIPT_NAME: string, PHP_SELF: string, SCRIPT_FILENAME: string}
+	 * @return array{REQUEST_URI: string, SCRIPT_NAME: string, PHP_SELF: string, SCRIPT_FILENAME: string, PATH_INFO: string}
 	 */
-	public static function server_for( string $path, string $site_path, string $abspath ): array {
-		$site_path = rtrim( $site_path, '/' );
-		$uri       = $site_path . '/' . ltrim( $path, '/' );
-		$location  = (string) strtok( '/' . ltrim( $path, '/' ), '?#' );
+	public static function server_for( string $path, string $base_path, string $core_path, string $abspath ): array {
+		$base_path = rtrim( $base_path, '/' );
+		$core_path = rtrim( $core_path, '/' );
+		$uri       = $base_path . '/' . ltrim( $path, '/' );
+		$location  = (string) strtok( $uri, '?#' );
 		$root      = rtrim( $abspath, '/\\' ) . '/';
-		$script    = '/' . self::FRONT_CONTROLLER;
-		$extra     = $location;
 
-		if ( 1 === preg_match( '#^(/(?:[^/]+/)*?[^/]+\.php)(/.*)?$#i', $location, $parts ) && is_file( $root . ltrim( $parts[1], '/' ) ) ) {
-			$script = $parts[1];
-			$extra  = $parts[2] ?? '';
+		if ( '' === $core_path || 0 === strpos( $location, $core_path . '/' ) ) {
+			$under_core = substr( $location, strlen( $core_path ) );
+
+			if ( 1 === preg_match( '#^(/(?:[^/]+/)*?[^/]+\.php)(/.*)?$#i', $under_core, $parts ) && is_file( $root . ltrim( $parts[1], '/' ) ) ) {
+				$script = $core_path . $parts[1];
+				$extra  = $parts[2] ?? '';
+
+				return array(
+					'REQUEST_URI'     => $uri,
+					'SCRIPT_NAME'     => $script,
+					'PHP_SELF'        => $script . $extra,
+					'SCRIPT_FILENAME' => $root . ltrim( $parts[1], '/' ),
+					'PATH_INFO'       => $extra,
+				);
+			}
 		}
+
+		$front = $base_path . '/' . self::FRONT_CONTROLLER;
 
 		return array(
 			'REQUEST_URI'     => $uri,
-			'SCRIPT_NAME'     => $site_path . $script,
-			'PHP_SELF'        => $site_path . $script . ( '/' . self::FRONT_CONTROLLER === $script ? '' : $extra ),
-			'SCRIPT_FILENAME' => $root . ltrim( $script, '/' ),
+			'SCRIPT_NAME'     => $front,
+			'PHP_SELF'        => $front,
+			'SCRIPT_FILENAME' => self::front_controller_file( $root, $base_path, $core_path ),
+			'PATH_INFO'       => '',
 		);
 	}
 
 	/**
-	 * The requested file's path under the WordPress root, or null.
+	 * Where the front controller is on disk.
 	 *
-	 * Compared as given first, which is every ordinary server. Only when that
-	 * fails are both resolved, for a docroot reached through a symlink that
-	 * ABSPATH (built from `__DIR__`, so already resolved) does not share.
+	 * Beside ABSPATH's own index.php when WordPress is served from the base
+	 * path; that many directories up when it has a directory of its own
+	 * (`/wp` under the base: one up). Symfony reads only the file's name, so
+	 * this matters less than it looks, but it is the file the server would run.
 	 *
-	 * @param string $file    SCRIPT_FILENAME.
-	 * @param string $abspath ABSPATH.
+	 * @param string $root      ABSPATH, with a trailing slash.
+	 * @param string $base_path The base path.
+	 * @param string $core_path The core path.
 	 */
-	private static function relative_path( string $file, string $abspath ): ?string {
-		$relative = self::under( $file, $abspath );
+	private static function front_controller_file( string $root, string $base_path, string $core_path ): string {
+		$prefix = '' === $base_path ? $core_path : ( 0 === strpos( $core_path, $base_path . '/' ) ? substr( $core_path, strlen( $base_path ) ) : '' );
+		$depth  = '' === $prefix ? 0 : substr_count( $prefix, '/' );
+		$dir    = rtrim( $root, '/' );
 
-		if ( null !== $relative ) {
-			return $relative;
+		for ( $i = 0; $i < $depth; $i++ ) {
+			$dir = dirname( $dir );
 		}
 
-		$real_file = realpath( $file );
-		$real_root = realpath( $abspath );
-
-		return false === $real_file || false === $real_root ? null : self::under( $real_file, $real_root );
-	}
-
-	/**
-	 * `$file` relative to `$root`, with forward slashes, or null if outside it.
-	 *
-	 * @param string $file File path.
-	 * @param string $root Directory path.
-	 */
-	private static function under( string $file, string $root ): ?string {
-		$file = str_replace( '\\', '/', $file );
-		$root = rtrim( str_replace( '\\', '/', $root ), '/' ) . '/';
-
-		return 0 === strpos( $file, $root ) ? substr( $file, strlen( $root ) ) : null;
-	}
-
-	/**
-	 * ABSPATH, or an empty string where it is not defined.
-	 */
-	private static function abspath(): string {
-		return defined( 'ABSPATH' ) ? ABSPATH : '';
+		return $dir . '/' . self::FRONT_CONTROLLER;
 	}
 }

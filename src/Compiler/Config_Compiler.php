@@ -25,6 +25,8 @@ use Kanopi\BasicFirewall\RuleType\Types\User_Agent;
 use Kanopi\BasicFirewall\Runtime\Lockdown;
 use Kanopi\BasicFirewall\Runtime\Role_Bypass;
 use Kanopi\BasicFirewall\Support\Schema;
+use Kanopi\BasicFirewall\Support\Site_Layout;
+use Kanopi\Firewall\Utility\RequestPath;
 use Kanopi\Firewall\Utility\Schedule;
 use Symfony\Component\Yaml\Yaml;
 
@@ -339,7 +341,40 @@ final class Config_Compiler {
 			 * same either way; this decides whether anybody finds out.
 			 */
 			'require_config'          => (bool) ( $section['require_config'] ?? true ),
+
+			/*
+			 * Match the file the web server ran, not the path relative to it.
+			 *
+			 * WordPress serves wp-login.php, xmlrpc.php, wp-cron.php and every
+			 * wp-admin screen as files of their own. Under the library's
+			 * default, `pathinfo`, each of them is `/`, so a `/wp-login.php`
+			 * rate limit never counted and a negated path condition matched
+			 * every admin screen (#30). `script_name` is `SCRIPT_NAME` plus
+			 * `PATH_INFO`, falling back to `getPathInfo()` for the front
+			 * controller -- the file the server chose after decoding and
+			 * normalising the URL, so `/./wp-login.php`, `/%77p-login.php`
+			 * and `//wp-login.php` are all `/wp-login.php`. Reading the raw
+			 * URL instead, as the request rewrite this replaces (#31) did,
+			 * let each of those spellings past the same limit.
+			 *
+			 * Always written, not a setting: there is no WordPress site the
+			 * default is right for.
+			 */
+			'path_source'             => RequestPath::SCRIPT_NAME,
 		);
+
+		/*
+		 * Where the front controller is, which only the compiler can say: the
+		 * wp-config.php path runs before there are options to read, and a
+		 * direct-file request does not carry it. Site_Layout explains the
+		 * layouts, including why WordPress in its own directory gets none.
+		 * Left out at the web root, where it would strip nothing.
+		 */
+		$base_path = Site_Layout::base_path();
+
+		if ( '' !== $base_path ) {
+			$compiled['base_path'] = $base_path;
+		}
 
 		/*
 		 * Three states, and "absent" is one of them. The library reads an absent
@@ -1384,6 +1419,25 @@ final class Config_Compiler {
 			 */
 			'ttl'         => max( 60, (int) ( $challenge['ttl'] ?? 3600 ) ),
 		);
+
+		/*
+		 * Where the interstitial posts its answer, named rather than left to
+		 * the library.
+		 *
+		 * Left alone, the library builds the form's action from the request's
+		 * base path, which on a direct file is the file's directory: a
+		 * challenge on `/wp-admin/edit.php` posted to
+		 * `/wp-admin/basic-firewall/challenge`. The web server routes that
+		 * through index.php, where the path is not the challenge path, so the
+		 * answer was never recognised and the visitor was challenged again.
+		 * The challenge path is matched through the front controller, so the
+		 * answer belongs under the front controller's directory -- the same
+		 * base path the compiled `global.base_path` names. Only for a rooted
+		 * path; anything else is already an address the browser resolves.
+		 */
+		if ( 0 === strpos( $compiled['path'], '/' ) ) {
+			$compiled['submit_url'] = Site_Layout::base_path() . $compiled['path'];
+		}
 
 		$secret = Challenge_Secret::resolve();
 

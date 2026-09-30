@@ -23,7 +23,10 @@ use Kanopi\BasicFirewall\RuleType\Types\User_Agent;
 use Kanopi\BasicFirewall\Runtime\Runner;
 use Kanopi\BasicFirewall\Runtime\Trusted_Proxies;
 use Kanopi\BasicFirewall\Support\Autoloader_Locator;
+use Kanopi\BasicFirewall\Support\Site_Layout;
 use Kanopi\Firewall\Firewall;
+use Kanopi\Firewall\Utility\RequestPath;
+use Symfony\Component\Yaml\Yaml;
 
 /**
  * The translation of `hook_requirements()` and the Drupal status report.
@@ -662,41 +665,158 @@ final class Site_Health {
 	/**
 	 * Does a direct request for wp-login.php reach the rules as `/wp-login.php`?
 	 *
-	 * WordPress serves pages from files other than index.php, and Symfony
-	 * reads the requested file as the front controller and reports the path of
-	 * every such request as `/`. The plugin corrects that when it builds the
-	 * request; this builds the request a web server would describe for
-	 * `wp-login.php` and checks the correction held. If it did not, a
-	 * `/wp-login.php` rate limit counts nothing and no rule on `/wp-admin`
-	 * matches a screen -- while every one of them reads as protection. Critical
-	 * for that reason, and cheap: one request object, no evaluation.
+	 * WordPress serves the login page, XML-RPC, cron and every admin screen as
+	 * files of their own, and under the library's default path source each of
+	 * them is `/` (#30). The compiled file fixes that with
+	 * `path_source: script_name` and, in a subdirectory, `base_path`. This
+	 * reads both back out of the compiled file -- the one the early path reads
+	 * -- builds the request a web server sends for wp-login.php on this site,
+	 * and asks the library's own resolver what `path` the rules would see.
+	 *
+	 * Critical when the key is missing (an old compiled file, or advanced YAML
+	 * overriding it), when the base path is unusable, when wp-login.php does
+	 * not resolve to itself, or when a page does not resolve to its own path --
+	 * which is what a stale `base_path` looks like after a site moves, and
+	 * means every front-end request is matched as `/index.php`. All of those
+	 * leave rules that read as protection and match nothing. One request
+	 * object each, no evaluation.
+	 *
+	 * A recommendation where WordPress has its own directory and something
+	 * still names its files without that directory: see Site_Layout for why
+	 * those are matched with the prefix.
 	 *
 	 * @return array{status: string, label: string, description: string, actions: string}
 	 */
 	private static function check_request_path(): array {
+		$compiled = Plugin::instance()->compiled()->contents();
+
 		try {
-			$seen = Request_Tester::site_request( '/wp-login.php' )->getPathInfo();
+			$config = null === $compiled ? array() : Yaml::parse( $compiled );
 		} catch ( \Throwable $e ) {
-			$seen = null;
+			$config = array();
 		}
 
-		if ( '/wp-login.php' === $seen ) {
-			return self::ok(
-				__( 'Rules see the path of a directly requested file', 'basic-firewall' ),
-				esc_html__( 'WordPress serves the login page, XML-RPC and every admin screen from files other than index.php. A direct request for wp-login.php reaches the rules as /wp-login.php, so path conditions and rate limits on it match.', 'basic-firewall' )
+		$global = is_array( $config ) && is_array( $config['global'] ?? null ) ? $config['global'] : array();
+		$source = $global['path_source'] ?? null;
+
+		if ( RequestPath::SCRIPT_NAME !== $source ) {
+			return self::critical(
+				__( 'Rules see the wrong path for directly requested files', 'basic-firewall' ),
+				'<p>' . esc_html(
+					sprintf(
+						/* translators: %s: the path_source value found, or "nothing". */
+						__( 'The compiled configuration sets path_source to %s rather than script_name, so a direct request for wp-login.php, xmlrpc.php or an admin screen reaches the rules as /. Path conditions and rate limits on those pages are not matching, and a negated path condition matches all of them. Rebuild the firewall; if the advanced YAML sets path_source, remove it.', 'basic-firewall' ),
+						is_scalar( $source ) ? (string) $source : __( 'nothing', 'basic-firewall' )
+					)
+				) . '</p>'
 			);
 		}
 
-		return self::critical(
-			__( 'Rules see the wrong path for directly requested files', 'basic-firewall' ),
-			'<p>' . esc_html(
+		$base = RequestPath::normaliseBasePath( $global['base_path'] ?? null );
+
+		if ( null === $base ) {
+			return self::critical(
+				__( 'Rules see the wrong path for directly requested files', 'basic-firewall' ),
+				'<p>' . esc_html__( 'The compiled configuration has a base_path the firewall library cannot use, so it matches against the wrong path. Rebuild the firewall; if the advanced YAML sets base_path, remove it.', 'basic-firewall' ) . '</p>'
+			);
+		}
+
+		$prefix   = Site_Layout::core_prefix();
+		$expected = $prefix . '/wp-login.php';
+		$page     = '/basic-firewall-path-check/';
+
+		try {
+			$seen      = RequestPath::resolve( Request_Tester::site_request( $expected ), RequestPath::SCRIPT_NAME, $base );
+			$page_seen = RequestPath::resolve( Request_Tester::site_request( $page ), RequestPath::SCRIPT_NAME, $base );
+		} catch ( \Throwable $e ) {
+			$seen      = null;
+			$page_seen = null;
+		}
+
+		if ( $expected !== $seen || $page !== $page_seen ) {
+			return self::critical(
+				__( 'Rules see the wrong path for directly requested files', 'basic-firewall' ),
+				'<p>' . esc_html(
+					sprintf(
+						/* translators: 1: the expected login path, 2: the path the firewall saw, 3: the expected page path, 4: the path the firewall saw for it. */
+						__( 'A direct request for wp-login.php reached the rules as %2$s instead of %1$s, and a page at %3$s as %4$s. The compiled base_path does not match where this site is served, so path conditions and rate limits are matching the wrong thing. Rebuild the firewall; if this persists, report it with the plugin and PHP versions.', 'basic-firewall' ),
+						$expected,
+						null === $seen ? __( 'nothing', 'basic-firewall' ) : $seen,
+						$page,
+						null === $page_seen ? __( 'nothing', 'basic-firewall' ) : $page_seen
+					)
+				) . '</p>'
+			);
+		}
+
+		if ( '' !== $prefix ) {
+			$unprefixed = self::unprefixed_core_paths( (string) $compiled, $config, $prefix );
+
+			$description = '<p>' . esc_html(
 				sprintf(
-					/* translators: %s: the path the firewall saw, or "nothing". */
-					__( 'A direct request for wp-login.php reached the rules as %s instead of /wp-login.php. Path conditions and rate limits on the login page, XML-RPC and admin screens are not matching, and a negated path condition matches all of them. Update the plugin; if this persists, report it with the plugin and PHP versions.', 'basic-firewall' ),
-					null === $seen ? __( 'nothing', 'basic-firewall' ) : $seen
+					/* translators: 1: the directory WordPress is in, e.g. /wp, 2: the login path with it, e.g. /wp/wp-login.php. */
+					__( 'WordPress has its own directory, %1$s, so its own files are matched with it: a direct request for the login page reaches the rules as %2$s, and admin screens as %1$s/wp-admin/…. A rule on /wp-login.php matches only the bare address, which WordPress redirects.', 'basic-firewall' ),
+					$prefix,
+					$expected
 				)
-			) . '</p>'
+			) . '</p>';
+
+			if ( $unprefixed ) {
+				return self::recommended(
+					sprintf(
+						/* translators: %s: the directory WordPress is in, e.g. /wp. */
+						__( 'Some rules name WordPress\'s own files without %s', 'basic-firewall' ),
+						$prefix
+					),
+					$description . '<p>' . esc_html(
+						sprintf(
+							/* translators: %s: the directory WordPress is in, e.g. /wp. */
+							__( 'A rule or an enabled preset names /wp-login.php, /xmlrpc.php, /wp-cron.php or /wp-admin without %s, so it does not match those files on this site. The presets are written for WordPress at the root. Add rules for the prefixed paths, or match with ends with or contains.', 'basic-firewall' ),
+							$prefix
+						)
+					) . '</p>'
+				);
+			}
+
+			return self::ok( __( 'Rules see the path of a directly requested file', 'basic-firewall' ), $description );
+		}
+
+		return self::ok(
+			__( 'Rules see the path of a directly requested file', 'basic-firewall' ),
+			esc_html__( 'WordPress serves the login page, XML-RPC and every admin screen from files other than index.php. The firewall matches the file the web server ran, so a direct request for wp-login.php reaches the rules as /wp-login.php however its address is spelled, and path conditions and rate limits on it match.', 'basic-firewall' )
 		);
+	}
+
+	/**
+	 * Whether the compiled file or an enabled preset names a core file bare.
+	 *
+	 * Comment lines are skipped, because the presets' headers talk about the
+	 * paths they cover. A regular expression's escaped dot counts as a mention.
+	 *
+	 * @param string       $compiled The compiled file's contents.
+	 * @param array<mixed> $config   The compiled file, parsed.
+	 * @param string       $prefix   WordPress's directory, e.g. `/wp`.
+	 */
+	private static function unprefixed_core_paths( string $compiled, array $config, string $prefix ): bool {
+		$texts = array( $compiled );
+
+		foreach ( (array) ( $config['configs'] ?? array() ) as $file ) {
+			if ( is_string( $file ) && is_readable( $file ) ) {
+				$texts[] = (string) file_get_contents( $file ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- a local preset file.
+			}
+		}
+
+		$pattern = '#(?<!' . preg_quote( $prefix, '#' ) . ')/(?:wp-login\\\\?\.php|xmlrpc\\\\?\.php|wp-cron\\\\?\.php|wp-admin\b)#';
+
+		foreach ( $texts as $text ) {
+			$lines = preg_replace( '/^\s*#.*$/m', '', $text );
+
+			if ( is_string( $lines ) && 1 === preg_match( $pattern, $lines ) ) {
+				return true;
+			}
+		}
+
+		return false;
 	}
 
 	/**
