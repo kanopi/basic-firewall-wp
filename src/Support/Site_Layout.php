@@ -92,8 +92,10 @@ final class Site_Layout {
 	/**
 	 * The layout from the addresses, as a pure function.
 	 *
-	 * @param array{home: string, siteurl: string, network_path?: string|null, network_siteurl?: string|null} $addresses
-	 *        The site's addresses; on a network, also the network's path and the main site's WordPress address.
+	 * On a network, `network_path` is the network's path and `network_siteurl`
+	 * the main site's WordPress address.
+	 *
+	 * @param array{home: string, siteurl: string, network_path?: string|null, network_siteurl?: string|null} $addresses The site's addresses.
 	 *
 	 * @return array{base_path: string, core_path: string}
 	 */

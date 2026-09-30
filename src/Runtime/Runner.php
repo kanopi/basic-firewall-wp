@@ -197,11 +197,12 @@ final class Runner {
 		 * idea that object exists -- so without this, `mark` is a response type
 		 * the rule screen offers and nothing on the site can ever observe.
 		 *
-		 * Through Request_Factory, as the wp-config.php path does, so that a
-		 * directly requested file -- wp-login.php, a wp-admin screen -- is
-		 * matched, counted and logged on its own path rather than on `/`. That
-		 * includes a logged-in request deferred to `plugins_loaded`, which is
-		 * evaluated here.
+		 * Through Request_Factory, as the wp-config.php path does, so both
+		 * paths hand the library the same request -- including a logged-in
+		 * request deferred to `plugins_loaded`, which is evaluated here. The
+		 * library then matches a directly requested file (wp-login.php, a
+		 * wp-admin screen) on the file the server ran, under the compiled
+		 * `path_source: script_name`.
 		 */
 		$request = $request ?? Request_Factory::from_globals();
 

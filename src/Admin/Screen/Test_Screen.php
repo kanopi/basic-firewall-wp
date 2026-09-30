@@ -11,6 +11,8 @@ namespace Kanopi\BasicFirewall\Admin\Screen;
 
 use Kanopi\BasicFirewall\Admin\Screen;
 use Kanopi\BasicFirewall\Request_Tester;
+use Kanopi\BasicFirewall\Support\Site_Layout;
+
 
 /**
  * "Would this be blocked?", answered without waiting for it to happen.
@@ -259,7 +261,9 @@ final class Test_Screen extends Screen {
 
 		$this->row(
 			__( 'Path', 'basic-firewall' ),
-			self::text( 'path', $this->submitted['path'] ?? '/wp-login.php' )
+			// The login page as the rules see it on this site: `/wp/wp-login.php`
+			// where WordPress has a directory of its own (see Site_Layout).
+			self::text( 'path', $this->submitted['path'] ?? Site_Layout::core_prefix() . '/wp-login.php' )
 		);
 
 		$this->row(

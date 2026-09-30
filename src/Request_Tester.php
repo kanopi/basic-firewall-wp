@@ -14,6 +14,7 @@ use Kanopi\BasicFirewall\Compiler\Library_Map;
 use Kanopi\BasicFirewall\Logging\Log_Reader;
 use Kanopi\BasicFirewall\Logging\Redaction;
 use Kanopi\BasicFirewall\Runtime\Request_Factory;
+use Kanopi\BasicFirewall\Support\Site_Layout;
 use Kanopi\Firewall\Exception\ChallengeRequiredException;
 use Kanopi\Firewall\Exception\FirewallBlockedException;
 use Kanopi\Firewall\Exception\FirewallRedirectException;
@@ -367,36 +368,32 @@ final class Request_Tester {
 	/**
 	 * A made-up request for a path on this site, built as a live one would be.
 	 *
-	 * Built as a web server would describe the same request to this site,
-	 * then corrected by Request_Factory exactly as a live request is. So
-	 * `/wp-login.php` is tested as the direct request for wp-login.php it
-	 * would be in production, and the answer here is the answer there. Site
-	 * Health builds its regression check the same way.
+	 * Built with the server values a web server would send for the same
+	 * request, so the library resolves its `path` exactly as it resolves a
+	 * live one under the compiled `path_source`. `/wp-login.php` is tested as
+	 * the direct request for wp-login.php it would be in production, with
+	 * `SCRIPT_NAME` naming the file, and a page as a request routed through
+	 * index.php. The answer here is the answer there. Site Health builds its
+	 * request path check the same way.
 	 *
-	 * @param string      $path   Path relative to the site, with any query.
+	 * The path is relative to the front controller's directory -- what a rule
+	 * sees for a page. Where WordPress has its own directory, its files are
+	 * under that directory's prefix: `/wp/wp-login.php`, as the rules see them.
+	 *
+	 * @param string      $path   Path relative to the base path, with any query.
 	 * @param string      $method HTTP method.
 	 * @param string|null $body   Request body.
 	 */
 	public static function site_request( string $path, string $method = 'GET', ?string $body = null ): Request {
-		$server = Request_Factory::server_for( $path, self::site_path(), ABSPATH );
+		$server = Request_Factory::server_for( $path, Site_Layout::base_path(), Site_Layout::core_path(), ABSPATH );
 
 		$request = Request::create( $server['REQUEST_URI'], $method, array(), array(), array(), $server, $body );
 
-		Request_Factory::normalise( $request );
+		// create() empties PATH_INFO whatever it is given; a direct file with
+		// path info after it needs it back, as the server would have set it.
+		$request->server->set( 'PATH_INFO', $server['PATH_INFO'] );
 
 		return $request;
-	}
-
-	/**
-	 * The site's own path on its host: empty, or `/blog` for a site served there.
-	 *
-	 * From the WordPress address, because that is where ABSPATH is served from
-	 * and so where the web server says the front controller is.
-	 */
-	private static function site_path(): string {
-		$path = wp_parse_url( site_url( '/' ), PHP_URL_PATH );
-
-		return is_string( $path ) ? rtrim( $path, '/' ) : '';
 	}
 
 	/**
