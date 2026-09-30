@@ -173,7 +173,7 @@ final class HttpEvaluationTest extends TestCase {
 	 * @param string                $path    Path to request.
 	 * @param array<string, string> $headers Extra headers.
 	 *
-	 * @return array{status: int, body: string}
+	 * @return array{status: int, body: string, location: string, cache: array<string, string>}
 	 */
 	private function request( string $path, array $headers = array() ): array {
 		$response = wp_remote_get(
@@ -198,6 +198,13 @@ final class HttpEvaluationTest extends TestCase {
 			'status'   => (int) wp_remote_retrieve_response_code( $response ),
 			'body'     => (string) wp_remote_retrieve_body( $response ),
 			'location' => (string) wp_remote_retrieve_header( $response, 'location' ),
+			'cache'    => array(
+				'Cache-Control'     => (string) wp_remote_retrieve_header( $response, 'cache-control' ),
+				'Pragma'            => (string) wp_remote_retrieve_header( $response, 'pragma' ),
+				'Expires'           => (string) wp_remote_retrieve_header( $response, 'expires' ),
+				'Surrogate-Control' => (string) wp_remote_retrieve_header( $response, 'surrogate-control' ),
+				'CDN-Cache-Control' => (string) wp_remote_retrieve_header( $response, 'cdn-cache-control' ),
+			),
 		);
 	}
 
@@ -354,6 +361,69 @@ final class HttpEvaluationTest extends TestCase {
 			$this->request( '/' )['body'],
 			'An unmatched request was challenged.'
 		);
+	}
+
+	/**
+	 * #34: a per-rule ALTCHA challenge on a routed page, in both modes.
+	 *
+	 * The reported setup: a `url` rule on a path prefix, `response:
+	 * challenge`, the rule naming `altcha` while the default is `math`, on a
+	 * path WordPress routes through index.php. A path of its own rather than
+	 * a real page's, so it is the same under plain permalinks, where a page's
+	 * permalink is `/?page_id=2` and has no path to match. In `exception`
+	 * mode the report was the page itself, with WordPress's cache headers,
+	 * then cached at the edge. Whichever path answers -- the library in
+	 * `block` mode, the plugin's responder in `exception` mode -- the visitor
+	 * gets the ALTCHA interstitial, never the page, and every no-store header
+	 * a cache in front of the site might read.
+	 */
+	public function test_a_per_rule_altcha_challenge_guards_a_routed_page_in_both_modes(): void {
+		$path = '/bfw-e2e-learning-resources/some-page/';
+
+		$rule = array(
+			'id'                 => 'e2e_issue_34',
+			'type'               => 'url',
+			'label'              => 'Issue 34',
+			'enabled'            => true,
+			'response'           => 'challenge',
+			'weight'             => 0,
+			'expiration'         => 600,
+			'challenge_provider' => 'altcha',
+			'settings'           => array(
+				'match_type' => 'any',
+				'conditions' => array(
+					array(
+						'variable' => 'path',
+						'operator' => 'starts_with',
+						'value'    => '/bfw-e2e-learning-resources',
+					),
+				),
+			),
+		);
+
+		foreach ( array(
+			'exception' => 503,
+			'block'     => 200,
+		) as $mode => $status ) {
+			$this->given_rules( array( $rule ), $mode );
+
+			$response = $this->request( $path . '?fresh=' . wp_rand() );
+
+			$this->assertSame( $status, $response['status'], $mode . ': not challenged.' );
+			$this->assertStringContainsString( 'altcha-widget', $response['body'], $mode . ': the rule\'s own provider did not render the page.' );
+			$this->assertStringNotContainsString( 'wp-content/themes', $response['body'], $mode . ': WordPress served the page.' );
+			$this->assertSame(
+				array(
+					'Cache-Control'     => 'private, no-store, no-cache, must-revalidate, max-age=0',
+					'Pragma'            => 'no-cache',
+					'Expires'           => '0',
+					'Surrogate-Control' => 'no-store',
+					'CDN-Cache-Control' => 'no-store',
+				),
+				$response['cache'],
+				$mode . ': the interstitial can be cached.'
+			);
+		}
 	}
 
 	/**

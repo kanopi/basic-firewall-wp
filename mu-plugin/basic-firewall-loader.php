@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Basic Firewall (loader)
  * Description: Runs Basic Firewall as early as a plugin can run. Installed and removed automatically by the Basic Firewall plugin; not intended to be edited.
- * Version:     1.1.0
+ * Version:     1.2.0
  * Author:      Kanopi Studios
  *
  * @package Kanopi\BasicFirewall
@@ -47,18 +47,19 @@ define( 'BASIC_FIREWALL_MU_LOADER', true );
  * Mu_Loader::VERSION, to each other. A copy older than the constant does not
  * define it at all, which reads as out of date.
  */
-define( 'BASIC_FIREWALL_MU_LOADER_VERSION', '1.1.0' );
+define( 'BASIC_FIREWALL_MU_LOADER_VERSION', '1.2.0' );
 
 add_action(
 	'muplugins_loaded',
 	static function (): void {
-		if ( defined( 'BASIC_FIREWALL_EVALUATED' ) && empty( $GLOBALS['basic_firewall_outcome'] ) ) {
+		if ( defined( 'BASIC_FIREWALL_EVALUATED' ) && empty( $GLOBALS['basic_firewall_outcome'] ) && empty( $GLOBALS['basic_firewall_early']['outcome'] ) ) {
 			/*
 			 * The wp-config.php path already evaluated this request, and
 			 * answered it. When it left a verdict behind instead -- a solved
 			 * challenge, which needs settings to set the pass cookie -- the
 			 * plugin is loaded below so the runner can answer it now, before
-			 * any ordinary plugin loads.
+			 * any ordinary plugin loads. So is a verdict it recorded and did
+			 * not answer, which is a fail-open the runner refuses (#34).
 			 */
 			return;
 		}

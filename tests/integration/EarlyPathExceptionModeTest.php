@@ -106,10 +106,11 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 		$env = array_merge(
 			is_array( $env ) ? $env : array(),
 			array(
-				'BFW_EARLY_PLUGIN_PATH'       => dirname( __DIR__, 2 ),
-				'BFW_EARLY_PRIVATE_PATH'      => Plugin::instance()->paths()->base(),
-				'BFW_EARLY_BARE_PLUGIN_PATH'  => self::$scratch . '/plugin',
-				'BFW_EARLY_CUSTOM_AUTOLOADER' => self::$scratch . '/mu-plugins/vendor/autoload.php',
+				'BFW_EARLY_PLUGIN_PATH'              => dirname( __DIR__, 2 ),
+				'BFW_EARLY_PRIVATE_PATH'             => Plugin::instance()->paths()->base(),
+				'BFW_EARLY_BARE_PLUGIN_PATH'         => self::$scratch . '/plugin',
+				'BFW_EARLY_CUSTOM_AUTOLOADER'        => self::$scratch . '/mu-plugins/vendor/autoload.php',
+				'BFW_EARLY_NO_RESPONDER_PLUGIN_PATH' => self::$scratch . '/plugin-no-responder',
 			)
 		);
 
@@ -162,6 +163,8 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 		if ( '' !== self::$scratch ) {
 			// phpcs:disable WordPress.WP.AlternativeFunctions -- a test's own scratch files.
 			@unlink( self::$scratch . '/plugin/src' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- a symlink, or nothing if it was never made.
+			@unlink( self::$scratch . '/plugin-no-responder/vendor' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- as above.
+			@rmdir( self::$scratch . '/plugin-no-responder' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- as above.
 			@unlink( self::$scratch . '/mu-plugins/vendor/autoload.php' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- as above.
 			@rmdir( self::$scratch . '/mu-plugins/vendor' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- as above.
 			@rmdir( self::$scratch . '/mu-plugins' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- as above.
@@ -194,6 +197,10 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 		mkdir( $scratch . '/plugin', 0700, true );
 		mkdir( $scratch . '/mu-plugins/vendor', 0700, true );
 		symlink( dirname( __DIR__, 2 ) . '/src', $scratch . '/plugin/src' );
+
+		// A copy with the library and without src/, so without a responder.
+		mkdir( $scratch . '/plugin-no-responder', 0700, true );
+		symlink( dirname( __DIR__, 2 ) . '/vendor', $scratch . '/plugin-no-responder/vendor' );
 		file_put_contents(
 			$scratch . '/mu-plugins/vendor/autoload.php',
 			"<?php\n\$GLOBALS['basic_firewall_test_custom_autoloader'] = true;\nreturn require " . var_export( dirname( __DIR__, 2 ) . '/vendor/autoload.php', true ) . ";\n" // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_var_export -- writing a PHP literal, not debugging.
@@ -247,7 +254,7 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 		// The responder's page, not the library's plain-text one: exception
 		// mode answered by the plugin, as it is on the normal path.
 		$this->assertStringContainsString( 'text/html', $response['type'] );
-		$this->assertStringContainsString( 'no-store', $response['cache'] );
+		$this->assert_no_store( $response );
 	}
 
 	/**
@@ -261,7 +268,7 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 		$this->assertSame( 307, $response['status'], 'A matching request was not redirected on the early path.' );
 		$this->assertSame( '/bfw-early-notice', $response['location'] );
 		$this->assertStringNotContainsString( self::SERVED, $response['body'] );
-		$this->assertStringContainsString( 'no-store', $response['cache'] );
+		$this->assert_no_store( $response );
 	}
 
 	/**
@@ -282,6 +289,87 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 		$this->assertStringContainsString( 'challenge-form', $response['body'], 'The page has no form to answer the challenge with.' );
 		$this->assertStringContainsString( 'name="challenge_provider"', $response['body'], 'The signed provider token is missing, so a solution could never be accepted.' );
 		$this->assertNotSame( '', $response['retry'] );
+		$this->assert_no_store( $response );
+	}
+
+	/**
+	 * The case in #34: a per-rule ALTCHA challenge on a page WordPress routes.
+	 *
+	 * `mode: exception`, a `url` rule on a path prefix, `response: challenge`
+	 * and the rule naming `altcha` while the site's default provider is
+	 * `math`. The report was the page served with WordPress's cache headers
+	 * and then cached at the edge, so what is asserted is the whole answer:
+	 * the ALTCHA interstitial, a 503, every no-store header a cache in front
+	 * of the site might read, and WordPress never reached.
+	 */
+	public function test_a_per_rule_altcha_challenge_is_served_on_a_routed_page(): void {
+		$this->given_rule(
+			'challenge',
+			'exception',
+			array(),
+			array(),
+			array(
+				'challenge_provider' => 'altcha',
+				'settings'           => array(
+					'match_type' => 'any',
+					'conditions' => array(
+						array(
+							'variable' => 'path',
+							'operator' => 'starts_with',
+							'value'    => '/learning-resources',
+						),
+					),
+				),
+			)
+		);
+
+		$response = $this->request( '/learning-resources/some-page/?fresh=' . wp_rand(), array( 'User-Agent' => 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36' ) );
+
+		$this->assertStringNotContainsString( self::SERVED, $response['body'], 'The challenged request went on to WordPress.' );
+		$this->assertSame( 503, $response['status'], 'A matching request was not challenged on the early path.' );
+		$this->assertStringContainsString( 'altcha-widget', $response['body'], 'The rule\'s own provider did not render the interstitial.' );
+		$this->assertStringContainsString( 'name="challenge_provider" value="altcha|', $response['body'], 'The signed token does not name the rule\'s provider.' );
+		$this->assert_no_store( $response );
+	}
+
+	/**
+	 * A verdict the responder cannot answer is refused, never served.
+	 *
+	 * Every way the answer can fail on the early path: the responder throwing,
+	 * the responder returning as though the request may continue, and no
+	 * responder in this copy of the plugin. Each used to end in the page --
+	 * the first two by handing the verdict to a runner that runs after the
+	 * page cache, or not at all, and the second by returning the responder's
+	 * `true` straight to wp-config.php.
+	 *
+	 * @dataProvider unanswerable
+	 *
+	 * @param array<string, string> $headers The scenario's request headers.
+	 */
+	public function test_a_verdict_the_responder_cannot_answer_is_refused( array $headers ): void {
+		$this->given_rule( 'challenge', 'exception' );
+
+		$response = $this->request( '/bfw-early-match', $headers );
+
+		$this->assertStringNotContainsString( self::SERVED, $response['body'], 'A verdict the responder could not answer served the page.' );
+		$this->assertSame( 503, $response['status'] );
+		$this->assertStringContainsString( 'Verification required', $response['body'] );
+		$this->assertSame( '60', $response['retry'] );
+		$this->assert_no_store( $response );
+	}
+
+	/**
+	 * The ways the early path's answer can fail.
+	 *
+	 * @return array<string, array{0: array<string, string>}>
+	 */
+	public function unanswerable(): array {
+		return array(
+			'the responder throws'               => array( array( 'X-Bfw-Test-Responder' => 'throws' ) ),
+			'the responder returns'              => array( array( 'X-Bfw-Test-Responder' => 'returns' ) ),
+			'there is no responder'              => array( array( 'X-Bfw-Test-Plugin' => 'no-responder' ) ),
+			'the verdict is from the other copy' => array( array( 'X-Bfw-Test-Foreign-Verdict' => '1' ) ),
+		);
 	}
 
 	/**
@@ -295,6 +383,7 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 		$this->assertSame( 503, $response['status'], 'Lockdown did not refuse a client off its allowlist.' );
 		$this->assertStringNotContainsString( self::SERVED, $response['body'] );
 		$this->assertSame( '300', $response['retry'], 'A temporary refusal lost the header that says it is temporary.' );
+		$this->assert_no_store( $response );
 	}
 
 	/**
@@ -499,7 +588,7 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 		$this->given_settings( array( 'global' => array( 'mode' => 'block' ) ) );
 
 		$this->assertNotSame(
-			'Exception mode cannot answer refusals before a page cache on the wp-config.php path',
+			'Exception mode cannot answer challenges, redirects or blocks properly on the wp-config.php path',
 			Site_Health::check( 'evaluation' )['label']
 		);
 	}
@@ -684,14 +773,28 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 	}
 
 	/**
+	 * Assert a response carries the whole no-store set, from kanopi/firewall#418.
+	 *
+	 * @param array<string, mixed> $response A response from request().
+	 */
+	private function assert_no_store( array $response ): void {
+		$this->assertSame( 'private, no-store, no-cache, must-revalidate, max-age=0', $response['cache'], 'Cache-Control is not the full no-store value.' );
+		$this->assertSame( 'no-cache', $response['pragma'] );
+		$this->assertSame( '0', $response['expires'] );
+		$this->assertSame( 'no-store', $response['surrogate'], 'A surrogate cache is not told to keep this out.' );
+		$this->assertSame( 'no-store', $response['cdn'], 'A CDN is not told to keep this out.' );
+	}
+
+	/**
 	 * Install one URL rule matching /bfw-early-match, and compile it.
 	 *
 	 * @param string               $response Rule response.
 	 * @param string               $mode     Operating mode.
 	 * @param array<string, mixed> $extra    Further global settings.
 	 * @param array<string, mixed> $document Further top-level settings.
+	 * @param array<string, mixed> $rule     Replacements for the rule's own fields.
 	 */
-	private function given_rule( string $response, string $mode, array $extra = array(), array $document = array() ): void {
+	private function given_rule( string $response, string $mode, array $extra = array(), array $document = array(), array $rule = array() ): void {
 		if ( null === self::$server ) {
 			$this->markTestSkipped( 'PHP\'s built-in web server could not be started.' );
 		}
@@ -732,33 +835,36 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 					),
 				),
 				'rules'     => array(
-					array(
-						'id'              => 'early_path_' . $response,
-						'type'            => 'url',
-						'label'           => 'Early path ' . $response,
-						'enabled'         => true,
-						'response'        => $response,
-						'weight'          => 0,
-						'status_code'     => 403,
-						'expiration'      => 600,
+					array_replace(
+						array(
+							'id'              => 'early_path_' . $response,
+							'type'            => 'url',
+							'label'           => 'Early path ' . $response,
+							'enabled'         => true,
+							'response'        => $response,
+							'weight'          => 0,
+							'status_code'     => 403,
+							'expiration'      => 600,
 
-						// Nobody is written to the block list, so one test's
-						// refusal is not the next test's answer.
-						'record'          => 'no',
-						'redirect_to'     => '/bfw-early-notice',
-						'redirect_status' => 307,
-						'mark_as'         => '',
-						'mark_header'     => '',
-						'settings'        => array(
-							'match_type' => 'any',
-							'conditions' => array(
-								array(
-									'variable' => 'path',
-									'operator' => 'equals',
-									'value'    => '/bfw-early-match',
+							// Nobody is written to the block list, so one test's
+							// refusal is not the next test's answer.
+							'record'          => 'no',
+							'redirect_to'     => '/bfw-early-notice',
+							'redirect_status' => 307,
+							'mark_as'         => '',
+							'mark_header'     => '',
+							'settings'        => array(
+								'match_type' => 'any',
+								'conditions' => array(
+									array(
+										'variable' => 'path',
+										'operator' => 'equals',
+										'value'    => '/bfw-early-match',
+									),
 								),
 							),
 						),
+						$rule
 					),
 				),
 			)
@@ -776,7 +882,7 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 	 * @param string $plugin     `bare` for the copy with no vendor/, or empty for this one.
 	 * @param string $autoloader The fixture's autoloader scenario.
 	 *
-	 * @return array{status: int, body: string, type: string, cache: string, location: string, retry: string, stashed: string, outcome: string, reason: string, evaluated: string, autoloader: string, autoloader_file: string, autoloader_named: string, custom: string}
+	 * @return array{status: int, body: string, type: string, cache: string, location: string, retry: string, stashed: string, outcome: string, reason: string, evaluated: string, autoloader: string, autoloader_file: string, autoloader_named: string, custom: string, pragma: string, expires: string, surrogate: string, cdn: string}
 	 */
 	private function request_with_autoloader( string $plugin, string $autoloader ): array {
 		$response = $this->request(
@@ -798,7 +904,7 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 	 * @param string                $path    Path to request.
 	 * @param array<string, string> $headers Request headers.
 	 *
-	 * @return array{status: int, body: string, type: string, cache: string, location: string, retry: string, stashed: string, outcome: string, reason: string, evaluated: string, autoloader: string, autoloader_file: string, autoloader_named: string, custom: string}
+	 * @return array{status: int, body: string, type: string, cache: string, location: string, retry: string, stashed: string, outcome: string, reason: string, evaluated: string, autoloader: string, autoloader_file: string, autoloader_named: string, custom: string, pragma: string, expires: string, surrogate: string, cdn: string}
 	 */
 	private function request( string $path, array $headers = array() ): array {
 		$response = wp_remote_get(
@@ -829,6 +935,10 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 			'autoloader_file'  => (string) wp_remote_retrieve_header( $response, 'x-early-autoloader-file' ),
 			'autoloader_named' => (string) wp_remote_retrieve_header( $response, 'x-early-autoloader-named' ),
 			'custom'           => (string) wp_remote_retrieve_header( $response, 'x-early-custom-loaded' ),
+			'pragma'           => (string) wp_remote_retrieve_header( $response, 'pragma' ),
+			'expires'          => (string) wp_remote_retrieve_header( $response, 'expires' ),
+			'surrogate'        => (string) wp_remote_retrieve_header( $response, 'surrogate-control' ),
+			'cdn'              => (string) wp_remote_retrieve_header( $response, 'cdn-cache-control' ),
 		);
 	}
 }

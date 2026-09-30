@@ -15,6 +15,7 @@ use Kanopi\Firewall\Exception\ChallengeSolvedException;
 use Kanopi\Firewall\Exception\FirewallBlockedException;
 use Kanopi\Firewall\Exception\FirewallLockdownException;
 use Kanopi\Firewall\Exception\FirewallRedirectException;
+use Kanopi\Firewall\Utility\NoStore;
 use Symfony\Component\HttpFoundation\Request;
 
 /**
@@ -56,7 +57,7 @@ final class Outcome_Responder {
 		}
 
 		if ( $outcome instanceof ChallengeRequiredException ) {
-			$this->send_challenge( $outcome, $request );
+			$this->emit( self::challenge_response( $outcome, $request ) );
 
 			return false;
 		}
@@ -70,13 +71,32 @@ final class Outcome_Responder {
 		 * the log recorded a broken firewall on every request it matched.
 		 */
 		if ( $outcome instanceof FirewallRedirectException ) {
-			$this->send_redirect( $outcome );
+			$this->emit( self::redirect_response( $outcome ) );
 
 			return false;
 		}
 
 		if ( $outcome instanceof FirewallBlockedException ) {
-			$this->send_blocked( $outcome );
+			$this->emit( self::blocked_response( $outcome ) );
+
+			return false;
+		}
+
+		/*
+		 * A verdict this copy of the plugin cannot answer in full, because it
+		 * was thrown by a library copy under the other namespace: a release
+		 * build carries the library scoped and this class's imports with it,
+		 * a Composer install carries neither, and a site with both can hand
+		 * one's exception to the other's responder. The instanceof checks
+		 * above then all miss, and this used to fall through to "anything
+		 * else" and let the request continue -- serving the page to a visitor
+		 * the firewall had just refused or challenged, with nothing logged.
+		 * A verdict is never a reason to serve the page, so it is refused.
+		 */
+		$kind = self::verdict_kind( $outcome );
+
+		if ( null !== $kind ) {
+			$this->refuse( $kind, sprintf( 'the verdict is a %s, which this copy of the plugin does not answer', get_class( $outcome ) ) );
 
 			return false;
 		}
@@ -89,18 +109,74 @@ final class Outcome_Responder {
 	}
 
 	/**
-	 * Reject the request.
+	 * Refuse a request whose verdict cannot be answered properly.
+	 *
+	 * The last answer, for a verdict that could not be rendered or handed to
+	 * the right method. Whatever the verdict was -- a challenge with no page
+	 * to show, a redirect, a block -- the visitor is not served the page the
+	 * rule stands in front of: they get a temporary refusal, and the reason
+	 * goes to the PHP error log at warning, where somebody investigating a
+	 * visitor's complaint can find it.
+	 *
+	 * @param string $kind `challenge`, `redirect`, `blocked` or `solved`.
+	 * @param string $why  What went wrong, for the log.
+	 */
+	public function refuse( string $kind, string $why ): void {
+		self::warn( sprintf( 'a %s verdict could not be answered (%s), so the request was refused.', $kind, $why ) );
+
+		$this->emit( self::refusal_response() );
+	}
+
+	/**
+	 * Which verdict an outcome is, in either class spelling, or null.
+	 *
+	 * By class name in both spellings, as basic_firewall_outcome_kind() in
+	 * bootstrap.php does and for the same reason: a release build carries the
+	 * library under a prefix and a Composer install does not.
+	 *
+	 * @param \Throwable $outcome What the firewall threw.
+	 *
+	 * @return string|null `solved`, `challenge`, `redirect`, `blocked`, or null.
+	 */
+	public static function verdict_kind( \Throwable $outcome ): ?string {
+		$kinds = array(
+			'ChallengeSolvedException'   => 'solved',
+			'ChallengeRequiredException' => 'challenge',
+			'FirewallRedirectException'  => 'redirect',
+
+			// FirewallLockdownException extends this one.
+			'FirewallBlockedException'   => 'blocked',
+		);
+
+		foreach ( $kinds as $class => $kind ) {
+			foreach ( array( 'Kanopi\\Firewall\\Exception\\', 'Kanopi\\BasicFirewall\\Vendor\\Kanopi\\Firewall\\Exception\\' ) as $namespace ) {
+				if ( is_a( $outcome, $namespace . $class ) ) {
+					return $kind;
+				}
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * The response for a rejected request.
+	 *
+	 * Separate from sending it, as every response here is, so what a visitor
+	 * receives can be tested; sending ends the request.
 	 *
 	 * @param FirewallBlockedException $outcome The rejection.
+	 *
+	 * @return array{status: int, headers: array<string, string>, body: string, warning: string|null}
 	 */
-	private function send_blocked( FirewallBlockedException $outcome ): void {
+	public static function blocked_response( FirewallBlockedException $outcome ): array {
 		$status = $outcome->getStatusCode();
 
 		if ( $status < 100 || $status > 599 ) {
 			$status = 403;
 		}
 
-		$this->send_headers( $status );
+		$headers = self::page_headers();
 
 		/*
 		 * A lockdown refusal is temporary and says so. The library sends this
@@ -108,8 +184,8 @@ final class Outcome_Responder {
 		 * hands the refusal here instead, and dropping the header would turn a
 		 * deliberate, short-lived 503 into one a CDN has no reason to retry.
 		 */
-		if ( $outcome instanceof FirewallLockdownException && $outcome->getRetryAfter() > 0 && ! headers_sent() ) {
-			header( 'Retry-After: ' . $outcome->getRetryAfter() );
+		if ( $outcome instanceof FirewallLockdownException && $outcome->getRetryAfter() > 0 ) {
+			$headers['Retry-After'] = (string) $outcome->getRetryAfter();
 		}
 
 		/*
@@ -117,18 +193,18 @@ final class Outcome_Responder {
 		 * token, so it is escaped rather than trusted -- an export imported from
 		 * elsewhere is a path by which somebody else's text reaches this page.
 		 */
-		$message = $this->escape( $outcome->getMessage() );
-
 		$title = self::can_translate() ? __( 'Request blocked', 'basic-firewall' ) : 'Request blocked';
 
-		// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
-		echo $this->document( $title, $message );
-
-		$this->finish();
+		return array(
+			'status'  => $status,
+			'headers' => $headers,
+			'body'    => self::document( $title, self::escape( $outcome->getMessage() ) ),
+			'warning' => null,
+		);
 	}
 
 	/**
-	 * Send the visitor where a redirect rule said to.
+	 * The response that sends the visitor where a redirect rule said to.
 	 *
 	 * Reached only in `exception` mode. In every other mode the library writes
 	 * the `Location` header itself and exits, so this is the same answer given
@@ -141,26 +217,23 @@ final class Outcome_Responder {
 	 * the request, and the rule screen and the compiler have both already
 	 * refused one that is not a site path or an http(s) URL.
 	 *
+	 * No-store for the reason every firewall response carries it: a page
+	 * cache that kept this redirect keyed on the URL would send every visitor
+	 * to the notice page, not just the one the rule caught.
+	 *
 	 * @param FirewallRedirectException $outcome The redirect.
+	 *
+	 * @return array{status: int, headers: array<string, string>, body: string, warning: string|null}
 	 */
-	private function send_redirect( FirewallRedirectException $outcome ): void {
+	public static function redirect_response( FirewallRedirectException $outcome ): array {
 		$target = self::redirect_target( $outcome );
 
-		if ( ! headers_sent() ) {
-			$this->status_header( $target['status'] );
-
-			/*
-			 * `no-store` for the reason every firewall response carries it: a
-			 * page cache that kept this redirect keyed on the URL would send
-			 * every visitor to the notice page, not just the one the rule
-			 * caught.
-			 */
-			header( 'Location: ' . $target['location'], true, $target['status'] );
-			header( 'Cache-Control: no-store, no-cache, must-revalidate, max-age=0' );
-			header( 'X-Robots-Tag: noindex, nofollow' );
-		}
-
-		$this->finish();
+		return array(
+			'status'  => $target['status'],
+			'headers' => array( 'Location' => $target['location'] ) + self::no_store_headers() + array( 'X-Robots-Tag' => 'noindex, nofollow' ),
+			'body'    => '',
+			'warning' => null,
+		);
 	}
 
 	/**
@@ -189,12 +262,11 @@ final class Outcome_Responder {
 	}
 
 	/**
-	 * Serve the challenge interstitial.
+	 * The challenge interstitial.
 	 *
 	 * Reached only on the exception path -- the request tester, and any site
 	 * running in `exception` mode. In blocking mode the library composes and
-	 * sends the interstitial itself and then exits, answering 200 with
-	 * `Cache-Control: no-store` and a `noindex` page, so none of this runs.
+	 * sends the interstitial itself and then exits, so none of this runs.
 	 *
 	 * The page is the library's own, rendered by the exception from the
 	 * context the firewall assembled -- including the signed provider token,
@@ -209,55 +281,64 @@ final class Outcome_Responder {
 	 * is forbidden and remove it from search results. 503 with Retry-After says
 	 * "come back", which is what is meant.
 	 *
+	 * A challenge that cannot be rendered -- no request to render it for, or a
+	 * provider that fails -- is the refusal instead, never the page, and the
+	 * reason is carried out as `warning` for the log.
+	 *
 	 * @param ChallengeRequiredException $outcome The challenge.
 	 * @param Request|null               $request The request being challenged.
+	 *
+	 * @return array{status: int, headers: array<string, string>, body: string, warning: string|null}
 	 */
-	private function send_challenge( ChallengeRequiredException $outcome, ?Request $request ): void {
-		$body = null;
+	public static function challenge_response( ChallengeRequiredException $outcome, ?Request $request ): array {
+		if ( null === $request ) {
+			$response            = self::refusal_response();
+			$response['warning'] = 'a challenge was reached with no request to render the interstitial for, so the request was refused.';
 
-		if ( null !== $request ) {
-			try {
-				$body = $outcome->renderInterstitial( $request );
-			} catch ( \Throwable $e ) {
-				// No provider was resolved, which the library reports on its
-				// own. Handled below.
-				$body = null;
-			}
+			return $response;
 		}
 
-		$this->send_headers( 503 );
+		try {
+			$body = $outcome->renderInterstitial( $request );
+		} catch ( \Throwable $e ) {
+			$response            = self::refusal_response();
+			$response['warning'] = sprintf( 'the challenge interstitial could not be rendered (%s: %s), so the request was refused.', get_class( $e ), $e->getMessage() );
 
-		if ( ! headers_sent() ) {
-			header( 'Retry-After: 60' );
-		}
-
-		if ( null === $body ) {
-			/*
-			 * A challenge that cannot be put in front of the visitor still
-			 * does not serve them the page. The rule decided they must prove
-			 * something first, and nothing can be proven -- so they get a
-			 * temporary refusal saying so, rather than the page the rule was
-			 * written to stand in front of.
-			 */
-			$title = self::can_translate() ? __( 'Verification required', 'basic-firewall' ) : 'Verification required';
-			$text  = self::can_translate()
-				? __( 'This request needs a verification step that could not be shown. Please try again shortly.', 'basic-firewall' )
-				: 'This request needs a verification step that could not be shown. Please try again shortly.';
-
-			// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
-			echo $this->document( $title, $this->escape( $text ) );
-
-			$this->finish();
-
-			return;
+			return $response;
 		}
 
 		// The library composes the interstitial, including whatever widget the
 		// provider needs. It is markup by contract, so it is not escaped.
-		// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
-		echo $body;
+		return array(
+			'status'  => 503,
+			'headers' => self::page_headers() + array( 'Retry-After' => '60' ),
+			'body'    => $body,
+			'warning' => null,
+		);
+	}
 
-		$this->finish();
+	/**
+	 * The temporary refusal given when a verdict cannot be answered properly.
+	 *
+	 * A challenge that cannot be put in front of the visitor still does not
+	 * serve them the page. The rule decided they must prove something first,
+	 * and nothing can be proven -- so they get a temporary refusal saying so,
+	 * rather than the page the rule was written to stand in front of.
+	 *
+	 * @return array{status: int, headers: array<string, string>, body: string, warning: string|null}
+	 */
+	public static function refusal_response(): array {
+		$title = self::can_translate() ? __( 'Verification required', 'basic-firewall' ) : 'Verification required';
+		$text  = self::can_translate()
+			? __( 'This request needs a verification step that could not be shown. Please try again shortly.', 'basic-firewall' )
+			: 'This request needs a verification step that could not be shown. Please try again shortly.';
+
+		return array(
+			'status'  => 503,
+			'headers' => self::page_headers() + array( 'Retry-After' => '60' ),
+			'body'    => self::document( $title, self::escape( $text ) ),
+			'warning' => null,
+		);
 	}
 
 	/**
@@ -297,34 +378,47 @@ final class Outcome_Responder {
 			)
 		);
 
+		$this->emit( self::solved_http_response( $outcome, $request ) );
+	}
+
+	/**
+	 * The response to a solved challenge: its JSON, or its redirect.
+	 *
+	 * No-store on both. The JSON carries this visitor's pass token, and a
+	 * redirect cached against the challenge path would send the next solver
+	 * wherever the first was going.
+	 *
+	 * @param ChallengeSolvedException $outcome The solved challenge.
+	 * @param Request|null             $request The submission.
+	 *
+	 * @return array{status: int, headers: array<string, string>, body: string, warning: string|null}
+	 */
+	public static function solved_http_response( ChallengeSolvedException $outcome, ?Request $request ): array {
 		$solved = self::solved_response( $outcome, $request );
 
-		if ( 'json' === $solved['format'] ) {
-			if ( ! headers_sent() ) {
-				$this->status_header( 200 );
-				header( 'Content-Type: application/json; charset=utf-8' );
-				header( 'Cache-Control: no-store, no-cache, must-revalidate, max-age=0' );
-			}
-
-			$json = (string) wp_json_encode(
-				array(
-					'token'    => $outcome->getToken(),
-					'redirect' => $solved['redirect'],
-				),
-				JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_SLASHES
+		if ( 'json' !== $solved['format'] ) {
+			return array(
+				'status'  => 302,
+				'headers' => array( 'Location' => $solved['redirect'] ) + self::no_store_headers(),
+				'body'    => '',
+				'warning' => null,
 			);
-
-			// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- JSON, encoded with the flags that keep it inert if anything renders it as HTML.
-			echo $json;
-
-			$this->finish();
-
-			return;
 		}
 
-		header( 'Location: ' . $solved['redirect'], true, 302 );
+		$json = (string) json_encode( // phpcs:ignore WordPress.WP.AlternativeFunctions.json_encode_json_encode -- composed without WordPress so it can be tested; the flags keep it inert if anything renders it as HTML.
+			array(
+				'token'    => $outcome->getToken(),
+				'redirect' => $solved['redirect'],
+			),
+			JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_SLASHES
+		);
 
-		$this->finish();
+		return array(
+			'status'  => 200,
+			'headers' => array( 'Content-Type' => 'application/json; charset=utf-8' ) + self::no_store_headers(),
+			'body'    => $json,
+			'warning' => null,
+		);
 	}
 
 	/**
@@ -426,28 +520,92 @@ final class Outcome_Responder {
 	}
 
 	/**
-	 * Send the headers common to every firewall response.
+	 * The headers that keep a firewall response out of every cache.
 	 *
-	 * @param int $status HTTP status code.
+	 * The library's own set (kanopi/firewall#418), so the plugin and the
+	 * library cannot drift apart on what keeps a response out of a cache.
+	 * `no-store` alone was not enough: Pantheon's Fastly-based edge caches a
+	 * response carrying only that, and a cached challenge or refusal is
+	 * served to every visitor after the first -- #34, where a page reached
+	 * the edge with WordPress's `max-age=3600`.
+	 *
+	 * No fallback of its own: the plugin requires ^2.34.1, the release that
+	 * added the class, so every copy of the library this class can be loaded
+	 * beside has it. The bootstrap, which must answer even when the library
+	 * is not the copy it expected, keeps one; see
+	 * basic_firewall_no_store_headers().
+	 *
+	 * @return array<string, string>
 	 */
-	private function send_headers( int $status ): void {
-		if ( headers_sent() ) {
-			return;
+	public static function no_store_headers(): array {
+		return NoStore::HEADERS;
+	}
+
+	/**
+	 * The headers common to every page the firewall answers with.
+	 *
+	 * Never cacheable: a page cache or a CDN that stored a 403 keyed only on
+	 * the URL would serve it to everybody, turning one blocked client into an
+	 * outage for the whole site -- and a stored interstitial hands every
+	 * visitor the same single-use challenge.
+	 *
+	 * @return array<string, string>
+	 */
+	private static function page_headers(): array {
+		return array( 'Content-Type' => 'text/html; charset=utf-8' )
+			+ self::no_store_headers()
+			+ array(
+				'X-Content-Type-Options' => 'nosniff',
+				'X-Robots-Tag'           => 'noindex, nofollow',
+			);
+	}
+
+	/**
+	 * Send a response and end the request.
+	 *
+	 * Every header replaces one of the same name already set. That matters
+	 * most for `Cache-Control`: on the runner path WordPress or another plugin
+	 * may have set a cacheable one before the verdict, and a cache reading the
+	 * permissive one of two would store the refusal anyway.
+	 *
+	 * @param array{status: int, headers: array<string, string>, body: string, warning: string|null} $response The response.
+	 */
+	private function emit( array $response ): void {
+		if ( null !== $response['warning'] ) {
+			self::warn( $response['warning'] );
 		}
 
-		$this->status_header( $status );
+		if ( ! headers_sent() ) {
+			$this->status_header( $response['status'] );
 
-		header( 'Content-Type: text/html; charset=utf-8' );
+			foreach ( $response['headers'] as $name => $value ) {
+				// The status again with Location, which PHP would otherwise
+				// turn into a 302 whatever the rule asked for.
+				header( $name . ': ' . $value, true, 'Location' === $name ? $response['status'] : 0 );
+			}
+		}
 
-		/*
-		 * Never cache a firewall response. A page cache or a CDN that stored a
-		 * 403 keyed only on the URL would serve it to everybody, turning one
-		 * blocked client into an outage for the whole site.
-		 */
-		header( 'Cache-Control: no-store, no-cache, must-revalidate, max-age=0' );
-		header( 'Pragma: no-cache' );
-		header( 'X-Content-Type-Options: nosniff' );
-		header( 'X-Robots-Tag: noindex, nofollow' );
+		if ( '' !== $response['body'] ) {
+			// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- composed above: escaped documents, the library's interstitial markup, or JSON encoded to be inert as HTML.
+			echo $response['body'];
+		}
+
+		$this->finish();
+	}
+
+	/**
+	 * Record, at warning, why a verdict was answered with a refusal.
+	 *
+	 * The PHP error log, because this runs before WordPress on the
+	 * wp-config.php path and the firewall's own logger is not reachable from
+	 * here. A verdict answered with something other than what the rule asked
+	 * for is worth finding afterwards, and it used to leave no trace at all.
+	 *
+	 * @param string $message What happened.
+	 */
+	private static function warn( string $message ): void {
+		// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- no WordPress and no firewall logger on the early path; see above.
+		error_log( 'Basic Firewall [warning]: ' . $message );
 	}
 
 	/**
@@ -489,8 +647,8 @@ final class Outcome_Responder {
 	 * @param string $title Page title, already escaped.
 	 * @param string $body  Body text, already escaped.
 	 */
-	private function document( string $title, string $body ): string {
-		$title = $this->escape( $title );
+	private static function document( string $title, string $body ): string {
+		$title = self::escape( $title );
 
 		return "<!doctype html>\n"
 			. '<html lang="en"><head><meta charset="utf-8">'
@@ -512,7 +670,7 @@ final class Outcome_Responder {
 	 *
 	 * @param string $text Untrusted text.
 	 */
-	private function escape( string $text ): string {
+	private static function escape( string $text ): string {
 		return htmlspecialchars( $text, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8' );
 	}
 
