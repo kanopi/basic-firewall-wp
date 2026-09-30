@@ -145,9 +145,13 @@ final class LifecycleTest extends TestCase {
 		 * Asserted against the bootstrap's own report rather than against this
 		 * site's wp-config.php, so the test says the same thing on a machine
 		 * that runs the early path and one that does not.
+		 *
+		 * Inverted on a network, where the snippet steps aside: its absence
+		 * is the healthy state there, and its presence is a recommendation
+		 * to remove it (MultisiteTest).
 		 */
 		$this->assertSame(
-			Site_Health::early_report()['called'],
+			is_multisite() ? ! Site_Health::early_report()['called'] : Site_Health::early_report()['called'],
 			'good' === $results['bootstrap']['status'],
 			'The check disagrees with whether the bootstrap actually ran, which is the only thing that proves the snippet is doing anything.'
 		);

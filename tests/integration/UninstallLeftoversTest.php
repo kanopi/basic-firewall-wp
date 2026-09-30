@@ -155,17 +155,36 @@ final class UninstallLeftoversTest extends TestCase {
 	 * is unavailable, and uninstall only ever looked under uploads.
 	 */
 	public function test_the_wp_content_fallback_is_removed(): void {
-		$dir = rtrim( WP_CONTENT_DIR, '/' ) . '/basic-firewall-private-' . bin2hex( random_bytes( 8 ) );
+		/*
+		 * On a network every site's fallback sits side by side in the one
+		 * wp-content, so each site's pass takes only its own suffix -- the
+		 * site's, then, rather than any. A directory with a suffix no site
+		 * has belongs to nobody uninstall can name, and stays.
+		 */
+		$suffix  = is_multisite() ? (string) get_option( Paths::SUFFIX_OPTION, '' ) : bin2hex( random_bytes( 8 ) );
+		$dir     = rtrim( WP_CONTENT_DIR, '/' ) . '/basic-firewall-private-' . $suffix;
+		$foreign = rtrim( WP_CONTENT_DIR, '/' ) . '/basic-firewall-private-' . bin2hex( random_bytes( 8 ) );
+
+		$this->assertMatchesRegularExpression( '/^[a-f0-9]{16}$/', $suffix, 'This site has no private directory suffix to test with.' );
 
 		$this->write( $dir . '/blocked.data' );
 		$this->write( $dir . '/logs/firewall.log' );
+
+		if ( is_multisite() ) {
+			$this->write( $foreign . '/blocked.data' );
+		}
 
 		try {
 			$this->run_uninstall();
 
 			$this->assertDirectoryDoesNotExist( $dir, 'Uninstall left the WP_CONTENT_DIR fallback private directory.' );
+
+			if ( is_multisite() ) {
+				$this->assertDirectoryExists( $foreign, 'On a network, uninstall removed a wp-content fallback no site of the network owns.' );
+			}
 		} finally {
 			$this->remove_tree( $dir );
+			$this->remove_tree( $foreign );
 		}
 	}
 

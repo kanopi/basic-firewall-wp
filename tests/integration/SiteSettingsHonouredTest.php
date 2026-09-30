@@ -512,6 +512,15 @@ final class SiteSettingsHonouredTest extends Honoured_Settings {
 		$this->assertSame( array( 'allow', '/wp-admin/edit.php' ), $this->resolved( $firewall, '/wp-admin/edit.php?post_type=page', '/wp-admin/edit.php', '203.0.113.91' ) );
 		$this->assertSame( array( 'allow', '/sample-page/' ), $this->resolved( $firewall, '/sample-page/', '/index.php', '203.0.113.92' ) );
 
+		/*
+		 * The subdirectory layouts below are single-site ones: a network
+		 * takes its base path from the network's own path, which filtering
+		 * home cannot move. SiteLayoutTest covers network layouts.
+		 */
+		if ( is_multisite() ) {
+			return;
+		}
+
 		$addresses = array(
 			'home'    => 'http://example.org/blog',
 			'siteurl' => 'http://example.org/blog',
