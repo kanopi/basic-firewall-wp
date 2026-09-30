@@ -49,6 +49,11 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 	private const SERVED = 'SERVED BY WORDPRESS';
 
 	/**
+	 * A pass cookie name other than the default, set through the settings.
+	 */
+	private const CUSTOM_COOKIE = 'STYXKEY_bfw_pass';
+
+	/**
 	 * The banning message the fixtures configure.
 	 */
 	private const BANNED = 'Refused on the early path.';
@@ -228,9 +233,6 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 	 * Put them back, and release anything a fixture recorded.
 	 */
 	protected function tearDown(): void {
-		// Before the parent rebuilds the compiled file, so it is rebuilt off Pantheon.
-		putenv( 'PANTHEON_ENVIRONMENT' ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.runtime_configuration_putenv -- undoing the Pantheon simulation below.
-
 		$GLOBALS['basic_firewall_early'] = $this->globals['early'];
 
 		if ( null === $this->globals['outcome'] ) {
@@ -411,32 +413,31 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 	}
 
 	/**
-	 * #35, block mode: on Pantheon the library issues and accepts STYXKEY_bfw_pass.
+	 * #35, block mode: the library issues and accepts the configured cookie name.
 	 *
 	 * Over HTTP, end to end, with the library answering everything itself: the
 	 * interstitial, the solution (which sets the pass cookie), and the next
 	 * request carrying it. The compiled file is the only place the name comes
 	 * from on this path, so what is pinned is that the compiler wrote the
-	 * Pantheon name and that the cookie issued under it is the one accepted.
+	 * configured name and that the cookie issued under it is the one accepted.
 	 */
-	public function test_block_mode_issues_and_accepts_the_compiled_pantheon_cookie(): void {
-		$this->on_pantheon();
-		$this->given_rule( 'challenge', 'block' );
+	public function test_block_mode_issues_and_accepts_the_configured_cookie(): void {
+		$this->given_rule( 'challenge', 'block', array(), self::custom_cookie() );
 
-		$this->assertStringContainsString( 'cookie_name: STYXKEY_bfw_pass', (string) Plugin::instance()->compiled()->contents() );
+		$this->assertStringContainsString( 'cookie_name: ' . self::CUSTOM_COOKIE, (string) Plugin::instance()->compiled()->contents() );
 
 		$page = $this->request( '/bfw-early-match' );
 
 		$this->assertStringNotContainsString( self::SERVED, $page['body'], 'The challenged page was served.' );
 
 		$solved = $this->post( '/basic-firewall/challenge', self::solution( $page['body'] ) );
-		$token  = $solved['cookies']['STYXKEY_bfw_pass'] ?? '';
+		$token  = $solved['cookies'][ self::CUSTOM_COOKIE ] ?? '';
 
-		$this->assertNotSame( '', $token, 'Solving the challenge did not set STYXKEY_bfw_pass. Cookies set: ' . implode( ', ', array_keys( $solved['cookies'] ) ) );
-		$this->assertArrayNotHasKey( 'bfw_pass', $solved['cookies'], 'The pass went out under the name Pantheon strips.' );
+		$this->assertNotSame( '', $token, 'Solving the challenge did not set ' . self::CUSTOM_COOKIE . '. Cookies set: ' . implode( ', ', array_keys( $solved['cookies'] ) ) );
+		$this->assertArrayNotHasKey( 'bfw_pass', $solved['cookies'], 'The pass went out under the default name, not the configured one.' );
 
-		$this->assertStringContainsString( self::SERVED, $this->request( '/bfw-early-match', array( 'Cookie' => 'STYXKEY_bfw_pass=' . $token ) )['body'], 'The pass the library issued was not accepted.' );
-		$this->assertStringNotContainsString( self::SERVED, $this->request( '/bfw-early-match', array( 'Cookie' => 'bfw_pass=' . $token ) )['body'], 'The pass was accepted under the old name.' );
+		$this->assertStringContainsString( self::SERVED, $this->request( '/bfw-early-match', array( 'Cookie' => self::CUSTOM_COOKIE . '=' . $token ) )['body'], 'The pass the library issued was not accepted.' );
+		$this->assertStringNotContainsString( self::SERVED, $this->request( '/bfw-early-match', array( 'Cookie' => 'bfw_pass=' . $token ) )['body'], 'The pass was accepted under a name other than the configured one.' );
 	}
 
 	/**
@@ -448,9 +449,8 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 	 * cookie is then presented over HTTP to the wp-config.php path, which
 	 * reads only the compiled file.
 	 */
-	public function test_exception_mode_issues_and_accepts_the_compiled_pantheon_cookie(): void {
-		$this->on_pantheon();
-		$this->given_rule( 'challenge', 'exception' );
+	public function test_exception_mode_issues_and_accepts_the_configured_cookie(): void {
+		$this->given_rule( 'challenge', 'exception', array(), self::custom_cookie() );
 
 		$firewall = Firewall::create( array( Plugin::instance()->paths()->compiled_file() ) );
 
@@ -468,15 +468,17 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 			$cookies = Outcome_Responder::solved_cookies( $solved->getToken(), Plugin::instance()->compiled()->pass_cookie(), false );
 		}
 
-		$this->assertSame( 'STYXKEY_bfw_pass', $cookies[0]['name'], 'The runner would set the pass under a name other than the compiled one.' );
+		$this->assertSame( self::CUSTOM_COOKIE, $cookies[0]['name'], 'The runner would set the pass under a name other than the compiled one.' );
+		$this->assertSame( self::CUSTOM_COOKIE . '_solved', $cookies[1]['name'], 'The solved marker is not named after the pass cookie.' );
 
 		$pass = $cookies[0]['name'] . '=' . $cookies[0]['value'];
 
 		$this->assertTrue( $firewall->evaluate( Request::create( '/bfw-early-match', 'GET', array(), array( $cookies[0]['name'] => $cookies[0]['value'] ) ) ), 'The normal path refused the pass it issued.' );
 		$this->assertStringContainsString( self::SERVED, $this->request( '/bfw-early-match', array( 'Cookie' => $pass ) )['body'], 'The early path refused the pass the runner issued.' );
+		$this->assertStringNotContainsString( self::SERVED, $this->request( '/bfw-early-match', array( 'Cookie' => 'bfw_pass=' . $cookies[0]['value'] ) )['body'], 'The early path accepted the pass under a name other than the configured one.' );
 
 		// And the safeguard: solved a moment ago, but the pass did not come back.
-		$lost = $this->request( '/bfw-early-match', array( 'Cookie' => Outcome_Responder::SOLVED_MARKER . '=' . time() ) );
+		$lost = $this->request( '/bfw-early-match', array( 'Cookie' => $cookies[1]['name'] . '=' . time() ) );
 
 		$this->assertSame( 503, $lost['status'] );
 		$this->assertStringContainsString( 'bfw-missing-pass', $lost['body'], 'A visitor whose pass went missing was challenged again without being told.' );
@@ -485,13 +487,19 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 	}
 
 	/**
-	 * Simulate Pantheon for the compiler, which runs in this process.
+	 * A challenge section whose pass cookie is set to CUSTOM_COOKIE, as the
+	 * Challenge screen's field would store it.
 	 *
-	 * Pantheon sets PANTHEON_ENVIRONMENT in the process environment, which is
-	 * where Pass_Cookie looks first. Cleared in tearDown().
+	 * @return array<string, mixed>
 	 */
-	private function on_pantheon(): void {
-		putenv( 'PANTHEON_ENVIRONMENT=dev' ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.runtime_configuration_putenv -- simulating Pantheon, undone in tearDown().
+	private static function custom_cookie(): array {
+		return array(
+			'challenge' => array(
+				'provider'    => 'math',
+				'secret'      => str_repeat( 'early-path-secret-', 3 ),
+				'cookie_name' => self::CUSTOM_COOKIE,
+			),
+		);
 	}
 
 	/**

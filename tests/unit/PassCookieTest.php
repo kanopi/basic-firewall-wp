@@ -1,6 +1,6 @@
 <?php
 /**
- * Tests for the pass cookie's name, and Pantheon's pass-through patterns.
+ * Tests for the pass cookie's name and the solved marker.
  *
  * @package Kanopi\BasicFirewall
  */
@@ -17,13 +17,8 @@ use Kanopi\Firewall\Exception\ChallengeRequiredException;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\HttpFoundation\Request;
 
-// phpcs:disable WordPress.PHP.DiscouragedPHPFunctions.runtime_configuration_putenv -- simulating Pantheon's environment is the point, and tearDown() clears it.
-
 /**
- * On Pantheon a name nobody chose becomes one the edge forwards (#35).
- *
- * Pantheon's CDN strips request cookies matching none of its patterns, and
- * `bfw_pass` matches none, so a solved challenge was challenged again forever.
+ * The pass cookie is named on the Challenge screen, and the marker follows it (#35).
  *
  * @covers \Kanopi\BasicFirewall\Challenge\Pass_Cookie
  * @covers \Kanopi\BasicFirewall\Runtime\Outcome_Responder
@@ -31,81 +26,60 @@ use Symfony\Component\HttpFoundation\Request;
 final class PassCookieTest extends TestCase {
 
 	/**
-	 * Clear the environment variable a test may have set.
+	 * A name used in these tests other than the default.
 	 */
-	protected function tearDown(): void {
-		putenv( 'PANTHEON_ENVIRONMENT' );
-		unset( $_ENV['PANTHEON_ENVIRONMENT'], $_SERVER['PANTHEON_ENVIRONMENT'] );
+	private const NAME = 'STYXKEY_bfw_pass';
 
-		parent::tearDown();
+	/**
+	 * The marker a solve under NAME sets.
+	 */
+	private const MARKER = self::NAME . '_solved';
+
+	/**
+	 * The stored name, trimmed; empty or unusable falls back to the default.
+	 */
+	public function test_the_name(): void {
+		$this->assertSame( 'bfw_pass', Pass_Cookie::name( '' ) );
+		$this->assertSame( 'bfw_pass', Pass_Cookie::name( '   ' ) );
+		$this->assertSame( 'bfw_pass', Pass_Cookie::name( 'bfw_pass' ) );
+		$this->assertSame( self::NAME, Pass_Cookie::name( self::NAME ) );
+		$this->assertSame( 'my_pass', Pass_Cookie::name( ' my_pass ' ) );
+		$this->assertSame( 'bfw_pass', Pass_Cookie::name( 'my pass' ), 'A name with a space was compiled.' );
 	}
 
 	/**
-	 * Empty, or the old default, is automatic; anything else is a choice.
+	 * Valid cookie names are RFC 6265 tokens.
 	 */
-	public function test_the_effective_name(): void {
-		$this->assertSame( 'bfw_pass', Pass_Cookie::effective_name( '', false ) );
-		$this->assertSame( 'bfw_pass', Pass_Cookie::effective_name( 'bfw_pass', false ) );
-		$this->assertSame( 'STYXKEY_bfw_pass', Pass_Cookie::effective_name( '', true ) );
-		$this->assertSame( 'STYXKEY_bfw_pass', Pass_Cookie::effective_name( 'bfw_pass', true ) );
-		$this->assertSame( 'my_pass', Pass_Cookie::effective_name( 'my_pass', true ), 'A name the admin chose was overridden on Pantheon.' );
-		$this->assertSame( 'my_pass', Pass_Cookie::effective_name( ' my_pass ', false ) );
-
-		$this->assertSame( Pass_Cookie::REASON_PANTHEON, Pass_Cookie::reason( '', true ) );
-		$this->assertSame( Pass_Cookie::REASON_DEFAULT, Pass_Cookie::reason( '', false ) );
-		$this->assertSame( Pass_Cookie::REASON_CHOSEN, Pass_Cookie::reason( 'my_pass', true ) );
-	}
-
-	/**
-	 * PANTHEON_ENVIRONMENT is read from the environment, $_ENV and $_SERVER.
-	 */
-	public function test_pantheon_is_detected_from_each_source(): void {
-		$this->assertFalse( Pass_Cookie::on_pantheon() );
-		$this->assertSame( 'bfw_pass', Pass_Cookie::effective_name( '' ) );
-
-		putenv( 'PANTHEON_ENVIRONMENT=dev' );
-		$this->assertTrue( Pass_Cookie::on_pantheon() );
-		$this->assertSame( 'STYXKEY_bfw_pass', Pass_Cookie::effective_name( '' ) );
-		putenv( 'PANTHEON_ENVIRONMENT' );
-
-		$_ENV['PANTHEON_ENVIRONMENT'] = 'live';
-		$this->assertTrue( Pass_Cookie::on_pantheon() );
-		unset( $_ENV['PANTHEON_ENVIRONMENT'] );
-
-		$_SERVER['PANTHEON_ENVIRONMENT'] = 'test';
-		$this->assertTrue( Pass_Cookie::on_pantheon() );
-		$_SERVER['PANTHEON_ENVIRONMENT'] = '';
-		$this->assertFalse( Pass_Cookie::on_pantheon(), 'An empty value was taken for Pantheon.' );
-	}
-
-	/**
-	 * The names Pantheon's edge forwards, and some it strips.
-	 */
-	public function test_pantheon_pass_through_patterns(): void {
-		foreach ( array( 'STYXKEY_bfw_pass', 'STYXKEY-x', 'NO_CACHE', 'SESS0a1b', 'SSESSabc', 'wordpress_logged_in_x', 'wp-bfw-solved', 'comment_author_x', 'woocommerce_cart_hash' ) as $name ) {
-			$this->assertTrue( Pass_Cookie::forwarded_by_pantheon( $name ), $name . ' should be forwarded.' );
+	public function test_valid_names(): void {
+		foreach ( array( 'bfw_pass', self::NAME, 'wp-bfw', 'a.b', 'x!#$%&\'*+-.^_`|~9' ) as $name ) {
+			$this->assertTrue( Pass_Cookie::is_valid( $name ), $name . ' should be valid.' );
 		}
 
-		foreach ( array( 'bfw_pass', 'fw_challenge_pass', 'STYXKEY', 'styxkey_x', 'STYXKEY_a.b', 'SESSABC', 'my_wp-cookie' ) as $name ) {
-			$this->assertFalse( Pass_Cookie::forwarded_by_pantheon( $name ), $name . ' should be stripped.' );
+		foreach ( array( '', ' ', 'a b', 'a=b', 'a;b', 'a,b', "a\tb", 'a"b', 'a(b)', 'a/b', 'a@b', 'a:b', 'a[b]', 'a?b', 'a{b}', 'caf\u{e9}' ) as $name ) {
+			$this->assertFalse( Pass_Cookie::is_valid( $name ), $name . ' should be invalid.' );
 		}
+	}
 
-		$this->assertTrue( Pass_Cookie::forwarded_by_pantheon( Pass_Cookie::PANTHEON_NAME ) );
-		$this->assertTrue( Pass_Cookie::forwarded_by_pantheon( Outcome_Responder::SOLVED_MARKER ), 'The solved marker would be stripped with the pass.' );
+	/**
+	 * The marker is named after the pass cookie, prefix and all.
+	 */
+	public function test_the_marker_name_derives_from_the_cookie_name(): void {
+		$this->assertSame( 'bfw_pass_solved', Pass_Cookie::marker_name( 'bfw_pass' ) );
+		$this->assertSame( self::NAME . '_solved', Pass_Cookie::marker_name( self::NAME ) );
 	}
 
 	/**
 	 * A solve sets the pass under the given name, and the short-lived marker.
 	 */
 	public function test_a_solve_sets_the_pass_and_the_marker(): void {
-		$cookies = Outcome_Responder::solved_cookies( 'the-token', 'STYXKEY_bfw_pass', true );
+		$cookies = Outcome_Responder::solved_cookies( 'the-token', self::NAME, true );
 
-		$this->assertSame( 'STYXKEY_bfw_pass', $cookies[0]['name'] );
+		$this->assertSame( self::NAME, $cookies[0]['name'] );
 		$this->assertSame( 'the-token', $cookies[0]['value'] );
 		$this->assertTrue( $cookies[0]['options']['httponly'] );
 		$this->assertTrue( $cookies[0]['options']['secure'] );
 
-		$this->assertSame( Outcome_Responder::SOLVED_MARKER, $cookies[1]['name'] );
+		$this->assertSame( self::NAME . '_solved', $cookies[1]['name'] );
 		$this->assertEqualsWithDelta( time(), (int) $cookies[1]['value'], 2 );
 		$this->assertEqualsWithDelta( time() + Outcome_Responder::SOLVED_MARKER_TTL, $cookies[1]['options']['expires'], 2 );
 		$this->assertTrue( $cookies[1]['options']['httponly'] );
@@ -118,7 +92,7 @@ final class PassCookieTest extends TestCase {
 		$challenge = $this->challenge();
 		$recent    = (string) time();
 
-		$missing = Outcome_Responder::challenge_response( $challenge, $this->request( array( Outcome_Responder::SOLVED_MARKER => $recent ) ) );
+		$missing = Outcome_Responder::challenge_response( $challenge, $this->request( array( self::MARKER => $recent ) ) );
 
 		$this->assertSame( 503, $missing['status'] );
 		$this->assertStringContainsString( 'bfw-missing-pass', $missing['body'] );
@@ -130,12 +104,13 @@ final class PassCookieTest extends TestCase {
 		$cases = array(
 			'never solved'           => array(),
 			'pass arrived'           => array(
-				Outcome_Responder::SOLVED_MARKER => $recent,
-				'STYXKEY_bfw_pass'               => 'refused-token',
+				self::MARKER => $recent,
+				self::NAME   => 'refused-token',
 			),
-			'marker expired'         => array( Outcome_Responder::SOLVED_MARKER => (string) ( time() - Outcome_Responder::SOLVED_MARKER_TTL - 5 ) ),
-			'marker from the future' => array( Outcome_Responder::SOLVED_MARKER => (string) ( time() + 600 ) ),
-			'marker not a time'      => array( Outcome_Responder::SOLVED_MARKER => '<script>' ),
+			'marker expired'         => array( self::MARKER => (string) ( time() - Outcome_Responder::SOLVED_MARKER_TTL - 5 ) ),
+			'marker from the future' => array( self::MARKER => (string) ( time() + 600 ) ),
+			'marker not a time'      => array( self::MARKER => '<script>' ),
+			'old fixed marker name'  => array( 'wp-bfw-solved' => $recent ),
 		);
 
 		foreach ( $cases as $case => $cookies ) {
@@ -159,7 +134,7 @@ final class PassCookieTest extends TestCase {
 				'submit_url'  => '/basic-firewall/challenge',
 				'redirect_to' => '/somewhere',
 				'ttl'         => '600',
-				'cookie_name' => 'STYXKEY_bfw_pass',
+				'cookie_name' => self::NAME,
 				'header_name' => 'X-Firewall-Pass',
 			)
 		);

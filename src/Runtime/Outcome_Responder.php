@@ -9,6 +9,7 @@ declare( strict_types = 1 );
 
 namespace Kanopi\BasicFirewall\Runtime;
 
+use Kanopi\BasicFirewall\Challenge\Pass_Cookie;
 use Kanopi\BasicFirewall\Plugin;
 use Kanopi\Firewall\Exception\ChallengeRequiredException;
 use Kanopi\Firewall\Exception\ChallengeSolvedException;
@@ -38,20 +39,13 @@ use Symfony\Component\HttpFoundation\Request;
 final class Outcome_Responder {
 
 	/**
-	 * The cookie a solved challenge sets beside the pass, for a little while.
+	 * How long the solved marker lives, in seconds.
 	 *
-	 * Its only job is to let the next challenge tell "never solved" from
-	 * "solved, and the pass did not come back" (see pass_went_missing()).
-	 * `wp-` because that prefix is on Pantheon's pass-through list -- the host
-	 * the problem was found on, and the one whose edge would otherwise strip
-	 * the marker along with the pass. On Pantheon a `wp-` cookie also keeps
-	 * the edge cache out of the way for the marker's short life, which is no
-	 * loss straight after a challenge.
-	 */
-	public const SOLVED_MARKER = 'wp-bfw-solved';
-
-	/**
-	 * How long the marker lives, in seconds.
+	 * The marker is set beside the pass (see solved_cookies()) and named after
+	 * it (Pass_Cookie::marker_name()), so a prefix an admin chose to get the
+	 * pass past their host's edge applies to the marker too. Its only job is
+	 * to let the next challenge tell "never solved" from "solved, and the
+	 * pass did not come back" (see pass_went_missing()).
 	 *
 	 * Long enough to cover the redirect and a slow page, short enough that a
 	 * visitor who clears their cookies later is not told a stale story.
@@ -351,8 +345,8 @@ final class Outcome_Responder {
 	 * A solved challenge sets the pass cookie and, beside it, a short-lived
 	 * marker (see solved_cookies()). A challenge that arrives carrying the
 	 * marker but no pass cookie at all means the pass was issued and then did
-	 * not come back: a CDN stripping it, as Pantheon's does with a name that
-	 * matches none of its patterns (#35), or a browser refusing it. Left
+	 * not come back: a host or edge cache that forwards only cookies matching
+	 * its own rules (#35), or a browser refusing it. Left
 	 * alone, that visitor solves the same challenge again and again with
 	 * nothing on the page to say why.
 	 *
@@ -368,7 +362,13 @@ final class Outcome_Responder {
 	 * @param Request                    $request The request being challenged.
 	 */
 	public static function pass_went_missing( ChallengeRequiredException $outcome, Request $request ): bool {
-		$marker = $request->cookies->get( self::SOLVED_MARKER );
+		$name = (string) ( $outcome->getRenderContext()['cookie_name'] ?? '' );
+
+		if ( '' === $name || $request->cookies->has( $name ) ) {
+			return false;
+		}
+
+		$marker = $request->cookies->get( Pass_Cookie::marker_name( $name ) );
 
 		if ( ! is_string( $marker ) || ! ctype_digit( $marker ) ) {
 			return false;
@@ -378,13 +378,7 @@ final class Outcome_Responder {
 		// Max-Age must not see the hint on every challenge for ever after.
 		$age = time() - (int) $marker;
 
-		if ( $age < 0 || $age > self::SOLVED_MARKER_TTL ) {
-			return false;
-		}
-
-		$name = (string) ( $outcome->getRenderContext()['cookie_name'] ?? '' );
-
-		return '' !== $name && ! $request->cookies->has( $name );
+		return $age >= 0 && $age <= self::SOLVED_MARKER_TTL;
 	}
 
 	/**
@@ -462,9 +456,8 @@ final class Outcome_Responder {
 	 *
 	 * The name is the one the compiled file gives the library, read from the
 	 * compile record rather than from settings: the library looks for the pass
-	 * under the compiled name, and a cookie set under any other -- the stored
-	 * `bfw_pass` on Pantheon, say, where the compiled name is
-	 * `STYXKEY_bfw_pass` -- is a pass nobody ever reads (#35).
+	 * under the compiled name, and a cookie set under any other is a pass
+	 * nobody ever reads (#35).
 	 *
 	 * @param string $token  The pass token.
 	 * @param string $name   The pass cookie's name.
@@ -498,7 +491,7 @@ final class Outcome_Responder {
 			// The marker: when it was solved, so a re-challenge moments later
 			// can say the pass went missing instead of silently asking again.
 			array(
-				'name'    => self::SOLVED_MARKER,
+				'name'    => Pass_Cookie::marker_name( $name ),
 				'value'   => (string) time(),
 				'options' => array(
 					'expires'  => time() + self::SOLVED_MARKER_TTL,

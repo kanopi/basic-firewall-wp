@@ -13,7 +13,6 @@ use Kanopi\BasicFirewall\Admin\Admin;
 use Kanopi\BasicFirewall\Cache\Cache_Backend;
 use Kanopi\BasicFirewall\Install\Activator;
 use Kanopi\BasicFirewall\Install\Mu_Loader;
-use Kanopi\BasicFirewall\Challenge\Pass_Cookie;
 use Kanopi\BasicFirewall\Install\Upgrader;
 use Kanopi\BasicFirewall\Library_Capabilities;
 use Kanopi\BasicFirewall\Library_Loader;
@@ -88,7 +87,6 @@ final class Site_Health {
 			'backends'     => __( 'Basic Firewall backends', 'basic-firewall' ),
 			'compiled'     => __( 'Basic Firewall compiled configuration', 'basic-firewall' ),
 			'verification' => __( 'Basic Firewall crawler verification', 'basic-firewall' ),
-			'pass_cookie'  => __( 'Basic Firewall challenge pass cookie', 'basic-firewall' ),
 			'rate_keys'    => __( 'Basic Firewall rate limit keys', 'basic-firewall' ),
 			'request_path' => __( 'Basic Firewall request path', 'basic-firewall' ),
 			'private_dir'  => __( 'Basic Firewall private directory', 'basic-firewall' ),
@@ -134,7 +132,6 @@ final class Site_Health {
 			'backends'    => self::check_backends(),
 			'compiled'    => self::check_compiled(),
 			'verification' => self::check_verification(),
-			'pass_cookie'  => self::check_pass_cookie(),
 			'rate_keys'    => self::check_rate_keys(),
 			'request_path' => self::check_request_path(),
 			'private_dir' => self::check_private_dir(),
@@ -663,93 +660,6 @@ final class Site_Health {
 				$names
 			)
 		);
-	}
-
-	/**
-	 * Will a solved challenge's pass cookie reach WordPress on this host?
-	 *
-	 * Only Pantheon is known to strip cookies outright: its CDN forwards the
-	 * names that match its own patterns and drops the rest before PHP runs
-	 * (#35). A pass cookie it drops means every visitor who solves a challenge
-	 * is challenged again, indefinitely, with nothing on the page to say why.
-	 * Critical while anything can challenge -- an enabled challenge rule, or a
-	 * preset that ships one -- and a recommendation otherwise, because the
-	 * first such rule would inherit the problem.
-	 *
-	 * Off Pantheon this is only informational. Other hosts with an edge cache
-	 * vary or bypass it on particular cookies rather than stripping the rest,
-	 * which is not something a name check can see; the README says what to try.
-	 *
-	 * @return array{status: string, label: string, description: string, actions: string}
-	 */
-	private static function check_pass_cookie(): array {
-		$plugin = Plugin::instance();
-		$name   = $plugin->compiled()->pass_cookie();
-		$code   = '<code>' . esc_html( $name ) . '</code>';
-
-		if ( ! Pass_Cookie::on_pantheon() ) {
-			return self::ok(
-				__( 'The challenge pass cookie is not host-specific here', 'basic-firewall' ),
-				sprintf(
-					/* translators: %s: cookie name. */
-					esc_html__( 'A solved challenge is remembered in the %s cookie. If visitors are challenged again straight after solving one, check that your host\'s cache passes this cookie on to WordPress.', 'basic-firewall' ),
-					$code
-				)
-			);
-		}
-
-		if ( Pass_Cookie::forwarded_by_pantheon( $name ) ) {
-			return self::ok(
-				__( 'Pantheon forwards the challenge pass cookie', 'basic-firewall' ),
-				sprintf(
-					/* translators: %s: cookie name. */
-					esc_html__( 'A solved challenge is remembered in the %s cookie, which matches one of the patterns Pantheon\'s CDN passes on to WordPress.', 'basic-firewall' ),
-					$code
-				)
-			);
-		}
-
-		$description = sprintf(
-			/* translators: 1: cookie name, 2: the Pantheon default name. */
-			esc_html__( 'A solved challenge is remembered in the %1$s cookie. Pantheon\'s CDN strips cookies that match none of its patterns (STYXKEY*, SESS*, wordpress*, wp-*, NO_CACHE and a few more) before WordPress sees them, so the pass never arrives and every visitor who solves a challenge is challenged again. Clear the pass cookie name on the Challenge screen to use %2$s, or choose a name starting with STYXKEY.', 'basic-firewall' ),
-			$code,
-			'<code>' . esc_html( Pass_Cookie::PANTHEON_NAME ) . '</code>'
-		);
-
-		$actions = sprintf(
-			'<a href="%s">%s</a>',
-			esc_url( admin_url( 'admin.php?page=basic-firewall-challenge' ) ),
-			esc_html__( 'Challenge settings', 'basic-firewall' )
-		);
-
-		if ( self::anything_challenges() ) {
-			return self::critical(
-				__( 'Pantheon strips the challenge pass cookie, so solved challenges are challenged again', 'basic-firewall' ),
-				$description,
-				$actions
-			);
-		}
-
-		return self::recommended(
-			__( 'Pantheon would strip the challenge pass cookie', 'basic-firewall' ),
-			$description,
-			$actions
-		);
-	}
-
-	/**
-	 * Is any enabled rule, or enabled preset, able to challenge?
-	 */
-	private static function anything_challenges(): bool {
-		$plugin = Plugin::instance();
-
-		foreach ( (array) $plugin->settings()->get( 'rules', array() ) as $rule ) {
-			if ( is_array( $rule ) && ! empty( $rule['enabled'] ) && 'challenge' === ( $rule['response'] ?? '' ) ) {
-				return true;
-			}
-		}
-
-		return $plugin->presets()->requires_challenge( array_map( 'strval', (array) $plugin->settings()->get( 'presets', array() ) ) );
 	}
 
 	/**

@@ -92,6 +92,20 @@ final class Challenge_Screen extends Screen {
 		}
 
 		/*
+		 * The pass cookie name is required, like a remote provider's keys: an
+		 * empty or malformed name is refused rather than quietly replaced, so
+		 * the field always shows the cookie actually in use.
+		 */
+		if ( ! Pass_Cookie::is_valid( (string) $all['challenge']['cookie_name'] ) ) {
+			Notices::add(
+				__( 'The pass token cookie needs a name made of letters, digits and !#$%&\'*+-.^_`|~ only — no spaces, commas, semicolons or equals signs. Nothing was saved.', 'basic-firewall' ),
+				'error'
+			);
+
+			$this->redirect( $this->slug() );
+		}
+
+		/*
 		 * A remote provider without both keys is refused at save time rather
 		 * than at request time. The library raises during startup, this plugin
 		 * catches it and fails open, and the result is a site with no firewall
@@ -162,7 +176,11 @@ final class Challenge_Screen extends Screen {
 			__( 'Where the interstitial posts its answer. It must not collide with a real route on this site.', 'basic-firewall' )
 		);
 
-		$this->render_cookie_row( (string) $settings->get( 'challenge.cookie_name', '' ) );
+		$this->row(
+			__( 'Pass token cookie', 'basic-firewall' ),
+			self::text( 'cookie_name', (string) $settings->get( 'challenge.cookie_name', '' ) ),
+			__( 'The cookie a solved challenge is remembered in. Some hosts and edge caches only pass on cookies whose names match their own rules; if visitors are challenged again straight after solving one, set a name your host forwards. Changing it invalidates passes already issued, so each visitor holding one is challenged once more.', 'basic-firewall' )
+		);
 
 		$this->row(
 			__( 'Pass token header', 'basic-firewall' ),
@@ -191,56 +209,6 @@ final class Challenge_Screen extends Screen {
 		}
 
 		$this->close_form();
-	}
-
-	/**
-	 * The pass cookie row, naming the cookie actually in use and why.
-	 *
-	 * A name nobody chose is shown as an empty field with the effective name
-	 * as its placeholder, so saving the form keeps it automatic rather than
-	 * writing today's default back as though somebody had picked it. On
-	 * Pantheon that default is not `bfw_pass`, and the row says why (#35).
-	 *
-	 * @param string $stored The stored `challenge.cookie_name`.
-	 */
-	private function render_cookie_row( string $stored ): void {
-		$effective = Pass_Cookie::effective_name( $stored );
-		$reason    = Pass_Cookie::reason( $stored );
-		$control   = self::text(
-			'cookie_name',
-			Pass_Cookie::is_automatic( $stored ) ? '' : $stored,
-			'text',
-			sprintf( 'placeholder="%s"', esc_attr( $effective ) )
-		);
-
-		$in_use = sprintf(
-			/* translators: %s: cookie name. */
-			__( 'In use: %s.', 'basic-firewall' ),
-			'<code>' . esc_html( $effective ) . '</code>'
-		);
-
-		if ( Pass_Cookie::REASON_PANTHEON === $reason ) {
-			$why = sprintf(
-				/* translators: 1: the Pantheon default cookie name, 2: the ordinary default. */
-				__( 'On Pantheon, defaults to %1$s so the edge forwards it: Pantheon\'s CDN strips cookies that do not match its own patterns before WordPress sees them, and %2$s matches none of them, so a solved challenge would be challenged again forever. The STYXKEY prefix also keeps a separate cache copy per pass.', 'basic-firewall' ),
-				'<code>' . esc_html( Pass_Cookie::PANTHEON_NAME ) . '</code>',
-				'<code>' . esc_html( Pass_Cookie::DEFAULT_NAME ) . '</code>'
-			);
-		} elseif ( Pass_Cookie::REASON_CHOSEN === $reason && Pass_Cookie::on_pantheon() && ! Pass_Cookie::forwarded_by_pantheon( $effective ) ) {
-			$why = sprintf(
-				/* translators: %s: the Pantheon default cookie name. */
-				__( '<strong>Pantheon will strip this cookie</strong> before WordPress sees it, so every solved challenge is challenged again. Leave the field empty to use %s, or choose a name starting with STYXKEY.', 'basic-firewall' ),
-				'<code>' . esc_html( Pass_Cookie::PANTHEON_NAME ) . '</code>'
-			);
-		} else {
-			$why = __( 'Leave empty for the default. Some hosts with an edge cache only pass certain cookies on to WordPress; if visitors are challenged again straight after solving one, check that this cookie reaches the site.', 'basic-firewall' );
-		}
-
-		$this->row(
-			__( 'Pass token cookie', 'basic-firewall' ),
-			$control,
-			$in_use . ' ' . $why . ' ' . __( 'Changing it invalidates passes already issued, so each visitor holding one is challenged once more.', 'basic-firewall' )
-		);
 	}
 
 	/**

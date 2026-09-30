@@ -245,10 +245,10 @@ TXT;
 				/*
 				 * The pass cookie the file names, read back after the advanced
 				 * YAML has had its say. The runner sets the cookie on a solved
-				 * challenge from this rather than working the name out again,
-				 * so the name it issues is the one the library then looks for
-				 * -- even if the environment it runs in differs from the one
-				 * that compiled (#35). Absent when no challenge is compiled.
+				 * challenge from this rather than from settings, so the name it
+				 * issues is the one the library then looks for, even if the
+				 * settings changed since the file was written (#35). Absent
+				 * when no challenge is compiled.
 				 */
 				'pass_cookie'        => self::compiled_pass_cookie( $compiled ),
 			),
@@ -358,7 +358,7 @@ TXT;
 			return $name;
 		}
 
-		return Pass_Cookie::effective_name( (string) Plugin::instance()->settings()->get( 'challenge.cookie_name', '' ) );
+		return Pass_Cookie::name( (string) Plugin::instance()->settings()->get( 'challenge.cookie_name', '' ) );
 	}
 
 	/**

@@ -1404,11 +1404,10 @@ final class Config_Compiler {
 			/*
 			 * Always written out, never left to the library's own default
 			 * (`fw_challenge_pass`), so the compiled file names the cookie
-			 * both evaluation paths read and the runner sets. On Pantheon a
-			 * name nobody chose becomes STYXKEY_bfw_pass, because the edge
-			 * strips `bfw_pass` before PHP sees it (#35). See Pass_Cookie.
+			 * both evaluation paths read and the runner sets: the name on the
+			 * Challenge screen, trimmed, or `bfw_pass`. See Pass_Cookie.
 			 */
-			'cookie_name' => Pass_Cookie::effective_name( (string) ( $challenge['cookie_name'] ?? '' ) ),
+			'cookie_name' => Pass_Cookie::name( (string) ( $challenge['cookie_name'] ?? '' ) ),
 			'header_name' => (string) ( $challenge['header_name'] ?? 'X-Firewall-Pass' ),
 
 			/*
