@@ -122,6 +122,72 @@ final class ScreenRoundTripTest extends Settings_Snapshot {
 	}
 
 	/**
+	 * A vulnerability score rule saves through its screen unchanged.
+	 *
+	 * Every field is a textarea or a text box over a structure -- levels and
+	 * patterns as lists of maps, scores as maps, a network number as an
+	 * integer key -- so each is rendered as the lines its validator reads,
+	 * and an untouched save has to store exactly what was there.
+	 */
+	public function test_a_vulnerability_score_rule_saves_unchanged(): void {
+		$type     = Plugin::instance()->rule_types()->get( 'vulnerability_score' );
+		$settings = $type->default_settings();
+
+		$settings['risk_levels'][]           = array(
+			'name'            => 'fractional',
+			'threshold'       => 97.5,
+			'block'           => true,
+			'status_code'     => 429,
+			'expiration_time' => 0,
+		);
+		$settings['scoring']['countries']    = array(
+			'CN' => 30,
+			'US' => -5,
+		);
+		$settings['scoring']['asn']          = array(
+			4134  => 30,
+			13335 => -40,
+		);
+		$settings['scoring']['asn_patterns'] = array(
+			'hosting' => 15,
+			'vpn'     => 2.5,
+		);
+		$settings['databases']               = array(
+			'country' => 'geoip/GeoLite2-Country.mmdb',
+			'asn'     => '/srv/geoip/GeoLite2-ASN.mmdb',
+		);
+
+		$errors = array();
+
+		$this->assertSame( $settings, $type->validate_settings( $settings, $errors ), 'The settings under test do not validate to themselves.' );
+
+		$this->given_settings( array( 'enabled' => true ) );
+		Plugin::instance()->settings()->set(
+			'rules',
+			array(
+				array(
+					'id'       => 'score',
+					'type'     => 'vulnerability_score',
+					'label'    => 'Score',
+					'enabled'  => true,
+					'response' => 'block',
+					'settings' => $settings,
+				),
+			)
+		);
+
+		for ( $save = 0; $save < 2; $save++ ) {
+			$this->assertTrue( $this->save_as_rendered( 'score' ), 'The screen refused its own rendering of the rule.' );
+
+			Plugin::instance()->settings()->flush();
+
+			$rules = (array) Plugin::instance()->settings()->get( 'rules', array() );
+
+			$this->assertSame( $settings, $rules[0]['settings'] );
+		}
+	}
+
+	/**
 	 * Database log handlers keep where they connect through the Logging screen.
 	 *
 	 * The screen rebuilt every handler from the fields it rendered, and it

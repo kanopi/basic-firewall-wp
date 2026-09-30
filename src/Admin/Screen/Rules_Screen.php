@@ -13,10 +13,10 @@ use Kanopi\BasicFirewall\Admin\Admin;
 use Kanopi\BasicFirewall\Admin\Notices;
 use Kanopi\BasicFirewall\Admin\Screen;
 use Kanopi\BasicFirewall\Compiler\Evaluation_Order;
-use Kanopi\BasicFirewall\RuleType\Registry;
 use Kanopi\BasicFirewall\RuleType\Rule_Type;
 use Kanopi\BasicFirewall\RuleType\Rule_Type_Base;
 use Kanopi\BasicFirewall\RuleType\Rule_Window;
+use Kanopi\BasicFirewall\RuleType\Types\Vulnerability_Score;
 use Kanopi\BasicFirewall\Transfer\Exporter;
 use Kanopi\BasicFirewall\Transfer\Importer;
 
@@ -414,10 +414,19 @@ final class Rules_Screen extends Screen {
 			if ( null === $type ) {
 				printf(
 					'<td class="column-type"><span>%s</span><br><code>%s</code></td>',
-					Registry::is_withdrawn( (string) ( $rule['type'] ?? '' ) )
-						? esc_html__( 'Withdrawn — this rule is skipped', 'basic-firewall' )
-						: esc_html__( 'Unknown type', 'basic-firewall' ),
+					esc_html__( 'Unknown type', 'basic-firewall' ),
 					esc_html( (string) ( $rule['type'] ?? '' ) )
+				);
+			} elseif ( $type instanceof Vulnerability_Score && Vulnerability_Score::is_legacy( (array) ( $rule['settings'] ?? array() ) ) ) {
+				/*
+				 * Saved by the withdrawn type and not translatable; see
+				 * Vulnerability_Score::is_legacy(). Said here as well as in
+				 * Site Health, because this is where somebody looks for it.
+				 */
+				printf(
+					'<td class="column-type">%s<br><span>%s</span></td>',
+					esc_html( $type->label() ),
+					esc_html__( 'Saved before the rebuild — skipped until it is saved again', 'basic-firewall' )
 				);
 			} elseif ( ! $type->is_available() ) {
 				printf(

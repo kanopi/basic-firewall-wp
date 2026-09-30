@@ -11,6 +11,7 @@ namespace Kanopi\BasicFirewall\Tests\integration;
 
 use Kanopi\BasicFirewall\Install\Upgrader;
 use Kanopi\BasicFirewall\Plugin;
+use Kanopi\BasicFirewall\RuleType\Types\Vulnerability_Score;
 use Kanopi\BasicFirewall\Support\Schema;
 
 /**
@@ -21,6 +22,7 @@ use Kanopi\BasicFirewall\Support\Schema;
  * site would meet them -- which is where two routines can undo each other.
  *
  * @covers \Kanopi\BasicFirewall\Install\Upgrader
+ * @covers \Kanopi\BasicFirewall\RuleType\Types\Vulnerability_Score
  */
 final class UpgradeRoutinesTest extends Settings_Snapshot {
 
@@ -185,5 +187,75 @@ final class UpgradeRoutinesTest extends Settings_Snapshot {
 
 		$this->assertSame( array( 'Bot', 'bot', 'wp-admin', '^/already-a-body' ), array_column( $conditions, 'value' ) );
 		$this->assertSame( array( true, false, true, false ), array_column( $conditions, 'case_sensitive' ), 'An upgrade changed which case a pattern matches.' );
+	}
+
+	/**
+	 * Routine 12 translates a withdrawn-shape vulnerability score rule where
+	 * the mapping is sound, and switches the rest off without changing them.
+	 *
+	 * A threshold becomes one level that matches at it, with the default
+	 * scores. A weight was one number for a whole signal, which the library
+	 * has no equivalent for, so a rule with weights is kept as it was --
+	 * and the compiler names it; see RuleTypesHonouredTest.
+	 */
+	public function test_withdrawn_vulnerability_score_rules_are_translated_or_switched_off(): void {
+		$legacy = static fn ( string $id, array $settings ): array => array(
+			'id'       => $id,
+			'type'     => 'vulnerability_score',
+			'label'    => $id,
+			'enabled'  => true,
+			'response' => 'challenge',
+			'settings' => $settings,
+		);
+
+		$type     = new Vulnerability_Score();
+		$weighted = array(
+			'threshold' => 30,
+			'weights'   => array( 'method' => 20 ),
+		);
+
+		$rules = $this->upgrade(
+			array(
+				$legacy(
+					'plain',
+					array(
+						'threshold' => 45,
+						'weights'   => array(),
+					)
+				),
+				$legacy( 'weighted', $weighted ),
+			),
+			11
+		);
+
+		$expected                = $type->default_settings();
+		$expected['risk_levels'] = array(
+			array(
+				'name'            => 'threshold',
+				'threshold'       => 45,
+				'block'           => true,
+				'status_code'     => 0,
+				'expiration_time' => 0,
+			),
+		);
+
+		$this->assertSame( $expected, $rules['plain']['settings'], 'A threshold with no weights was not translated to one matching level.' );
+		$this->assertTrue( $rules['plain']['enabled'], 'A translated rule was switched off.' );
+		$this->assertSame( 'challenge', $rules['plain']['response'] );
+		$this->assertFalse( Vulnerability_Score::is_legacy( $rules['plain']['settings'] ) );
+
+		$errors = array();
+
+		$this->assertSame( $expected, $type->validate_settings( $expected, $errors ), 'A translated rule does not survive its own validator.' );
+		$this->assertSame( array(), $errors );
+
+		$this->assertSame( $weighted, $rules['weighted']['settings'], 'An untranslatable rule was changed.' );
+		$this->assertFalse( $rules['weighted']['enabled'], 'An untranslatable rule was left switched on.' );
+
+		// Idempotent: run again from 11, and nothing moves.
+		$again = $this->upgrade( array_values( $rules ), 11 );
+
+		$this->assertSame( $rules['plain']['settings'], $again['plain']['settings'] );
+		$this->assertSame( $weighted, $again['weighted']['settings'] );
 	}
 }

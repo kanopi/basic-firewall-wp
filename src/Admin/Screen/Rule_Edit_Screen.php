@@ -142,6 +142,7 @@ final class Rule_Edit_Screen extends Screen {
 
 		$stored_settings = (array) ( $existing['settings'] ?? array() );
 		$posted_settings = $this->with_secret_fields( $type, $this->posted_array( 'settings' ), $stored_settings );
+		$posted_settings = self::with_verbatim_fields( $type, $posted_settings );
 		$posted_settings = self::with_source_credentials( $posted_settings, $stored_settings, $errors );
 
 		$settings = $type->validate_settings( $posted_settings, $errors );
@@ -332,6 +333,50 @@ final class Rule_Edit_Screen extends Screen {
 		Notices::add( __( 'Rule saved, and the firewall recompiled.', 'basic-firewall' ) );
 
 		$this->redirect( 'basic-firewall-rules' );
+	}
+
+	/**
+	 * Put the fields a type reads as typed back into what was posted.
+	 *
+	 * The textarea sanitiser strips anything tag-shaped and drops
+	 * percent-encoded octets, which is right for prose and wrong for a
+	 * pattern: the vulnerability score's `/(<|%3c)script/i` came back from an
+	 * untouched save as `/(&lt;|)script/i`, a different pattern that matches
+	 * nothing it was written for. A field described as `verbatim` is read
+	 * from the request as typed instead. It is never printed unescaped, and
+	 * the type's own validator is what decides whether it is acceptable.
+	 *
+	 * @param Rule_Type            $type   The rule type.
+	 * @param array<string, mixed> $posted The sanitised settings as posted.
+	 *
+	 * @return array<string, mixed>
+	 */
+	private static function with_verbatim_fields( Rule_Type $type, array $posted ): array {
+		foreach ( $type->settings_help() as $key => $field ) {
+			$key = (string) $key;
+
+			if ( ! empty( $field['verbatim'] ) ) {
+				$typed = self::raw_posted( array( 'settings', $key ) );
+
+				if ( null !== $typed ) {
+					$posted[ $key ] = $typed;
+				}
+			}
+
+			foreach ( (array) ( $field['fields'] ?? array() ) as $child => $child_field ) {
+				if ( empty( $child_field['verbatim'] ) ) {
+					continue;
+				}
+
+				$typed = self::raw_posted( array( 'settings', $key, (string) $child ) );
+
+				if ( null !== $typed && is_array( $posted[ $key ] ?? array() ) ) {
+					$posted[ $key ][ (string) $child ] = $typed;
+				}
+			}
+		}
+
+		return $posted;
 	}
 
 	/**

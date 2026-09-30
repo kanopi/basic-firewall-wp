@@ -18,12 +18,12 @@ use Kanopi\BasicFirewall\Install\Challenge_Secret;
 use Kanopi\BasicFirewall\Plugin;
 use Kanopi\BasicFirewall\Redis_Password;
 use Kanopi\BasicFirewall\RuleType\Condition_Rule_Type_Base;
-use Kanopi\BasicFirewall\RuleType\Registry;
 use Kanopi\BasicFirewall\RuleType\Response_Settings;
 use Kanopi\BasicFirewall\RuleType\Rule_Type;
 use Kanopi\BasicFirewall\RuleType\Rule_Type_Base;
 use Kanopi\BasicFirewall\RuleType\Types\Edge_Signal;
 use Kanopi\BasicFirewall\RuleType\Types\User_Agent;
+use Kanopi\BasicFirewall\RuleType\Types\Vulnerability_Score;
 use Kanopi\BasicFirewall\Runtime\Lockdown;
 use Kanopi\BasicFirewall\Runtime\Role_Bypass;
 use Kanopi\BasicFirewall\Support\Schema;
@@ -976,21 +976,31 @@ final class Config_Compiler {
 		$compiled     = array();
 
 		foreach ( $rules as $rule ) {
-			if ( ! is_array( $rule ) || empty( $rule['enabled'] ) ) {
+			if ( ! is_array( $rule ) ) {
 				continue;
 			}
 
 			/*
-			 * Before the lookup, so a withdrawn type is named for what it is
-			 * rather than as a type nobody has heard of. See Registry::WITHDRAWN.
+			 * A vulnerability score rule still in the shape the withdrawn type
+			 * saved: `{threshold, weights}`, neither of which the library reads.
+			 * Upgrade routine 12 translates every one it soundly can, and
+			 * switches the rest off -- so this is named whether it is enabled
+			 * or not, or a rule the upgrade switched off would disappear from
+			 * the Status screen and Site Health without anybody being told.
+			 * Enabled, it is skipped rather than compiled as new settings with
+			 * every field missing, which would be the default rule nobody wrote.
 			 */
-			if ( Registry::is_withdrawn( (string) ( $rule['type'] ?? '' ) ) ) {
+			if ( 'vulnerability_score' === ( $rule['type'] ?? '' ) && Vulnerability_Score::is_legacy( (array) ( $rule['settings'] ?? array() ) ) ) {
 				$this->problems[] = sprintf(
 					/* translators: %s: rule identifier. */
-					__( 'Rule "%s" is a vulnerability score rule. That rule type is withdrawn in this release: the firewall library scores requests with its own model and never read the threshold or weights this plugin saved, so the rule matched nothing. It was skipped and is kept as it is; delete it, or replace it with a Core Rule Set or rate limit rule.', 'basic-firewall' ),
+					__( 'Rule "%s" is a vulnerability score rule saved before the rule type was rebuilt, as a threshold and weights the firewall library never read. Its weights have no equivalent in the library\'s scoring, so it could not be translated: it is skipped, and kept as it is. Open it, set its scores and risk levels, save it and switch it on, or delete it.', 'basic-firewall' ),
 					(string) ( $rule['id'] ?? '?' )
 				);
 
+				continue;
+			}
+
+			if ( empty( $rule['enabled'] ) ) {
 				continue;
 			}
 

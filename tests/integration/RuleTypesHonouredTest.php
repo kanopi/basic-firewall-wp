@@ -12,7 +12,7 @@ namespace Kanopi\BasicFirewall\Tests\integration;
 use Kanopi\BasicFirewall\Compiler\Config_Compiler;
 use Kanopi\BasicFirewall\Database_Credentials;
 use Kanopi\BasicFirewall\Plugin;
-use Kanopi\BasicFirewall\RuleType\Registry;
+use Kanopi\BasicFirewall\RuleType\Rule_Type;
 use Kanopi\BasicFirewall\RuleType\Types\Ip_Address;
 use Kanopi\BasicFirewall\RuleType\Types\Url;
 use Kanopi\BasicFirewall\RuleType\Types\User_Agent;
@@ -52,6 +52,7 @@ use Symfony\Component\HttpFoundation\Request;
  * @covers \Kanopi\BasicFirewall\RuleType\Types\Geo_Location
  * @covers \Kanopi\BasicFirewall\RuleType\Types\Abuse_Ipdb
  * @covers \Kanopi\BasicFirewall\RuleType\Types\Crs
+ * @covers \Kanopi\BasicFirewall\RuleType\Types\Vulnerability_Score
  * @covers \Kanopi\BasicFirewall\RuleType\Has_Sources
  */
 final class RuleTypesHonouredTest extends Honoured_Settings {
@@ -66,11 +67,11 @@ final class RuleTypesHonouredTest extends Honoured_Settings {
 	 * @var array<string, array<string, string>>
 	 */
 	private const COVERAGE = array(
-		'ip_address'  => array(
+		'ip_address'          => array(
 			'addresses' => 'test_ip_address',
 			'sources'   => 'test_every_source_format_constructs',
 		),
-		'user_agent'  => array(
+		'user_agent'          => array(
 			'match_type'      => 'test_user_agent_conditions',
 			'conditions'      => 'test_user_agent_conditions',
 			'sources'         => 'test_every_source_format_constructs',
@@ -79,12 +80,12 @@ final class RuleTypesHonouredTest extends Honoured_Settings {
 			'verify'          => 'test_user_agent_verification',
 			'verify_suffixes' => 'test_user_agent_verification',
 		),
-		'url'         => array(
+		'url'                 => array(
 			'match_type' => 'test_url_conditions',
 			'conditions' => 'test_url_conditions',
 			'sources'    => 'test_every_source_format_constructs',
 		),
-		'asn'         => array(
+		'asn'                 => array(
 			'match_type'         => 'test_asn',
 			'conditions'         => 'test_asn',
 			'sources'            => 'test_every_source_format_constructs',
@@ -94,14 +95,14 @@ final class RuleTypesHonouredTest extends Honoured_Settings {
 			'reader.edge'        => 'test_asn',
 			'reader.headers'     => 'test_asn',
 		),
-		'edge_signal' => array(
+		'edge_signal'         => array(
 			'match_type'     => 'test_edge_signal',
 			'conditions'     => 'test_edge_signal',
 			'sources'        => 'test_every_source_format_constructs',
 			'provider'       => 'test_edge_signal',
 			'custom_headers' => 'test_edge_signal',
 		),
-		'geolocation' => array(
+		'geolocation'         => array(
 			'match_type'         => 'test_geolocation',
 			'conditions'         => 'test_geolocation',
 			'sources'            => 'test_every_source_format_constructs',
@@ -111,7 +112,7 @@ final class RuleTypesHonouredTest extends Honoured_Settings {
 			'reader.edge'        => 'test_geolocation',
 			'reader.headers'     => 'test_geolocation',
 		),
-		'rate_limit'  => array(
+		'rate_limit'          => array(
 			'paths'                     => 'test_rate_limit_counts',
 			'default_limit'             => 'test_rate_limit_counts',
 			'default_window'            => 'test_rate_limit_counts',
@@ -126,14 +127,25 @@ final class RuleTypesHonouredTest extends Honoured_Settings {
 			'storage.redis_password'    => 'test_rate_limit_storage',
 			'storage.key_prefix'        => 'test_rate_limit_storage',
 		),
-		'abuse_ipdb'  => array(
+		'abuse_ipdb'          => array(
 			'threshold'    => 'test_abuse_ipdb',
 			'api_key'      => 'test_abuse_ipdb',
 			'cache_ttl'    => 'test_abuse_ipdb',
 			'timeout'      => 'test_abuse_ipdb',
 			'max_age_days' => 'test_abuse_ipdb',
 		),
-		'crs'         => array(
+		'vulnerability_score' => array(
+			'risk_levels'          => 'test_vulnerability_score',
+			'scoring.methods'      => 'test_vulnerability_score',
+			'scoring.patterns'     => 'test_vulnerability_score',
+			'scoring.user_agents'  => 'test_vulnerability_score',
+			'scoring.countries'    => 'test_vulnerability_score_databases',
+			'scoring.asn'          => 'test_vulnerability_score_databases',
+			'scoring.asn_patterns' => 'test_vulnerability_score_databases',
+			'databases.country'    => 'test_vulnerability_score_databases',
+			'databases.asn'        => 'test_vulnerability_score_databases',
+		),
+		'crs'                 => array(
 			'mode'                => 'test_crs',
 			'paranoia'            => 'test_crs',
 			'inbound'             => 'test_crs',
@@ -166,7 +178,7 @@ final class RuleTypesHonouredTest extends Honoured_Settings {
 
 			$this->assertArrayHasKey( $id, self::COVERAGE, "The $id rule type is offered, and nothing here proves the library honours any of its settings." );
 
-			$stored  = self::leaves( $type->default_settings() );
+			$stored  = self::form_leaves( $type );
 			$covered = array_keys( self::COVERAGE[ $id ] );
 
 			$this->assertSame( array(), array_values( array_diff( $stored, $covered ) ), "These $id settings are stored and nothing here proves the library reads them." );
@@ -181,37 +193,46 @@ final class RuleTypesHonouredTest extends Honoured_Settings {
 	}
 
 	/**
-	 * The vulnerability score type is withdrawn: not offered, never compiled,
-	 * and a stored rule kept and named.
+	 * The settings each form offers, as the form offers them.
 	 *
-	 * It compiled a threshold and weights; the library scores with its own
-	 * model and reads neither, so the rule never matched whatever it was set
-	 * to. Kept, because it is somebody's configuration; reported, because
-	 * silence was the defect.
+	 * A key the type describes field by field -- the geolocation reader, the
+	 * rate limit storage, the vulnerability scores -- is one row per field,
+	 * so each field is a setting. Anything else is one control, whatever it
+	 * holds: the method scores are a map, and one textarea.
+	 *
+	 * @param Rule_Type $type The type.
+	 *
+	 * @return list<string>
 	 */
-	public function test_vulnerability_score_is_withdrawn(): void {
-		$registry = Plugin::instance()->rule_types();
+	private static function form_leaves( Rule_Type $type ): array {
+		$help  = $type->settings_help();
+		$paths = array();
 
-		$this->assertTrue( Registry::is_withdrawn( 'vulnerability_score' ) );
-		$this->assertFalse( $registry->has( 'vulnerability_score' ) );
-		$this->assertNotContains( 'vulnerability_score', $registry->shipped_ids() );
+		foreach ( $type->default_settings() as $key => $default ) {
+			if ( is_array( $default ) && is_array( $help[ $key ]['fields'] ?? null ) ) {
+				foreach ( array_keys( $default ) as $child ) {
+					$paths[] = $key . '.' . $child;
+				}
 
-		$claim = static function ( array $types ): array {
-			$types['vulnerability_score'] = new Url();
+				continue;
+			}
 
-			return $types;
-		};
-
-		add_filter( 'basic_firewall_rule_types', $claim );
-		$registry->reset();
-
-		try {
-			$this->assertFalse( $registry->has( 'vulnerability_score' ), 'Another plugin claimed a withdrawn type, and stored rules would compile to it.' );
-		} finally {
-			remove_filter( 'basic_firewall_rule_types', $claim );
-			$registry->reset();
+			$paths[] = (string) $key;
 		}
 
+		return $paths;
+	}
+
+	/**
+	 * A vulnerability score rule the withdrawn type saved, with weights, is
+	 * kept, skipped and named -- enabled or not.
+	 *
+	 * Its weights have no equivalent in the library's scoring, so upgrade
+	 * routine 12 leaves it in its old shape, switched off. Reading that shape
+	 * as new settings would find every field missing and compile the default
+	 * rule, which nobody wrote.
+	 */
+	public function test_an_untranslatable_vulnerability_score_rule_is_kept_and_named(): void {
 		$stored = $this->rule(
 			'old-score',
 			'vulnerability_score',
@@ -221,22 +242,271 @@ final class RuleTypesHonouredTest extends Honoured_Settings {
 			)
 		);
 
-		$firewall = $this->build(
-			array(
-				'rules' => array(
-					$stored,
-					$this->rule( 'still-here', 'url', array( 'conditions' => array( self::condition( 'path', 'equals', '/x' ) ) ) ),
-				),
-			)
+		foreach ( array( true, false ) as $enabled ) {
+			$stored['enabled'] = $enabled;
+
+			$firewall = $this->build(
+				array(
+					'rules' => array(
+						$stored,
+						$this->rule( 'still-here', 'url', array( 'conditions' => array( self::condition( 'path', 'equals', '/x' ) ) ) ),
+					),
+				)
+			);
+
+			$this->plugin_named( $firewall, 'still-here' );
+			$this->assertNull( $this->bucket_of( $firewall, 'old-score' ), 'A rule in the withdrawn shape was compiled.' );
+			$this->assertNotEmpty( preg_grep( '/"old-score".*could not be translated/', $this->problems ), 'A skipped rule in the withdrawn shape was not reported.' );
+
+			$kept = array_column( (array) Plugin::instance()->settings()->get( 'rules', array() ), null, 'id' );
+
+			$this->assertSame( $stored['settings'], $kept['old-score']['settings'] ?? null, 'Saving the settings changed or dropped a rule in the withdrawn shape.' );
+			$this->assertNotEmpty( Plugin::instance()->rule_types()->get( 'vulnerability_score' )->check_requirements( $stored['settings'] ), 'The rule screen does not say the rule is skipped.' );
+		}
+	}
+
+	/**
+	 * Scores add up, the level with the highest threshold reached decides, and
+	 * only a level that matches makes the rule match -- with its own status
+	 * code and ban length.
+	 *
+	 * Asked of the library twice over: by evaluating requests either side of
+	 * the threshold, and by reading the configuration it is enforcing back off
+	 * the plugin object.
+	 */
+	public function test_vulnerability_score(): void {
+		$settings = array(
+			'risk_levels' => "watch 10 pass\nhigh 30 match 451 7200\nsevere 90 match",
+			'scoring'     => array(
+				'methods'      => "DELETE: 20\nget: 0",
+				'patterns'     => "25 contains query_string evil\n15 regex uri,body /\\.env/i",
+				'user_agents'  => "15 contains scanner\n40 contains scanner",
+				'countries'    => '',
+				'asn'          => '',
+				'asn_patterns' => '',
+			),
+			'databases'   => array(
+				'country' => '',
+				'asn'     => '',
+			),
 		);
 
-		$this->plugin_named( $firewall, 'still-here' );
-		$this->assertNull( $this->bucket_of( $firewall, 'old-score' ), 'A withdrawn rule was compiled.' );
-		$this->assertNotEmpty( preg_grep( '/"old-score".*withdrawn/', $this->problems ), 'A skipped withdrawn rule was not reported.' );
+		$errors = array();
+		$clean  = Plugin::instance()->rule_types()->get( 'vulnerability_score' )->validate_settings( $settings, $errors );
 
-		$kept = array_column( (array) Plugin::instance()->settings()->get( 'rules', array() ), null, 'id' );
+		$this->assertSame( array(), $errors, 'The settings under test were refused.' );
 
-		$this->assertSame( $stored['settings'], $kept['old-score']['settings'] ?? null, 'Saving the settings changed or dropped a withdrawn rule.' );
+		$firewall = $this->build( array( 'rules' => array( $this->rule( 'score', 'vulnerability_score', $clean ) ) ) );
+		$plugin   = $this->plugin_named( $firewall, 'score' );
+
+		// A DELETE (20) from a scanner (15, the first user agent line only) is 35.
+		$hit = self::request( '/', '203.0.113.9', array( 'User-Agent' => 'scanner/1.0' ), 'DELETE' );
+
+		$this->assertTrue( (bool) $plugin->evaluate( $hit ), 'A request scoring above a matching level did not match.' );
+		$this->assertEquals( 35, $hit->attributes->get( 'risk-score' ), 'Only the first matching user agent line counts.' );
+		$this->assertSame( 'high', $hit->attributes->get( 'risk-level' ) );
+		$this->assertSame( 451, $plugin->getStatusCode( $hit ), 'The level\'s status code was not used.' );
+		$this->assertSame( 7200, $plugin->getExpirationTime( $hit ), 'The level\'s ban length was not used.' );
+
+		// A pattern (25) is above the pass level and below the matching one.
+		$miss = self::request( '/?q=evil', '203.0.113.9', array( 'User-Agent' => 'Mozilla/5.0' ) );
+
+		$this->assertFalse( (bool) $plugin->evaluate( $miss ), 'A request below every matching level matched.' );
+		$this->assertEquals( 25, $miss->attributes->get( 'risk-score' ) );
+		$this->assertSame( 'watch', $miss->attributes->get( 'risk-level' ), 'A pass level was not applied.' );
+
+		// Both patterns, where they are told to look: 25 + 15, and the method is GET (0).
+		$both = self::request( '/.env?q=evil', '203.0.113.9', array( 'User-Agent' => 'Mozilla/5.0' ) );
+
+		$this->assertTrue( (bool) $plugin->evaluate( $both ) );
+		$this->assertEquals( 40, $both->attributes->get( 'risk-score' ) );
+
+		// A level without its own status code falls back to the rule's.
+		$config = (array) self::property( $plugin, 'config' );
+
+		$this->assertSame(
+			array(
+				'watch'  => array(
+					'threshold' => 10,
+					'block'     => false,
+				),
+				'high'   => array(
+					'threshold'       => 30,
+					'block'           => true,
+					'status_code'     => 451,
+					'expiration_time' => 7200,
+				),
+				'severe' => array(
+					'threshold' => 90,
+					'block'     => true,
+				),
+			),
+			$config['risk_levels'] ?? null
+		);
+		$this->assertSame(
+			array(
+				'methods'     => array(
+					'DELETE' => 20,
+					'GET'    => 0,
+				),
+				'patterns'    => array(
+					array(
+						'pattern'   => 'evil',
+						'score'     => 25,
+						'type'      => 'contains',
+						'locations' => array( 'query_string' ),
+					),
+					array(
+						'pattern'   => '/\.env/i',
+						'score'     => 15,
+						'type'      => 'regex',
+						'locations' => array( 'uri', 'body' ),
+					),
+				),
+				'user_agents' => array(
+					array(
+						'pattern' => 'scanner',
+						'score'   => 15,
+						'type'    => 'contains',
+					),
+					array(
+						'pattern' => 'scanner',
+						'score'   => 40,
+						'type'    => 'contains',
+					),
+				),
+			),
+			$config['scoring'] ?? null,
+			'Empty signals are compiled, or a signal is not in the shape the library reads.'
+		);
+		$this->assertArrayNotHasKey( 'country_reader', (array) self::property( $plugin, 'metadata' ), 'A reader was opened with nothing to score from it.' );
+	}
+
+	/**
+	 * Country and network scores, from the readers the plugin opens.
+	 *
+	 * The fake reader answers GB, and AS16509 AMAZON-02: 20 + 5 + 10 = 35.
+	 */
+	public function test_vulnerability_score_databases(): void {
+		$settings = array(
+			'risk_levels' => 'high 30 match',
+			'scoring'     => array(
+				'methods'      => '',
+				'patterns'     => '',
+				'user_agents'  => '',
+				'countries'    => "gb: 20\nFR: 50",
+				'asn'          => 'AS16509: 5',
+				'asn_patterns' => "amazon: 10\namazon-0: 60",
+			),
+			'databases'   => array(
+				'country' => $this->scratch . '/GeoLite2-Country.mmdb',
+				'asn'     => $this->scratch . '/GeoLite2-ASN.mmdb',
+			),
+		);
+
+		$type   = Plugin::instance()->rule_types()->get( 'vulnerability_score' );
+		$errors = array();
+		$clean  = $type->validate_settings( $settings, $errors );
+
+		$this->assertSame( array(), $errors );
+
+		$firewall = $this->build( array( 'rules' => array( $this->rule( 'geo-score', 'vulnerability_score', $clean ) ) ) );
+
+		$metadata = $this->compiled_rule( 'geo-score' )['metadata'] ?? array();
+
+		$this->assertSame(
+			array(
+				'type' => 'reader',
+				'db'   => $this->scratch . '/GeoLite2-Country.mmdb',
+			),
+			$metadata['country_reader'] ?? null
+		);
+		$this->assertSame(
+			array(
+				'type' => 'reader',
+				'db'   => $this->scratch . '/GeoLite2-ASN.mmdb',
+			),
+			$metadata['asn_reader'] ?? null
+		);
+
+		$plugin = $this->plugin_named( $firewall, 'geo-score' );
+		$config = (array) self::property( $plugin, 'config' );
+
+		$this->assertSame(
+			array(
+				'GB' => 20,
+				'FR' => 50,
+			),
+			$config['scoring']['countries'] ?? null
+		);
+		$this->assertSame( array( 16509 => 5 ), $config['scoring']['asn'] ?? null );
+
+		// No database on disk, so no reader: the scores are skipped, as the screen warns.
+		$this->assertFalse( (bool) $plugin->evaluate( self::request( '/', '203.0.113.10' ) ) );
+		$this->assertNotEmpty( $type->check_requirements( $clean ), 'A missing database is not reported.' );
+
+		self::set_property( $plugin, 'countryReader', new Fake_Geo_Reader() );
+		self::set_property( $plugin, 'asnReader', new Fake_Geo_Reader() );
+
+		$request = self::request( '/', '203.0.113.10' );
+
+		$this->assertTrue( (bool) $plugin->evaluate( $request ), 'Country and network scores were not added up.' );
+		$this->assertEquals( 35, $request->attributes->get( 'risk-score' ), 'Only the first matching organisation line counts.' );
+
+		// Without a database path, the scores are refused rather than saved to be ignored.
+		$settings['databases'] = array(
+			'country' => '',
+			'asn'     => '',
+		);
+		$errors                = array();
+
+		$type->validate_settings( $settings, $errors );
+
+		$this->assertArrayHasKey( 'databases.country', $errors );
+		$this->assertArrayHasKey( 'databases.asn', $errors );
+	}
+
+	/**
+	 * Values the library would refuse, ignore, or read as something else are refused.
+	 *
+	 * @dataProvider refused_vulnerability_settings
+	 *
+	 * @param string               $field    The field the objection names.
+	 * @param array<string, mixed> $settings Settings over the defaults.
+	 */
+	public function test_vulnerability_score_refuses( string $field, array $settings ): void {
+		$type   = Plugin::instance()->rule_types()->get( 'vulnerability_score' );
+		$errors = array();
+
+		$type->validate_settings( self::merge( $type->default_settings(), $settings ), $errors );
+
+		$this->assertArrayHasKey( $field, $errors );
+	}
+
+	/**
+	 * Settings the vulnerability score type refuses.
+	 *
+	 * @return array<string, array{0: string, 1: array<string, mixed>}>
+	 */
+	public static function refused_vulnerability_settings(): array {
+		return array(
+			'no level matches'            => array( 'risk_levels', array( 'risk_levels' => 'low 10 pass' ) ),
+			'no levels at all'            => array( 'risk_levels', array( 'risk_levels' => '' ) ),
+			'matches at zero'             => array( 'risk_levels', array( 'risk_levels' => 'all 0 match' ) ),
+			'pass above a match'          => array( 'risk_levels', array( 'risk_levels' => "high 40 match\nignore 60 pass" ) ),
+			'same threshold twice'        => array( 'risk_levels', array( 'risk_levels' => "a 40 match\nb 40 match" ) ),
+			'same name twice'             => array( 'risk_levels', array( 'risk_levels' => "a 40 match\nA 50 match" ) ),
+			'status that is not an error' => array( 'risk_levels', array( 'risk_levels' => 'a 40 match 200' ) ),
+			'unknown action'              => array( 'risk_levels', array( 'risk_levels' => 'a 40 block' ) ),
+			'regex without delimiters'    => array( 'scoring.user_agents', array( 'scoring' => array( 'user_agents' => '20 regex ^$' ) ) ),
+			'regex that does not compile' => array( 'scoring.patterns', array( 'scoring' => array( 'patterns' => '20 regex uri /(unclosed/' ) ) ),
+			'bracket delimiters'          => array( 'scoring.patterns', array( 'scoring' => array( 'patterns' => '20 regex uri (abc)i' ) ) ),
+			'unknown location'            => array( 'scoring.patterns', array( 'scoring' => array( 'patterns' => '20 contains cookie x' ) ) ),
+			'unknown match type'          => array( 'scoring.patterns', array( 'scoring' => array( 'patterns' => '20 like uri x' ) ) ),
+			'score that is not a number'  => array( 'scoring.methods', array( 'scoring' => array( 'methods' => 'POST: lots' ) ) ),
+			'country that is not a code'  => array( 'scoring.countries', array( 'scoring' => array( 'countries' => 'United Kingdom: 5' ) ) ),
+			'network that is not number'  => array( 'scoring.asn', array( 'scoring' => array( 'asn' => 'AMAZON: 5' ) ) ),
+		);
 	}
 
 	/**
