@@ -7,6 +7,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.0.0-rc.3]
+
+**Third release candidate for 1.0.0.** Published as a GitHub pre-release, so
+the `releases/latest/download` URL does not serve it; install it by its own URL.
+The headline is #30: rules now see the path of a directly requested PHP file
+(`wp-login.php`, `xmlrpc.php`, `/wp-admin/*.php`), which they did not before.
+What changed since 1.0.0-rc.2 is below.
+
 ### Changed
 
 - **Requires and bundles `kanopi/firewall` 2.34.0** (was ^2.33.2). The release
@@ -27,6 +35,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   would need the raw-URL reading this release removes. Rules on those files
   need the prefix. Site Health recommends it when a rule or an enabled preset
   names them without it, and the Test screen defaults to `/wp/wp-login.php`.
+
+- **A rule that matched `path` `/` no longer catches every directly requested
+  file.** Before this release a direct `wp-login.php`, `xmlrpc.php` or
+  `/wp-admin/*.php` request reached the rules as `/`, so `path equals /` (or a
+  pattern that only `/` satisfied) matched all of them. It now matches the
+  front page only. Check any rule written against what the old behaviour
+  logged.
 
 ### Fixed
 
@@ -51,19 +66,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   login page or a page resolves to anything but itself. Schema routine 10
   recompiles every site on update.
 
-### Security
-
-- **No alternate spelling of a direct file's URL gets past a rule on it.**
-  An unreleased first version of the fix above rewrote the request's
-  `SCRIPT_NAME` to `index.php` and matched the path from the raw
-  `REQUEST_URI`. The web server normalises the URL before it chooses a file,
-  so `/./wp-login.php`, `/%77p-login.php`, `//wp-login.php`,
-  `/x/../wp-login.php` and `/wp-login.php;x` all ran `wp-login.php`, but each
-  reached the rules as the spelling and escaped a `/wp-login.php` rate limit
-  or block. The rewrite is gone: the request is built exactly as the server
-  described it, and the library matches the executed script. Tests cover each
-  spelling against a block and a rate limit, over HTTP where the server
-  normalises them itself.
+  Because `path` is the file the web server ran rather than the URL as typed,
+  a spelling the server normalises -- `/./wp-login.php`, `/%77p-login.php`,
+  `//wp-login.php`, `/x/../wp-login.php`, `/wp-login.php;x` -- is matched as
+  `/wp-login.php`, so none of them gets past a rule or rate limit on it.
 
 ## [1.0.0-rc.2]
 

@@ -4,7 +4,7 @@ Tags: security, firewall, rate limiting, bot protection, waf
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 1.0.0-rc.2
+Stable tag: 1.0.0-rc.3
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -133,6 +133,11 @@ proxy too.
 4. Blocked clients, with an address lookup that works on every backend.
 
 == Changelog ==
+
+= 1.0.0-rc.3 =
+* Rules see the path of a directly requested PHP file (wp-login.php, xmlrpc.php, /wp-admin/*.php), which previously reached them as "/": login rate limits count, admin and xmlrpc rules match, and a URL spelled differently cannot get past them.
+* Bundles kanopi/firewall 2.34.0; bot equals true now matches Nikto.
+* With WordPress in its own directory, rules on WordPress's own files need that directory's prefix (e.g. /wp/wp-login.php); Site Health says when one is missing it.
 
 = 1.0.0-rc.2 =
 * Bundles kanopi/firewall 2.33.2: a rate-limit key keeps the case of a form field, cookie or query parameter name.
