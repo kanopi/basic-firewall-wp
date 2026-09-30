@@ -116,11 +116,17 @@ final class UninstallLeftoversTest extends TestCase {
 		$this->write( $dir . '/firewall.yml' );
 		$this->write( $dir . '/logs/firewall-2026-09-28.log' );
 
+		// The runtime sidecar, where Paths says it goes. Found missing from
+		// uninstall's list in #56: the compiler writes it whenever the
+		// firewall is switched off or pinned, and it outlived the plugin.
+		$this->assertSame( $dir . '/runtime.json', Plugin::instance()->paths()->runtime_file() );
+		$this->write( Plugin::instance()->paths()->runtime_file(), '{"enabled":false}' );
+
 		$this->run_uninstall();
 
 		$this->assertFileExists( $dir . '/notes.txt', 'Uninstall deleted a file the plugin never wrote.' );
 
-		foreach ( array( 'blocked.data', 'firewall.yml', 'logs', '.htaccess', 'web.config', 'index.php' ) as $name ) {
+		foreach ( array( 'blocked.data', 'firewall.yml', 'runtime.json', 'logs', '.htaccess', 'web.config', 'index.php' ) as $name ) {
 			$this->assertFileDoesNotExist( $dir . '/' . $name, sprintf( 'Uninstall left the plugin\'s %s in a guarded directory.', $name ) );
 		}
 
