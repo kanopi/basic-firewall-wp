@@ -590,29 +590,77 @@ always does, which on a block rule is every visitor.
 - **`port` compares as a number** with *is equal to*, *is not equal to* and *is
   one of*, because the library holds it as one and compares strictly.
 
-#### `path` is the path that was requested
+#### `path` is the file the web server ran
 
 Most of a WordPress site is served through `index.php`, but not all of it:
 `wp-login.php`, `xmlrpc.php`, `wp-cron.php`, every `/wp-admin/*.php` screen and
-any custom endpoint in the site's root are run directly by the web server. The
-library works out `path` the way a front-controller application would, and for
-a directly run file that used to leave `/` — so a `/wp-login.php` rate limit
-counted nothing, a rule on `/wp-admin` matched no screen, and a negated path
-condition matched all of them.
+any custom endpoint in the site's root are run directly by the web server. By
+default the library works out `path` the way a front-controller application
+would, and for a directly run file that leaves `/`, so a `/wp-login.php` rate
+limit counted nothing, a rule on `/wp-admin` matched no screen, and a negated
+path condition matched all of them (#30).
 
-The plugin now builds the request it hands the library so that a direct request
-looks like one routed through `index.php`: `path` is `/wp-login.php`,
-`/wp-admin/edit.php` or `/xmlrpc.php`, on both evaluation paths, in rate limit
-patterns, in the log's `path` and in block records. WordPress's own view of the
-request is not touched. On a site installed in a subdirectory, `path` is
-relative to it, as it already was for pages: `/blog/wp-login.php` is
-`/wp-login.php`. Where WordPress's own files sit in a subdirectory of the site
-— the WordPress Address differs from the Site Address — a directly run file's
-`path` is relative to that directory: `/wp/wp-login.php` is `/wp-login.php`,
-so rules and presets written for `/wp-login.php` and `/wp-admin` apply
-unchanged. The Test screen builds its request the same way, and a Site
-Health check (*Basic Firewall request path*) fails if a direct `wp-login.php`
-request ever resolves to `/` again.
+The plugin compiles `global.path_source: script_name`, from `kanopi/firewall`
+2.34.0 ([kanopi/firewall#414](https://github.com/kanopi/firewall/issues/414),
+[#415](https://github.com/kanopi/firewall/pull/415)). `path` is then the file the
+web server ran (`SCRIPT_NAME`, plus any `PATH_INFO`), or the routed path when
+that file is `index.php`: `/wp-login.php`, `/wp-admin/edit.php`, `/xmlrpc.php`,
+and `/wp-admin/index.php` for the dashboard. That holds on both evaluation paths,
+in rate limit patterns, in the log's `path` and in block records.
+
+It's the file that ran, not the URL, and that's deliberate. The server decodes
+and normalises the URL before it chooses a file, so `/./wp-login.php`,
+`/%77p-login.php`, `//wp-login.php` and `/x/../wp-login.php` all run
+`wp-login.php`. Matched as the raw URL, each would get past a `/wp-login.php`
+rate limit or block. Matched as the file that ran, they're all `/wp-login.php`,
+and no way of spelling the address changes that. Earlier builds of this fix
+rewrote the request so the raw URL was matched. That's gone, and the request the
+plugin hands the library is exactly what the server sent. WordPress's own view
+of the request is untouched either way.
+
+`path` follows where the site's `index.php`, the front controller, is served:
+
+| Layout | Site Address / WordPress Address | Compiled `base_path` | The login page matches as |
+|---|---|---|---|
+| At the web root | `/` and `/` | none | `/wp-login.php` |
+| In a subdirectory | `/blog` and `/blog` | `/blog` | `/wp-login.php` |
+| WordPress in its own directory | `/` and `/wp` | none | **`/wp/wp-login.php`** |
+| Multisite, subdirectory network | `/site2` and `/site2` | the network's path | `/wp-login.php` |
+
+- **Subdirectory.** The plugin compiles `global.base_path: /blog` from the Site
+  Address. `/blog/index.php` is then the front controller, and `/blog` comes off
+  the front of every other file, so rules and presets written for
+  `/wp-login.php` and `/wp-admin` apply unchanged.
+- **WordPress in its own directory** (Bedrock and similar). `index.php` is at the
+  web root and the core files are under `/wp/`, so the front controller is
+  `/index.php` and `base_path` has to be empty. A `/wp` base path would also make
+  `/wp/index.php` the front controller, and then every front-end request would
+  match as `/index.php`. So on this layout WordPress's own files match with
+  their directory: **write rules as `/wp/wp-login.php`, `/wp/xmlrpc.php` and
+  `/wp/wp-admin`**, or use *ends with* or *contains*. A rule on `/wp-login.php`
+  matches only the bare address, which the server routes through `index.php` and
+  WordPress then redirects. The library's presets name the root paths, so their
+  rules on WordPress's own files don't fire on this layout. Site Health says so,
+  and the Test screen's default path is `/wp/wp-login.php` on this layout. This
+  is a trade-off, and the plugin makes it on purpose. The only way to strip the
+  directory without a library change is to read the path back out of the raw
+  URL, and that brings the spelling bypass back.
+- **Multisite.** On a subdirectory network, the server rewrites
+  `/site2/wp-login.php` to the network's own `wp-login.php`, so the base path is
+  the network's path and not each site's.
+
+The compiled file is rebuilt when the Site Address or WordPress Address changes.
+It's also rebuilt on the first request after updating to this version, so an
+older compiled file without `path_source` doesn't outlive the update.
+
+The Test screen builds its request with the server values a web server would
+send (`SCRIPT_NAME` naming a direct file, `index.php` for anything else) and
+lets the library resolve the path. A Site Health check, *Basic Firewall request
+path*, reads `path_source` and `base_path` back out of the compiled file and asks
+the library what a direct `wp-login.php` request resolves to. It's critical if
+`path_source: script_name` is missing (for example, advanced YAML overriding it),
+or if the login page or an ordinary page doesn't resolve to its own path. That
+second case is a stale `base_path`.
 
 ### Responses
 

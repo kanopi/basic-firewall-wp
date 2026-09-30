@@ -7,6 +7,27 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed
+
+- **Requires and bundles `kanopi/firewall` 2.34.0** (was ^2.33.2). The release
+  zip bundles 2.34.0, namespace-scoped. It adds `global.path_source` and
+  `global.base_path`, which the fix below uses
+  ([kanopi/firewall#414](https://github.com/kanopi/firewall/issues/414),
+  [#415](https://github.com/kanopi/firewall/pull/415)), and stores a direct
+  file's URL in block records without a trailing `/`.
+- **`bot equals true` now matches Nikto.** 2.34.0 requires
+  `matomo/device-detector` ^6.5.2, which adds Nikto's default agent to the
+  curated bot database. The rule screen, README and readme.txt no longer list
+  Nikto among what `bot` misses. sqlmap, curl and python-requests still need
+  `automated`.
+- **With WordPress in its own directory** (Site Address `/`, WordPress Address
+  `/wp`), WordPress's own files are matched with that directory:
+  `/wp/wp-login.php`, `/wp/wp-admin/edit.php`. The front controller is the web
+  root's `index.php`, so there is no base path to strip, and stripping `/wp`
+  would need the raw-URL reading this release removes. Rules on those files
+  need the prefix. Site Health recommends it when a rule or an enabled preset
+  names them without it, and the Test screen defaults to `/wp/wp-login.php`.
+
 ### Fixed
 
 - **Rules now see the path of a directly requested PHP file** (#30). WordPress
@@ -15,18 +36,34 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   through `index.php`, and for those the library's `path` was `/`. A
   `/wp-login.php` rate limit never counted a login, a rule on `/wp-admin` or
   `/xmlrpc.php` never matched, a negated path condition matched every such
-  request, and the log and block records said `path: /` beside a URL with a
-  stray `/` after the file name. A challenge on an admin screen also posted its
-  answer under `/wp-admin/`, where the firewall never looked for it. The
-  request handed to the library is now built by one factory, used by the
-  wp-config.php path, the mu-plugin (including logged-in requests deferred to
-  `plugins_loaded`), the Test screen and the lockdown screen's address check.
-  It points the request's own copy of `SCRIPT_NAME`, `PHP_SELF` and
-  `SCRIPT_FILENAME` at the front controller, derived from the request so a site
-  in a subdirectory gets its own, and leaves the request alone when the server
-  values cannot be reconciled. The real `$_SERVER` is not modified. A new Site
-  Health check, *Basic Firewall request path*, is critical if a direct
-  `wp-login.php` request resolves to `/`.
+  request, and the log and block records said `path: /`. The compiled
+  configuration now sets `global.path_source: script_name`, so `path` is the
+  file the web server ran, on the wp-config.php path, in the mu-plugin
+  (including logged-in requests deferred to `plugins_loaded`) and on the Test
+  screen. `global.base_path` is compiled for a subdirectory install from the
+  Site Address, or from the network's path on a multisite network, and the
+  compiled file is rebuilt when either address changes. A challenge on a
+  direct file posts its answer under the front controller's directory, through
+  a compiled `challenge.submit_url`, so an admin screen's challenge is
+  recognised. A Site Health check, *Basic Firewall request path*, asks the
+  library what a direct `wp-login.php` request resolves to under the compiled
+  settings. It is critical if `path_source: script_name` is missing, or if the
+  login page or a page resolves to anything but itself. Schema routine 10
+  recompiles every site on update.
+
+### Security
+
+- **No alternate spelling of a direct file's URL gets past a rule on it.**
+  An unreleased first version of the fix above rewrote the request's
+  `SCRIPT_NAME` to `index.php` and matched the path from the raw
+  `REQUEST_URI`. The web server normalises the URL before it chooses a file,
+  so `/./wp-login.php`, `/%77p-login.php`, `//wp-login.php`,
+  `/x/../wp-login.php` and `/wp-login.php;x` all ran `wp-login.php`, but each
+  reached the rules as the spelling and escaped a `/wp-login.php` rate limit
+  or block. The rewrite is gone: the request is built exactly as the server
+  described it, and the library matches the executed script. Tests cover each
+  spelling against a block and a rate limit, over HTTP where the server
+  normalises them itself.
 
 ## [1.0.0-rc.2]
 
