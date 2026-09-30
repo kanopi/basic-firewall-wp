@@ -38,6 +38,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **The early path no longer requires a second Composer autoloader when the
+  library is already loaded** (#44). A site whose `wp-config.php` required one
+  autoloader above the snippet while a different `vendor/` sat beside the
+  WordPress root had that second one required too, so classes could resolve
+  from either tree. "Library already loaded" is now asked before the fixed
+  site locations: the order is the plugin's own `vendor/`, the `autoloader`
+  option, `BASIC_FIREWALL_AUTOLOADER`, a library already loaded (`loaded`),
+  then `dirname( ABSPATH ) . '/vendor'` (`site`). The plugin's scoped copy
+  still wins, and a named autoloader that cannot be read still stops the
+  search with `autoloader-unreadable`.
 - **A firewall failure that fails open is now logged.** Anything other than a
   verdict that made either evaluation path let a request through — the library
   failing to start, or throwing partway through evaluating — was recorded only

@@ -336,10 +336,12 @@ it needs a Composer autoloader. It uses the first of these that applies:
 3. **The `BASIC_FIREWALL_AUTOLOADER` constant.** The same thing, said once per
    environment. The option beats it, as every bootstrap option beats the
    constant it defaults to.
-4. **A `vendor/` beside the WordPress root** — `dirname( ABSPATH ) . '/vendor'`,
+4. **A library that is already loaded**, because `wp-config.php` required the
+   site's autoloader above the snippet. Nothing more to require — and nothing
+   else is: a different `vendor/` beside the WordPress root is left alone, so
+   classes cannot end up resolving from two Composer trees at once.
+5. **A `vendor/` beside the WordPress root** — `dirname( ABSPATH ) . '/vendor'`,
    where Bedrock and most Composer-built sites keep it.
-5. **A library that is already loaded**, because `wp-config.php` required the
-   site's autoloader above the snippet. Nothing more to require.
 
 So a site that installs the plugin with Composer and a custom `vendor-dir` adds
 one line:

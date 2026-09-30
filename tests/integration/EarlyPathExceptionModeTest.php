@@ -119,6 +119,7 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 				'BFW_EARLY_CUSTOM_AUTOLOADER'        => self::$scratch . '/mu-plugins/vendor/autoload.php',
 				'BFW_EARLY_NO_RESPONDER_PLUGIN_PATH' => self::$scratch . '/plugin-no-responder',
 				'BFW_EARLY_ERROR_LOG'                => self::$scratch . '/php-error.log',
+				'BFW_EARLY_SITE_ROOT'                => self::$scratch . '/site',
 			)
 		);
 
@@ -174,6 +175,10 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 			@unlink( self::$scratch . '/php-error.log' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- the fixture's log, or nothing if nothing was logged.
 			@unlink( self::$scratch . '/plugin-no-responder/vendor' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- as above.
 			@rmdir( self::$scratch . '/plugin-no-responder' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- as above.
+			@unlink( self::$scratch . '/site/vendor/autoload.php' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- as above.
+			@rmdir( self::$scratch . '/site/vendor' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- as above.
+			@rmdir( self::$scratch . '/site/wordpress' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- as above.
+			@rmdir( self::$scratch . '/site' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- as above.
 			@unlink( self::$scratch . '/mu-plugins/vendor/autoload.php' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- as above.
 			@rmdir( self::$scratch . '/mu-plugins/vendor' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- as above.
 			@rmdir( self::$scratch . '/mu-plugins' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- as above.
@@ -213,6 +218,17 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 		file_put_contents(
 			$scratch . '/mu-plugins/vendor/autoload.php',
 			"<?php\n\$GLOBALS['basic_firewall_test_custom_autoloader'] = true;\nreturn require " . var_export( dirname( __DIR__, 2 ) . '/vendor/autoload.php', true ) . ";\n" // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_var_export -- writing a PHP literal, not debugging.
+		);
+
+		/*
+		 * A WordPress root with a vendor/ beside it that is not the one the
+		 * site loaded: it records being required and carries no library.
+		 */
+		mkdir( $scratch . '/site/wordpress', 0700, true );
+		mkdir( $scratch . '/site/vendor', 0700, true );
+		file_put_contents(
+			$scratch . '/site/vendor/autoload.php',
+			"<?php\n\$GLOBALS['basic_firewall_test_site_autoloader'] = true;\n"
 		);
 		// phpcs:enable WordPress.WP.AlternativeFunctions
 
@@ -924,6 +940,41 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 	}
 
 	/**
+	 * A library already loaded is used before a vendor/ beside the WordPress root (#44).
+	 *
+	 * The site required its own autoloader above the snippet, and a different
+	 * vendor/ sits where the bootstrap guesses. Requiring that second one as
+	 * well would register two Composer trees, and classes could then resolve
+	 * from either -- the mixed copy the scoped-first rule exists to prevent.
+	 * So it must never be required, and the request is still evaluated, with
+	 * the library the site loaded.
+	 */
+	public function test_a_loaded_library_beats_a_vendor_dir_beside_the_root(): void {
+		$this->given_rule( 'block', 'block' );
+
+		$headers = array(
+			'X-Bfw-Test-Plugin'     => 'bare',
+			'X-Bfw-Test-Autoloader' => 'preloaded-beside-site',
+		);
+
+		$this->assertSame( 403, $this->request( '/bfw-early-match', $headers )['status'], 'The library the site loaded was not used to evaluate.' );
+
+		$allowed = $this->request_with_autoloader( 'bare', 'preloaded-beside-site' );
+
+		$this->assertSame( 'loaded', $allowed['autoloader'] );
+		$this->assertSame( '', $allowed['autoloader_file'], 'A file was required although the library was already loadable.' );
+		$this->assertSame( 'yes', $allowed['evaluated'] );
+		$this->assertSame( 'yes', $allowed['custom'], 'The fixture did not preload the site\'s autoloader.' );
+		$this->assertSame( 'no', $allowed['site'], 'The vendor/ beside the WordPress root was required on top of the loaded library.' );
+
+		// The plugin's own vendor/ still comes first, preloaded library or not.
+		$own = $this->request_with_autoloader( '', 'preloaded-beside-site' );
+
+		$this->assertSame( 'plugin', $own['autoloader'] );
+		$this->assertSame( 'no', $own['site'] );
+	}
+
+	/**
 	 * The plugin's own vendor/ still wins over an autoloader the site names.
 	 *
 	 * A release zip carries the library scoped, and its compiled file names
@@ -1228,7 +1279,7 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 	 * @param string $plugin     `bare` for the copy with no vendor/, or empty for this one.
 	 * @param string $autoloader The fixture's autoloader scenario.
 	 *
-	 * @return array{status: int, body: string, type: string, cache: string, location: string, retry: string, stashed: string, outcome: string, reason: string, evaluated: string, autoloader: string, autoloader_file: string, autoloader_named: string, custom: string, pragma: string, expires: string, surrogate: string, cdn: string, debug: string}
+	 * @return array{status: int, body: string, type: string, cache: string, location: string, retry: string, stashed: string, outcome: string, reason: string, evaluated: string, autoloader: string, autoloader_file: string, autoloader_named: string, custom: string, site: string, pragma: string, expires: string, surrogate: string, cdn: string, debug: string}
 	 */
 	private function request_with_autoloader( string $plugin, string $autoloader ): array {
 		$response = $this->request(
@@ -1250,7 +1301,7 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 	 * @param string                $path    Path to request.
 	 * @param array<string, string> $headers Request headers.
 	 *
-	 * @return array{status: int, body: string, type: string, cache: string, location: string, retry: string, stashed: string, outcome: string, reason: string, evaluated: string, autoloader: string, autoloader_file: string, autoloader_named: string, custom: string, pragma: string, expires: string, surrogate: string, cdn: string, debug: string}
+	 * @return array{status: int, body: string, type: string, cache: string, location: string, retry: string, stashed: string, outcome: string, reason: string, evaluated: string, autoloader: string, autoloader_file: string, autoloader_named: string, custom: string, site: string, pragma: string, expires: string, surrogate: string, cdn: string, debug: string}
 	 */
 	private function request( string $path, array $headers = array() ): array {
 		$response = wp_remote_get(
@@ -1281,6 +1332,7 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 			'autoloader_file'  => (string) wp_remote_retrieve_header( $response, 'x-early-autoloader-file' ),
 			'autoloader_named' => (string) wp_remote_retrieve_header( $response, 'x-early-autoloader-named' ),
 			'custom'           => (string) wp_remote_retrieve_header( $response, 'x-early-custom-loaded' ),
+			'site'             => (string) wp_remote_retrieve_header( $response, 'x-early-site-loaded' ),
 			'pragma'           => (string) wp_remote_retrieve_header( $response, 'pragma' ),
 			'expires'          => (string) wp_remote_retrieve_header( $response, 'expires' ),
 			'surrogate'        => (string) wp_remote_retrieve_header( $response, 'surrogate-control' ),

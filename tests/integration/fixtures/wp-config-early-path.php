@@ -75,6 +75,16 @@ switch ( $_SERVER['HTTP_X_BFW_TEST_AUTOLOADER'] ?? '' ) {
 	case 'preloaded':
 		require_once $basic_firewall_custom;
 		break;
+	case 'preloaded-beside-site':
+		/*
+		 * #44: the site's own autoloader required above the snippet, and a
+		 * *different* vendor/ beside the WordPress root, where the bootstrap
+		 * guesses. That second one records being required and loads nothing,
+		 * so a test can tell whether the bootstrap reached for it.
+		 */
+		require_once $basic_firewall_custom;
+		define( 'ABSPATH', (string) getenv( 'BFW_EARLY_SITE_ROOT' ) . '/wordpress/' ); // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals -- WordPress's own constant, as wp-config.php defines it.
+		break;
 }
 
 /*
@@ -140,5 +150,6 @@ header( 'X-Early-Autoloader-Named: ' . (string) ( $GLOBALS['basic_firewall_early
 // WordPress sets $pagenow from it.
 header( 'X-Early-Php-Self: ' . (string) ( $_SERVER['PHP_SELF'] ?? '' ) ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput -- echoed to a test, in a fixture with no WordPress to sanitize with.
 header( 'X-Early-Custom-Loaded: ' . ( empty( $GLOBALS['basic_firewall_test_custom_autoloader'] ) ? 'no' : 'yes' ) );
+header( 'X-Early-Site-Loaded: ' . ( empty( $GLOBALS['basic_firewall_test_site_autoloader'] ) ? 'no' : 'yes' ) );
 
 echo 'SERVED BY WORDPRESS';

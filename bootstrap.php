@@ -1220,12 +1220,17 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 	 *    the two, which is how every other option here treats its constant:
 	 *    trusted_proxies and secret_directories default to theirs, and a
 	 *    value passed in the call replaces it.
-	 * 4. `site` -- the Composer layouts this file can guess: a vendor
+	 * 4. `loaded` -- nothing to require, because the library is already
+	 *    loadable: wp-config.php required the site's autoloader above the
+	 *    snippet. Asked before the guessed locations, not after (#44). A
+	 *    site whose wp-config.php loads one Composer tree while a different
+	 *    `vendor/` sits beside the WordPress root used to have the second
+	 *    required on top of the first, and classes could then resolve from
+	 *    either tree -- the mixed-copy firewall #21 and #36 worked to rule
+	 *    out. Whatever the site chose to load comes first.
+	 * 5. `site` -- the Composer layouts this file can guess: a vendor
 	 *    directory beside the WordPress root, where Bedrock and most
 	 *    `composer create-project` sites keep it.
-	 * 5. `loaded` -- nothing to require, but the library is already loadable,
-	 *    because wp-config.php required the site's autoloader above the
-	 *    snippet. Evaluated with that rather than given up on.
 	 *
 	 * A named autoloader that cannot be read is `unreadable`, and nothing
 	 * after it is tried. Falling through to a guessed location would run the
@@ -1262,6 +1267,20 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 			);
 		}
 
+		/*
+		 * Already loadable, so nothing more is required. Asked with autoloading
+		 * on, so an autoloader wp-config.php registered above the snippet gets
+		 * its say; the plugin's own tree, which would carry the scoped copy,
+		 * was not there, so this cannot be preferring a foreign copy to it.
+		 */
+		if ( null !== basic_firewall_library_prefix() ) {
+			return array(
+				'source' => 'loaded',
+				'file'   => null,
+				'named'  => null,
+			);
+		}
+
 		// A site-level Composer install, where the plugin is a dependency.
 		if ( defined( 'ABSPATH' ) ) {
 			foreach ( array( dirname( ABSPATH, 1 ) . '/vendor/autoload.php', ABSPATH . '../vendor/autoload.php' ) as $candidate ) {
@@ -1276,7 +1295,7 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 		}
 
 		return array(
-			'source' => null === basic_firewall_library_prefix() ? 'none' : 'loaded',
+			'source' => 'none',
 			'file'   => null,
 			'named'  => null,
 		);
