@@ -209,6 +209,55 @@ final class RateLimitKeyTest extends Settings_Snapshot {
 	}
 
 	/**
+	 * A line an earlier line covers is saved, with a warning naming both (2.35.1).
+	 *
+	 * @dataProvider unreachable_lines
+	 *
+	 * @param string $paths  The limits, as typed.
+	 * @param string $says   What the warning says.
+	 */
+	public function test_an_unreachable_line_warns_and_saves( string $paths, string $says ): void {
+		$this->given_rules( array() );
+
+		$this->assertTrue( $this->submit( 'covered', $paths ) );
+		$this->assertStringContainsString( $says, $this->notices() );
+		$this->assertStringNotContainsString( 'never ban anyone', $this->notices(), 'The line that never runs was judged as though it ran.' );
+	}
+
+	/**
+	 * Lines an earlier line covers.
+	 *
+	 * @return array<string, array{0: string, 1: string}>
+	 */
+	public static function unreachable_lines(): array {
+		return array(
+			'a wildcard first' => array( "/log* 50 300\n/login 5 300 post.log", 'The line for /login never runs, because /log* comes first' ),
+			'another case'     => array( "/login 50 300\n/LOGIN 5 300 post.log", 'patterns ignore case' ),
+		);
+	}
+
+	/**
+	 * Site Health and the rule screen count a disabled rule as no companion, and ignore case.
+	 */
+	public function test_site_health_ignores_case_and_disabled_rules(): void {
+		$disabled            = $this->rule( 'addresses', array( '/login 50 300' ) );
+		$disabled['enabled'] = false;
+
+		$this->given_rules( array( $this->rule( 'accounts', array( '/login 5 300 post.log' ) ), $disabled ) );
+
+		$this->assertSame( 'recommended', Site_Health::check( 'rate_keys' )['status'], 'A disabled address limit counted as coverage.' );
+
+		$this->given_rules(
+			array(
+				$this->rule( 'accounts', array( '/login 5 300 post.log' ) ),
+				$this->rule( 'addresses', array( '/LOGIN 50 300' ) ),
+			)
+		);
+
+		$this->assertSame( 'good', Site_Health::check( 'rate_keys' )['status'], 'The same path in capitals was not counted as coverage.' );
+	}
+
+	/**
 	 * The rule list says what a limit counts.
 	 */
 	public function test_the_summary_says_what_is_counted(): void {

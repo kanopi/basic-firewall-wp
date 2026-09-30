@@ -45,10 +45,13 @@ final class Outcome_Responder {
 	 * it (Pass_Cookie::marker_name()), so a prefix an admin chose to get the
 	 * pass past their host's edge applies to the marker too. Its only job is
 	 * to let the next challenge tell "never solved" from "solved, and the
-	 * pass did not come back" (see pass_went_missing()).
+	 * pass did not come back" (see Pass_Cookie::went_missing()).
 	 *
-	 * Long enough to cover the redirect and a slow page, short enough that a
-	 * visitor who clears their cookies later is not told a stale story.
+	 * Pass_Cookie::MARKER_TTL's value, written out rather than referenced: a
+	 * constant naming another class is resolved when this class is first
+	 * used, and the wp-config.php path loads this class by hand, where that
+	 * would make every refusal depend on Pass_Cookie loading too. A unit test
+	 * holds the two equal.
 	 */
 	public const SOLVED_MARKER_TTL = 120;
 
@@ -322,12 +325,16 @@ final class Outcome_Responder {
 			return $response;
 		}
 
-		$warning = null;
-
-		if ( self::pass_went_missing( $outcome, $request ) ) {
-			$body    = self::with_missing_pass_notice( $body );
-			$warning = 'a visitor who solved a challenge moments ago came back without the pass cookie, so the host or the browser is not returning it.';
-		}
+		/*
+		 * The missing-pass line is already on the page: Decision_Dispatcher
+		 * added it to the library's RequestChallenged event, and the library
+		 * rendered the interstitial with it among the context's `notices`,
+		 * above the form -- the same page, from the same code, as `block`
+		 * mode (#46). Here it is only logged.
+		 */
+		$warning = self::pass_went_missing( $outcome, $request )
+			? 'a visitor who solved a challenge moments ago came back without the pass cookie, so the host or the browser is not returning it.'
+			: null;
 
 		// The library composes the interstitial, including whatever widget the
 		// provider needs. It is markup by contract, so it is not escaped.
@@ -342,68 +349,16 @@ final class Outcome_Responder {
 	/**
 	 * Is this visitor being challenged again right after solving a challenge?
 	 *
-	 * A solved challenge sets the pass cookie and, beside it, a short-lived
-	 * marker (see solved_cookies()). A challenge that arrives carrying the
-	 * marker but no pass cookie at all means the pass was issued and then did
-	 * not come back: a host or edge cache that forwards only cookies matching
-	 * its own rules (#35), or a browser refusing it. Left
-	 * alone, that visitor solves the same challenge again and again with
-	 * nothing on the page to say why.
-	 *
-	 * Only when the pass cookie is absent. A pass that arrived and was refused
-	 * -- expired, revoked, earned against a different provider -- is a
-	 * different story, and the ordinary interstitial is the right answer.
-	 *
-	 * The marker is not signed, and does not need to be: it only changes the
-	 * wording of a page the visitor is already being refused with, and a
-	 * visitor who forges it misleads nobody but themselves.
+	 * See Pass_Cookie::went_missing(), which this asks with the pass cookie's
+	 * name as the firewall rendered the challenge with it. Used only to log
+	 * that it happened: the line on the page is added by Decision_Dispatcher
+	 * through the library's own notice mechanism, in either mode (#46).
 	 *
 	 * @param ChallengeRequiredException $outcome The challenge.
 	 * @param Request                    $request The request being challenged.
 	 */
 	public static function pass_went_missing( ChallengeRequiredException $outcome, Request $request ): bool {
-		$name = (string) ( $outcome->getRenderContext()['cookie_name'] ?? '' );
-
-		if ( '' === $name || $request->cookies->has( $name ) ) {
-			return false;
-		}
-
-		$marker = $request->cookies->get( Pass_Cookie::marker_name( $name ) );
-
-		if ( ! is_string( $marker ) || ! ctype_digit( $marker ) ) {
-			return false;
-		}
-
-		// The marker's own lifetime, checked again: a browser that ignores
-		// Max-Age must not see the hint on every challenge for ever after.
-		$age = time() - (int) $marker;
-
-		return $age >= 0 && $age <= self::SOLVED_MARKER_TTL;
-	}
-
-	/**
-	 * The interstitial, with a line explaining the missing pass.
-	 *
-	 * Placed just above the form, where the visitor looks first; prepended to
-	 * the body if a provider's page has no form this can find. The text is
-	 * fixed and escaped, and the response carries the full no-store set like
-	 * every interstitial, so nothing about it can be cached for anybody else.
-	 *
-	 * @param string $body The rendered interstitial.
-	 */
-	public static function with_missing_pass_notice( string $body ): string {
-		$text = self::can_translate()
-			? __( 'You completed this check a moment ago, but the verification cookie did not come back with this request. Your browser may be blocking cookies for this site, or the site\'s host may not be passing the cookie on. If this keeps happening, allow cookies for this site or contact the site owner.', 'basic-firewall' )
-			: 'You completed this check a moment ago, but the verification cookie did not come back with this request. Your browser may be blocking cookies for this site, or the site\'s host may not be passing the cookie on. If this keeps happening, allow cookies for this site or contact the site owner.';
-
-		$notice = '<p class="bfw-missing-pass" role="alert" style="color:#b42318">' . self::escape( $text ) . '</p>' . "\n";
-		$form   = strpos( $body, '<form' );
-
-		if ( false !== $form ) {
-			return substr( $body, 0, $form ) . $notice . substr( $body, $form );
-		}
-
-		return $notice . $body;
+		return Pass_Cookie::went_missing( (string) ( $outcome->getRenderContext()['cookie_name'] ?? '' ), $request->cookies->all() );
 	}
 
 	/**
@@ -443,8 +398,19 @@ final class Outcome_Responder {
 	 */
 	private function send_solved( ChallengeSolvedException $outcome, ?Request $request ): void {
 		$cookies = self::solved_cookies( $outcome->getToken(), Plugin::instance()->compiled()->pass_cookie(), is_ssl() );
+		$queued  = implode( "\n", headers_list() );
 
 		foreach ( $cookies as $cookie ) {
+			/*
+			 * Decision_Dispatcher sets the marker when the library announces
+			 * the solve, for `block` mode, where the library issues the pass
+			 * itself. It is announced in `exception` mode too, before this
+			 * runs, so a marker already queued is not sent twice.
+			 */
+			if ( false !== stripos( $queued, 'Set-Cookie: ' . $cookie['name'] . '=' ) ) {
+				continue;
+			}
+
 			setcookie( $cookie['name'], $cookie['value'], $cookie['options'] );
 		}
 
@@ -490,17 +456,7 @@ final class Outcome_Responder {
 
 			// The marker: when it was solved, so a re-challenge moments later
 			// can say the pass went missing instead of silently asking again.
-			array(
-				'name'    => Pass_Cookie::marker_name( $name ),
-				'value'   => (string) time(),
-				'options' => array(
-					'expires'  => time() + self::SOLVED_MARKER_TTL,
-					'path'     => '/',
-					'httponly' => true,
-					'secure'   => $secure,
-					'samesite' => 'Lax',
-				),
-			),
+			Pass_Cookie::marker_cookie( $name, $secure ),
 		);
 	}
 

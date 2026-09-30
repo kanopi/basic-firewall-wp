@@ -139,6 +139,8 @@ proxy too.
 * A request the firewall lets through because it failed is logged to the PHP error log (rate-limited), as is an early path that is called but does not evaluate. BASIC_FIREWALL_DEBUG adds an X-Basic-Firewall-Early response header for troubleshooting.
 * Credentials in the Advanced settings YAML are redacted on screen and in exports; the Redis password can be supplied by BASIC_FIREWALL_REDIS_PASSWORD so it is never written to the compiled file.
 * The early path no longer loads a second Composer autoloader when the library is already loaded.
+* Bundles kanopi/firewall 2.35.1, which changes what some existing rules do: ASN equality rules start matching (and asn not_equals stops matching that network), paths are normalised, the WordPress presets match at any depth, and rate-limit paths ignore case. See the changelog's What changes on upgrade.
+* The "verification cookie did not come back" notice now shows in block mode too.
 
 = 1.0.0-rc.4 =
 * In exception mode, a challenge, redirect or block on the wp-config.php path can no longer serve the page: any failure to answer it ends in a 503 and is logged.

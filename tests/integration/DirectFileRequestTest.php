@@ -398,13 +398,18 @@ final class DirectFileRequestTest extends Settings_Snapshot {
 		$this->assertStringNotContainsString( '"path":"/"', str_replace( '\\/', '/', $logged ), 'The log still records a direct request as `/`.' );
 
 		/*
-		 * The logged `url` is not asserted. The library's logger builds it with
-		 * Symfony's getUri(), which joins the base URL -- the file, for a direct
-		 * request -- and the path info, `/`, so it reads `.../edit.php/?...`.
-		 * #31's rewrite hid that by making every request look routed; the
-		 * library fixed the block record's `uri` in 2.34.0 (asserted below)
-		 * but not the log line. An upstream follow-up.
+		 * The logged `url` used to be left unasserted: the library's logger
+		 * built it with Symfony's getUri(), which joins the base URL -- the
+		 * file, for a direct request -- and the path info, `/`, so it read
+		 * `.../edit.php/?...`, beside a block record that said `edit.php`.
+		 * kanopi/firewall 2.35.0 builds both from one helper (#419), so the
+		 * log line now carries the file without the stray `/`.
 		 */
+		$unescaped = str_replace( '\\/', '/', $logged );
+
+		$this->assertStringContainsString( '"url":', $unescaped, 'The log line carries no url, so the next assertion proves nothing.' );
+		$this->assertStringContainsString( '/wp-admin/edit.php?post_type=page', $unescaped, 'The logged url is not the requested file.' );
+		$this->assertStringNotContainsString( 'edit.php/', $unescaped, 'The logged url has a `/` after the file name.' );
 
 		$store = Plugin::instance()->paths()->base() . '/' . self::STORE . 'blocked.data';
 		$data  = file_exists( $store ) ? json_decode( (string) file_get_contents( $store ), true ) : null; // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- the test's own block store.
@@ -567,6 +572,82 @@ final class DirectFileRequestTest extends Settings_Snapshot {
 		$this->forget_stores();
 
 		$this->assertSame( 200, $this->raw_request( '/bfw-direct-page' )['status'], 'The rule refuses everything, so this test proves nothing.' );
+	}
+
+	/**
+	 * Spellings of a REST API route that PHP's built-in server routes to index.php as sent.
+	 *
+	 * None of these is a file, so the server falls back to index.php, as
+	 * WordPress's rewrite does, and hands the request URI over as the client
+	 * spelled it.
+	 */
+	private const ROUTED_SPELLINGS = array( '/wp-json/wp/v2/users', '//wp-json/wp/v2/users', '/./wp-json/wp/v2/users', '/%77p-json/wp/v2/users', '/wp-json;x/wp/v2/users' );
+
+	/**
+	 * Routed spellings of a REST API route are refused by a block on it (#51).
+	 *
+	 * Before kanopi/firewall 2.35.0 the path of a routed request came from the
+	 * raw request URI, so each of these reached the rules as itself and got
+	 * past `path starts with /wp-json/`, while WordPress, which trims every
+	 * leading slash, served the REST API.
+	 */
+	public function test_routed_spellings_are_refused_by_a_rest_block(): void {
+		$this->given_rules( array( self::url_rule( 'routed_spelling_block', array( self::condition( 'path', 'starts_with', '/wp-json/' ) ) ) ) );
+
+		foreach ( self::ROUTED_SPELLINGS as $spelling ) {
+			$this->forget_stores();
+
+			$this->assertSame( 403, $this->raw_request( $spelling )['status'], $spelling . ' was routed to index.php and got past a block on /wp-json/.' );
+		}
+
+		$this->forget_stores();
+
+		$this->assertSame( 200, $this->raw_request( '/bfw-direct-page' )['status'], 'The rule refuses everything, so this test proves nothing.' );
+	}
+
+	/**
+	 * Routed spellings of a REST API route count against one rate limit (#51).
+	 */
+	public function test_routed_spellings_count_against_a_rest_rate_limit(): void {
+		$budget = count( self::ROUTED_SPELLINGS );
+
+		$this->given_rules(
+			array(
+				array(
+					'id'       => 'routed_spelling_rate',
+					'type'     => 'rate_limit',
+					'label'    => 'Routed spelling rate limit',
+					'response' => 'block',
+					'record'   => 'no',
+					'settings' => array(
+						'paths'                => array(
+							array(
+								'pattern' => '/wp-json/wp/v2/users',
+								'limit'   => $budget,
+								'window'  => 60,
+							),
+						),
+						'default_limit'        => 60,
+						'default_window'       => 60,
+						'limit_unlisted_paths' => false,
+						'status_code'          => 429,
+						'storage'              => array(
+							'backend' => 'file',
+							'file'    => 'private://' . self::STORE . 'ratelimit.data',
+						),
+					),
+				),
+			)
+		);
+
+		$statuses = array();
+
+		foreach ( array_merge( self::ROUTED_SPELLINGS, array( '//wp-json/wp/v2/users' ) ) as $spelling ) {
+			$statuses[ $spelling . ' #' . count( $statuses ) ] = $this->raw_request( $spelling )['status'];
+		}
+
+		$this->assertSame( array_fill( 0, $budget, 200 ), array_slice( array_values( $statuses ), 0, $budget ), 'A request within the allowance was refused: ' . wp_json_encode( $statuses ) );
+		$this->assertSame( 429, array_values( $statuses )[ $budget ], 'The request after the allowance was not refused, so the spellings were not counted: ' . wp_json_encode( $statuses ) );
 	}
 
 	/**

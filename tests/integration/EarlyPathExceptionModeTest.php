@@ -460,6 +460,40 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 	}
 
 	/**
+	 * #46, block mode: a pass that did not come back is explained on the library's own page.
+	 *
+	 * In `block` mode the library answers the solution and writes the
+	 * interstitial itself, so the plugin can say something only through the
+	 * library's notice mechanism. The solve sets the solved marker beside the
+	 * pass (Decision_Dispatcher, on this path's firewall), and a challenge
+	 * carrying the marker without the pass carries the notice, above the form.
+	 */
+	public function test_block_mode_explains_a_pass_that_did_not_come_back(): void {
+		$this->given_rule( 'challenge', 'block', array(), self::custom_cookie() );
+
+		$page = $this->request( '/bfw-early-match' );
+
+		$this->assertStringNotContainsString( 'the verification cookie did not come back', $page['body'], 'A first challenge carried the missing-pass notice.' );
+
+		$solved = $this->post( '/basic-firewall/challenge', self::solution( $page['body'] ) );
+		$marker = $solved['cookies'][ self::CUSTOM_COOKIE . '_solved' ] ?? '';
+
+		$this->assertNotSame( '', $solved['cookies'][ self::CUSTOM_COOKIE ] ?? '', 'The library did not issue the pass.' );
+		$this->assertMatchesRegularExpression( '/^\d+$/', $marker, 'Solving in block mode set no solved marker. Cookies set: ' . implode( ', ', array_keys( $solved['cookies'] ) ) );
+
+		$lost = $this->request( '/bfw-early-match', array( 'Cookie' => self::CUSTOM_COOKIE . '_solved=' . $marker ) );
+
+		$this->assertStringNotContainsString( self::SERVED, $lost['body'] );
+		$this->assertMatchesRegularExpression( '#class="notices".*the verification cookie did not come back.*<form#s', $lost['body'], 'A visitor whose pass went missing was challenged again without being told.' );
+
+		$this->assertStringContainsString(
+			self::SERVED,
+			$this->request( '/bfw-early-match', array( 'Cookie' => self::CUSTOM_COOKIE . '=' . $solved['cookies'][ self::CUSTOM_COOKIE ] . '; ' . self::CUSTOM_COOKIE . '_solved=' . $marker ) )['body'],
+			'The pass, sent with the marker, was not accepted.'
+		);
+	}
+
+	/**
 	 * #35, exception mode: the runner's cookie is the one the early path reads.
 	 *
 	 * In exception mode the library hands the solved pass to the plugin, and
@@ -500,9 +534,10 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 		$lost = $this->request( '/bfw-early-match', array( 'Cookie' => $cookies[1]['name'] . '=' . time() ) );
 
 		$this->assertSame( 503, $lost['status'] );
-		$this->assertStringContainsString( 'bfw-missing-pass', $lost['body'], 'A visitor whose pass went missing was challenged again without being told.' );
+		$this->assertStringContainsString( 'the verification cookie did not come back', $lost['body'], 'A visitor whose pass went missing was challenged again without being told.' );
+		$this->assertMatchesRegularExpression( '#class="notices".*the verification cookie did not come back.*<form#s', $lost['body'], 'The notice is not the library\'s, above the form.' );
 		$this->assert_no_store( $lost );
-		$this->assertStringNotContainsString( 'bfw-missing-pass', $this->request( '/bfw-early-match' )['body'], 'A first challenge carried the missing-pass notice.' );
+		$this->assertStringNotContainsString( 'the verification cookie did not come back', $this->request( '/bfw-early-match' )['body'], 'A first challenge carried the missing-pass notice.' );
 	}
 
 	/**
