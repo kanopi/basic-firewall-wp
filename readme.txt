@@ -4,7 +4,7 @@ Tags: security, firewall, rate limiting, bot protection, waf
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 1.0.0-rc.4
+Stable tag: 1.0.0-rc.5
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -133,6 +133,11 @@ proxy too.
 4. Blocked clients, with an address lookup that works on every backend.
 
 == Changelog ==
+
+= 1.0.0-rc.5 =
+* Diagnostics for the wp-config.php early path: the last web request's report, and the last anomaly, in wp basic-firewall status, the new wp basic-firewall early-report and Site Health.
+* A request the firewall lets through because it failed is now logged to the PHP error log, as is an early path that is called but does not evaluate.
+* BASIC_FIREWALL_DEBUG adds an X-Basic-Firewall-Early response header for troubleshooting.
 
 = 1.0.0-rc.4 =
 * In exception mode, a challenge, redirect or block on the wp-config.php path can no longer serve the page: any failure to answer it ends in a 503 and is logged.

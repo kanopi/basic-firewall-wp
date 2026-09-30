@@ -7,6 +7,15 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.0.0-rc.5]
+
+**Fifth release candidate for 1.0.0.** Published as a GitHub pre-release, so
+the `releases/latest/download` URL does not serve it; install it by its own URL.
+It adds diagnostics for the wp-config.php early path and logs every request the
+firewall lets through because it failed, so a host where the early path
+behaves differently from WP-CLI (#34) can be diagnosed from the command line.
+What changed since 1.0.0-rc.4 is below.
+
 ### Added
 
 - **Diagnostics for the early path, readable from anywhere** (#34). Every
