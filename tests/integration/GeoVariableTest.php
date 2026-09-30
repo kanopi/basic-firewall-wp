@@ -20,6 +20,7 @@ use Kanopi\Firewall\Plugins\GeoLocation;
 use Kanopi\Firewall\Source\SourceDefinition;
 use Kanopi\Firewall\Source\SourceLoader;
 use Symfony\Component\HttpFoundation\Request;
+use Symfony\Component\Yaml\Yaml;
 
 /**
  * Every variable a rule screen offers has to be one the library resolves.
@@ -316,6 +317,89 @@ final class GeoVariableTest extends Settings_Snapshot {
 		} finally {
 			Request::setTrustedProxies( $proxies, $headers );
 		}
+	}
+
+	/**
+	 * A coordinate compared for equality matches a database record (#49).
+	 *
+	 * The record holds floats and a typed value is text, and the library
+	 * compares `equals`, `not_equals` and `in` strictly -- so these never
+	 * matched, and `not_equals` matched every visitor. The value is compiled
+	 * as a number for a database-backed rule, and survives the compiled file
+	 * as one.
+	 *
+	 * @dataProvider coordinate_comparisons
+	 *
+	 * @param string $variable The coordinate.
+	 * @param string $operator The comparison.
+	 * @param string $value    As typed.
+	 * @param bool   $matches  Whether London, at 51.5142 -0.0931, meets it.
+	 */
+	public function test_a_coordinate_compares_with_a_database_record( string $variable, string $operator, string $value, bool $matches ): void {
+		$entry = Yaml::parse( Yaml::dump( $this->compile( 'geolocation', $variable, $operator, $value ), 10 ) );
+
+		$this->assertSame( $matches, $this->geo_plugin( (array) $entry )->evaluate( $this->request() ) );
+	}
+
+	/**
+	 * The same comparisons against the coordinate a CDN sends, which is text.
+	 *
+	 * Nothing is cast for a header source: text against text already compares
+	 * correctly, and a float would stop it matching.
+	 *
+	 * @dataProvider coordinate_comparisons
+	 *
+	 * @param string $variable The coordinate.
+	 * @param string $operator The comparison.
+	 * @param string $value    As typed.
+	 * @param bool   $matches  Whether London, at 51.5142 -0.0931, meets it.
+	 */
+	public function test_a_coordinate_compares_with_a_cdn_header( string $variable, string $operator, string $value, bool $matches ): void {
+		$proxies = Request::getTrustedProxies();
+		$headers = Request::getTrustedHeaderSet();
+
+		try {
+			Request::setTrustedProxies( array( '10.0.0.1' ), Request::HEADER_X_FORWARDED_FOR );
+
+			$request = Request::create(
+				'/',
+				'GET',
+				array(),
+				array(),
+				array(),
+				array(
+					'REMOTE_ADDR'                      => '10.0.0.1',
+					'HTTP_X_FORWARDED_FOR'             => '203.0.113.10',
+					'HTTP_CLOUDFRONT_VIEWER_LATITUDE'  => '51.5142',
+					'HTTP_CLOUDFRONT_VIEWER_LONGITUDE' => '-0.0931',
+				)
+			);
+
+			$entry = (array) Yaml::parse( Yaml::dump( $this->compile( 'geolocation', $variable, $operator, $value, $this->edge_reader() ), 10 ) );
+
+			$this->assertIsNotFloat( $entry['config'][0]['value'], 'A coordinate read from a header was compiled as a number.' );
+			$this->assertSame( $matches, ( new GeoLocation( $entry['metadata'], $entry['config'] ) )->evaluate( $request ) );
+		} finally {
+			Request::setTrustedProxies( $proxies, $headers );
+		}
+	}
+
+	/**
+	 * Comparisons London's coordinates do and do not meet.
+	 *
+	 * @return array<string, array{0: string, 1: string, 2: string, 3: bool}>
+	 */
+	public static function coordinate_comparisons(): array {
+		return array(
+			'latitude equals'             => array( 'location.latitude', 'equals', '51.5142', true ),
+			'longitude equals'            => array( 'location.longitude', 'equals', '-0.0931', true ),
+			'latitude equals another'     => array( 'location.latitude', 'equals', '51.51', false ),
+			'latitude not equal to it'    => array( 'location.latitude', 'not_equals', '51.5142', false ),
+			'latitude not equal another'  => array( 'location.latitude', 'not_equals', '40', true ),
+			'latitude in a list'          => array( 'location.latitude', 'in', '40.4168, 51.5142', true ),
+			'longitude not in a list'     => array( 'location.longitude', 'in', '-3.7038, 2.3522', false ),
+			'latitude greater, unchanged' => array( 'location.latitude', 'gt', '51', true ),
+		);
 	}
 
 	/**

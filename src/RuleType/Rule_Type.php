@@ -86,8 +86,11 @@ interface Rule_Type {
 	 *
 	 * Keyed by settings key, each entry optionally carrying `label`,
 	 * `description` and `choices`; `secret` for a credential, rendered as an
-	 * empty password field that keeps the stored value when left blank; and
-	 * `fields` to describe a nested map field by field. Anything absent falls back to what the rule
+	 * empty password field that keeps the stored value when left blank;
+	 * `lines`, a callable writing a structured value as the textarea lines its
+	 * validator reads; `verbatim` for a pattern or anything else that must
+	 * reach the validator as typed rather than through the textarea
+	 * sanitiser; and `fields` to describe a nested map field by field. Anything absent falls back to what the rule
 	 * screen can derive from the default value, which is a humanised key and a
 	 * control picked from the type -- adequate for `addresses`, and not for a
 	 * field whose whole meaning is in what it does rather than what it holds.

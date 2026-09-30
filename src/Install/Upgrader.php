@@ -12,6 +12,7 @@ namespace Kanopi\BasicFirewall\Install;
 use Kanopi\BasicFirewall\Plugin;
 use Kanopi\BasicFirewall\Settings;
 use Kanopi\BasicFirewall\RuleType\Condition_Rule_Type_Base;
+use Kanopi\BasicFirewall\RuleType\Types\Vulnerability_Score;
 use Kanopi\BasicFirewall\Support\Paths;
 use Kanopi\BasicFirewall\Support\Schema;
 
@@ -346,7 +347,83 @@ final class Upgrader {
 			11 => static function (): void {
 				// Deliberately empty: the rebuild that follows every upgrade is the point.
 			},
+
+			/*
+			 * 12: translate vulnerability score rules the withdrawn type saved.
+			 *
+			 * That type stored `{threshold, weights}`, the library reads
+			 * `risk_levels` and `scoring.*`, and so every such rule matched
+			 * nothing; 1.0 skipped them and named them in Site Health. The
+			 * rebuilt type stores the library's own shape, and this carries
+			 * each old rule into it where the mapping is sound -- see
+			 * Vulnerability_Score::translate_legacy(): the threshold becomes a
+			 * single level that matches at it, with the default scores.
+			 *
+			 * A rule with weights is not translated, because a weight was one
+			 * number for a whole signal and the library scores each value of a
+			 * signal on its own; there is nothing to map it to that would not
+			 * be a guess about what somebody meant. It is kept in its old shape
+			 * and switched off, and the compiler names it on the Status screen
+			 * and in Site Health until somebody sets its scores or deletes it.
+			 *
+			 * Idempotent: a translated rule is no longer in the old shape, and
+			 * one switched off stays off.
+			 */
+			12 => static function (): void {
+				$settings = Plugin::instance()->settings();
+				$values   = $settings->all();
+
+				if ( self::translate_vulnerability_scores( $values ) ) {
+					$settings->replace( $values );
+				}
+			},
 		);
+	}
+
+	/**
+	 * Carry every withdrawn-shape vulnerability score rule into the new shape.
+	 *
+	 * See routine 12.
+	 *
+	 * @param array<string, mixed> $values Settings, modified in place.
+	 *
+	 * @return bool Whether anything changed.
+	 */
+	private static function translate_vulnerability_scores( array &$values ): bool {
+		if ( ! isset( $values['rules'] ) || ! is_array( $values['rules'] ) ) {
+			return false;
+		}
+
+		$type    = new Vulnerability_Score();
+		$changed = false;
+
+		foreach ( $values['rules'] as $index => $rule ) {
+			if ( ! is_array( $rule ) || 'vulnerability_score' !== ( $rule['type'] ?? '' ) ) {
+				continue;
+			}
+
+			$stored = is_array( $rule['settings'] ?? null ) ? $rule['settings'] : array();
+
+			if ( ! Vulnerability_Score::is_legacy( $stored ) ) {
+				continue;
+			}
+
+			$translated = $type->translate_legacy( $stored );
+
+			if ( null !== $translated ) {
+				$values['rules'][ $index ]['settings'] = $translated;
+				$changed                               = true;
+
+				continue;
+			}
+
+			if ( ! empty( $rule['enabled'] ) ) {
+				$values['rules'][ $index ]['enabled'] = false;
+				$changed                              = true;
+			}
+		}
+
+		return $changed;
 	}
 
 	/**

@@ -78,8 +78,8 @@ final class Geo_Location extends Condition_Rule_Type_Base {
 			'city'               => __( 'City — needs a City database, and most CDNs do not send it', 'basic-firewall' ),
 			'postal'             => __( 'Postal code — needs a City database', 'basic-firewall' ),
 			'location.timeZone'  => __( 'Timezone, such as Europe/London — needs a City database; no CDN sends it', 'basic-firewall' ),
-			'location.latitude'  => __( 'Latitude — compare with greater than or less than', 'basic-firewall' ),
-			'location.longitude' => __( 'Longitude — compare with greater than or less than', 'basic-firewall' ),
+			'location.latitude'  => __( 'Latitude, in degrees — greater than or less than for an area; equals only matches the exact coordinate', 'basic-firewall' ),
+			'location.longitude' => __( 'Longitude, in degrees — greater than or less than for an area; equals only matches the exact coordinate', 'basic-firewall' ),
 		);
 	}
 
@@ -130,9 +130,80 @@ final class Geo_Location extends Condition_Rule_Type_Base {
 	 * @param array<string, mixed> $rule Described by the interface.
 	 */
 	public function compile( array $rule ): array {
-		$entry = parent::compile( $rule );
+		$entry    = parent::compile( $rule );
+		$settings = (array) ( $rule['settings'] ?? array() );
+		$reader   = (array) ( $settings['reader'] ?? array() );
 
-		return $this->apply_reader( $entry, $rule['settings'] ?? array() );
+		if ( 'edge' !== ( $reader['source'] ?? 'database' ) && is_array( $entry['config'] ?? null ) ) {
+			$entry['config'] = self::coordinates_as_numbers( $entry['config'] );
+		}
+
+		return $this->apply_reader( $entry, $settings );
+	}
+
+	/**
+	 * Compare a coordinate as a number when it comes from a database (#49).
+	 *
+	 * A MaxMind record holds latitude and longitude as floats, a compiled
+	 * value is text, and the library compares `equals`, `not_equals` and `in`
+	 * strictly -- so "latitude equals 51.5142" never matched a visitor at
+	 * 51.5142, and "not equals" matched every visitor, that one included.
+	 * Library 2.35 coerces the ASN number this way and nothing else.
+	 *
+	 * Cast here, at compile time, rather than by withholding `equals` from
+	 * the screen: the operator means what it says once both sides are
+	 * numbers, and rules that already use it start working rather than
+	 * having to be rewritten. Only for a database. A CDN sends the
+	 * coordinate as a header, which is text, and text against text already
+	 * compares correctly -- a float there would break a rule that works.
+	 *
+	 * The comparison is also made case-sensitive, which for a number changes
+	 * nothing but what the library does to the value first: case-insensitive,
+	 * it lowercases every entry of an `in` list, turning each float back into
+	 * text before the strict comparison. A value that is not a number is left
+	 * as typed; it matched nothing before and still matches nothing.
+	 *
+	 * @param array<int|string, mixed> $rules Compiled conditions, possibly grouped.
+	 *
+	 * @return array<int|string, mixed>
+	 */
+	private static function coordinates_as_numbers( array $rules ): array {
+		foreach ( $rules as $index => $rule ) {
+			if ( ! is_array( $rule ) ) {
+				continue;
+			}
+
+			if ( is_array( $rule['rules'] ?? null ) ) {
+				$rules[ $index ]['rules'] = self::coordinates_as_numbers( $rule['rules'] );
+
+				continue;
+			}
+
+			if (
+				! in_array( $rule['variable'] ?? '', array( 'location.latitude', 'location.longitude' ), true )
+				|| ! in_array( $rule['operator'] ?? '', array( 'equals', 'not_equals', 'in' ), true )
+			) {
+				continue;
+			}
+
+			$value = $rule['value'] ?? '';
+
+			if ( is_array( $value ) ) {
+				if ( array() === $value || count( array_filter( $value, 'is_numeric' ) ) !== count( $value ) ) {
+					continue;
+				}
+
+				$rules[ $index ]['value'] = array_map( 'floatval', $value );
+			} elseif ( is_numeric( $value ) ) {
+				$rules[ $index ]['value'] = (float) $value;
+			} else {
+				continue;
+			}
+
+			$rules[ $index ]['case_sensitive'] = true;
+		}
+
+		return $rules;
 	}
 
 	/**
