@@ -22,6 +22,7 @@ use Kanopi\Firewall\Logging\LoggingFactory;
 use Kanopi\Firewall\Storage\DatabaseStorage;
 use Kanopi\Firewall\Storage\FileStorage;
 use Kanopi\Firewall\Storage\RedisStorage;
+use Kanopi\Firewall\Utility\RequestPath;
 use Monolog\Handler\ErrorLogHandler;
 use Monolog\Handler\RotatingFileHandler;
 use Monolog\Handler\StreamHandler;
@@ -172,6 +173,35 @@ final class SiteSettingsHonouredTest extends Honoured_Settings {
 		'presets'                                         => 'plugin: included by reference as the library\'s own files; see Preset handling in LifecycleTest.',
 		'advanced_yaml'                                   => 'plugin: merged verbatim over the compiled file; whatever it says is the library\'s own vocabulary.',
 	);
+
+	/**
+	 * Compiled keys that are no setting at all, and how each is shown honoured.
+	 *
+	 * Derived by the compiler from the site rather than stored, so they have
+	 * no schema leaf and nothing above would notice them going missing. Each
+	 * names the test proving the library acts on it.
+	 *
+	 * @var array<string, string>
+	 */
+	private const DERIVED = array(
+		'global.path_source'   => 'test_path_source',
+		'global.base_path'     => 'test_path_source',
+		'challenge.submit_url' => 'test_path_source',
+	);
+
+	/**
+	 * Every derived key has a test, and none has become a setting.
+	 */
+	public function test_every_derived_key_is_covered(): void {
+		$leaves = array();
+
+		self::schema_leaves( Schema::definition(), '', $leaves );
+
+		foreach ( self::DERIVED as $key => $how ) {
+			$this->assertNotContains( $key, $leaves, "$key is a setting now; move it to COVERAGE." );
+			$this->assertTrue( method_exists( $this, $how ), "$key names $how, which does not exist." );
+		}
+	}
 
 	/**
 	 * Every setting in the schema has an entry, and every entry a setting.
@@ -452,6 +482,126 @@ final class SiteSettingsHonouredTest extends Honoured_Settings {
 
 			$this->assertSame( $required, self::invoke( Firewall::class, 'requireConfig', (array) $this->compiled['global'] ) );
 		}
+	}
+
+	/**
+	 * `path_source: script_name` and `base_path`, compiled for each layout and honoured.
+	 *
+	 * Neither is a setting: the compiler always writes the one and derives the
+	 * other from the site's addresses (see Site_Layout). The requests are the
+	 * server values a web server sends, so the path is the one the library
+	 * resolves in production.
+	 */
+	public function test_path_source(): void {
+		$rules = array(
+			$this->rule( 'root-login', 'url', array( 'conditions' => array( self::condition( 'path', 'equals', '/wp-login.php' ) ) ), array( 'expiration' => 1 ) ),
+			$this->rule( 'own-login', 'url', array( 'conditions' => array( self::condition( 'path', 'equals', '/wp/wp-login.php' ) ) ), array( 'expiration' => 1 ) ),
+			// Only so the challenge section, and its submit URL, is compiled.
+			$this->rule( 'never', 'url', array( 'conditions' => array( self::condition( 'path', 'equals', '/never-requested' ) ) ), array( 'response' => 'challenge' ) ),
+		);
+
+		$challenge = (string) \Kanopi\BasicFirewall\Plugin::instance()->settings()->get( 'challenge.path', '/basic-firewall/challenge' );
+
+		// At the web root: no base path, and wp-login.php is itself.
+		$firewall = $this->build( array( 'rules' => $rules ) );
+
+		$this->assertSame( RequestPath::SCRIPT_NAME, $this->compiled['global']['path_source'] ?? null );
+		$this->assertArrayNotHasKey( 'base_path', (array) $this->compiled['global'] );
+		$this->assertSame( $challenge, $this->compiled['challenge']['submit_url'] ?? null );
+		$this->assertSame( array( 'block', '/wp-login.php' ), $this->resolved( $firewall, '/wp-login.php', '/wp-login.php', '203.0.113.90' ) );
+		$this->assertSame( array( 'allow', '/wp-admin/edit.php' ), $this->resolved( $firewall, '/wp-admin/edit.php?post_type=page', '/wp-admin/edit.php', '203.0.113.91' ) );
+		$this->assertSame( array( 'allow', '/sample-page/' ), $this->resolved( $firewall, '/sample-page/', '/index.php', '203.0.113.92' ) );
+
+		$addresses = array(
+			'home'    => 'http://example.org/blog',
+			'siteurl' => 'http://example.org/blog',
+		);
+
+		$filter = static function ( $value, string $option ) use ( &$addresses ) {
+			return $addresses[ $option ] ?? $value;
+		};
+
+		add_filter( 'pre_option_home', $filter, 10, 2 );
+		add_filter( 'pre_option_siteurl', $filter, 10, 2 );
+
+		try {
+			// In a subdirectory: the base path comes off, pages route through /blog/index.php.
+			$firewall = $this->build( array( 'rules' => $rules ) );
+
+			$this->assertSame( '/blog', $this->compiled['global']['base_path'] ?? null );
+			$this->assertSame( '/blog' . $challenge, $this->compiled['challenge']['submit_url'] ?? null );
+			$this->assertSame( array( 'block', '/wp-login.php' ), $this->resolved( $firewall, '/blog/wp-login.php', '/blog/wp-login.php', '203.0.113.93' ) );
+			$this->assertSame( array( 'allow', '/sample-page/' ), $this->resolved( $firewall, '/blog/sample-page/', '/blog/index.php', '203.0.113.94' ) );
+
+			// WordPress in its own directory: index.php is at the root, so no
+			// base path, and the core files keep their directory.
+			$addresses = array(
+				'home'    => 'http://example.org',
+				'siteurl' => 'http://example.org/wp',
+			);
+
+			$firewall = $this->build( array( 'rules' => $rules ) );
+
+			$this->assertArrayNotHasKey( 'base_path', (array) $this->compiled['global'] );
+			$this->assertSame( $challenge, $this->compiled['challenge']['submit_url'] ?? null );
+			$this->assertSame( array( 'block', '/wp/wp-login.php' ), $this->resolved( $firewall, '/wp/wp-login.php', '/wp/wp-login.php', '203.0.113.95' ) );
+			// The bare address is no file here: the server routes it through
+			// index.php, where it is matched as typed and WordPress redirects it.
+			$this->assertSame( array( 'block', '/wp-login.php' ), $this->resolved( $firewall, '/wp-login.php', '/index.php', '203.0.113.96' ) );
+			$this->assertSame( array( 'allow', '/sample-page/' ), $this->resolved( $firewall, '/sample-page/', '/index.php', '203.0.113.97' ) );
+		} finally {
+			remove_filter( 'pre_option_home', $filter, 10 );
+			remove_filter( 'pre_option_siteurl', $filter, 10 );
+		}
+	}
+
+	/**
+	 * The verdict on a request as a web server describes it, and the path the rules saw.
+	 *
+	 * @param Firewall $firewall The firewall.
+	 * @param string   $uri      REQUEST_URI.
+	 * @param string   $script   SCRIPT_NAME: the file the server ran.
+	 * @param string   $ip       Client address.
+	 *
+	 * @return array{0: string, 1: string}
+	 */
+	private function resolved( Firewall $firewall, string $uri, string $script, string $ip ): array {
+		$request = self::served( $uri, $script, $ip );
+		$verdict = $this->outcome( $firewall, $request )['verdict'];
+
+		return array( $verdict, RequestPath::of( $request ) );
+	}
+
+	/**
+	 * A request carrying the server values a web server sends.
+	 *
+	 * @param string $uri    REQUEST_URI.
+	 * @param string $script SCRIPT_NAME.
+	 * @param string $ip     Client address.
+	 */
+	private static function served( string $uri, string $script, string $ip ): Request {
+		$query = wp_parse_url( $uri, PHP_URL_QUERY );
+
+		$request = new Request(
+			array(),
+			array(),
+			array(),
+			array(),
+			array(),
+			array(
+				'REQUEST_METHOD'  => 'GET',
+				'REQUEST_URI'     => $uri,
+				'QUERY_STRING'    => is_string( $query ) ? $query : '',
+				'SCRIPT_NAME'     => $script,
+				'PHP_SELF'        => $script,
+				'SCRIPT_FILENAME' => ABSPATH . ltrim( $script, '/' ),
+				'HTTP_HOST'       => 'example.org',
+				'REMOTE_ADDR'     => $ip,
+				'HTTP_USER_AGENT' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36',
+			)
+		);
+
+		return $request;
 	}
 
 	/**
