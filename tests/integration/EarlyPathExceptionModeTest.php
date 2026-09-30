@@ -1173,6 +1173,41 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 	}
 
 	/**
+	 * The early path records what a mismatch is judged on: the file's hash, and a panic file (#41).
+	 *
+	 * The hash is the same prefix the last compile recorded, so a web
+	 * container reading a stale copy can be told from one reading the
+	 * current file; and a panic file is recorded as what changed the mode,
+	 * so it is reported as an override rather than flagged.
+	 */
+	public function test_the_early_path_records_its_hash_and_a_panic_file(): void {
+		$this->given_rule( 'block', 'block', array( 'panic_file' => 'early-path-test-panic' ) );
+
+		$panic = Plugin::instance()->paths()->base() . '/early-path-test-panic';
+
+		$calm = $this->request( '/bfw-early-other' );
+		$meta = Plugin::instance()->compiled()->meta();
+
+		$this->assertMatchesRegularExpression( '/^[0-9a-f]{12}$/', $calm['hash'] );
+		$this->assertSame( $meta['hash'] ?? null, $calm['hash'], 'The early path\'s hash is not the one the compile recorded.' );
+		$this->assertSame( substr( (string) hash_file( 'sha256', Plugin::instance()->paths()->compiled_file() ), 0, 12 ), $calm['hash'] );
+		$this->assertSame( 'block', $calm['mode'] );
+		$this->assertSame( 'no', $calm['panic'] );
+
+		file_put_contents( $panic, 'log' ); // phpcs:ignore WordPress.WP.AlternativeFunctions -- the fixture's panic file.
+
+		try {
+			$panicked = $this->request( '/bfw-early-match' );
+		} finally {
+			wp_delete_file( $panic );
+		}
+
+		$this->assertSame( 200, $panicked['status'], 'The panic file did not put the early path in log mode.' );
+		$this->assertSame( 'log', $panicked['mode'] );
+		$this->assertSame( 'yes', $panicked['panic'], 'The early path did not record that a panic file changed its mode.' );
+	}
+
+	/**
 	 * Where the fixture's PHP error log ends now, to read what follows.
 	 */
 	private function error_log(): int {
@@ -1315,7 +1350,7 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 	 * @param string $plugin     `bare` for the copy with no vendor/, or empty for this one.
 	 * @param string $autoloader The fixture's autoloader scenario.
 	 *
-	 * @return array{status: int, body: string, type: string, cache: string, location: string, retry: string, stashed: string, outcome: string, reason: string, evaluated: string, autoloader: string, autoloader_file: string, autoloader_named: string, custom: string, site: string, failed_rules: string, pragma: string, expires: string, surrogate: string, cdn: string, debug: string}
+	 * @return array{status: int, body: string, type: string, cache: string, location: string, retry: string, stashed: string, outcome: string, reason: string, evaluated: string, autoloader: string, autoloader_file: string, autoloader_named: string, custom: string, site: string, failed_rules: string, mode: string, panic: string, hash: string, pragma: string, expires: string, surrogate: string, cdn: string, debug: string}
 	 */
 	private function request_with_autoloader( string $plugin, string $autoloader ): array {
 		$response = $this->request(
@@ -1337,7 +1372,7 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 	 * @param string                $path    Path to request.
 	 * @param array<string, string> $headers Request headers.
 	 *
-	 * @return array{status: int, body: string, type: string, cache: string, location: string, retry: string, stashed: string, outcome: string, reason: string, evaluated: string, autoloader: string, autoloader_file: string, autoloader_named: string, custom: string, site: string, failed_rules: string, pragma: string, expires: string, surrogate: string, cdn: string, debug: string}
+	 * @return array{status: int, body: string, type: string, cache: string, location: string, retry: string, stashed: string, outcome: string, reason: string, evaluated: string, autoloader: string, autoloader_file: string, autoloader_named: string, custom: string, site: string, failed_rules: string, mode: string, panic: string, hash: string, pragma: string, expires: string, surrogate: string, cdn: string, debug: string}
 	 */
 	private function request( string $path, array $headers = array() ): array {
 		$response = wp_remote_get(
@@ -1370,6 +1405,9 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 			'custom'           => (string) wp_remote_retrieve_header( $response, 'x-early-custom-loaded' ),
 			'site'             => (string) wp_remote_retrieve_header( $response, 'x-early-site-loaded' ),
 			'failed_rules'     => (string) wp_remote_retrieve_header( $response, 'x-early-failed-rules' ),
+			'mode'             => (string) wp_remote_retrieve_header( $response, 'x-early-mode' ),
+			'panic'            => (string) wp_remote_retrieve_header( $response, 'x-early-panic' ),
+			'hash'             => (string) wp_remote_retrieve_header( $response, 'x-early-compiled-hash' ),
 			'pragma'           => (string) wp_remote_retrieve_header( $response, 'pragma' ),
 			'expires'          => (string) wp_remote_retrieve_header( $response, 'expires' ),
 			'surrogate'        => (string) wp_remote_retrieve_header( $response, 'surrogate-control' ),

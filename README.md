@@ -456,6 +456,17 @@ and the cache backend on each path. Two are kept: the last request, and the last
 | `early-verdict-deferred` | The early path reached a refusal and handed it on instead of answering it. |
 | `failed-rules` | A firewall either path built could not construct one or more rules. The library skips such a rule and carries on, so part of the configuration was not enforced on that request — and a rule that fails only on the web containers (a storage or reputation host only they cannot reach, a missing extension) shows up nowhere else. |
 | `not-evaluated` | The early path was called and did not evaluate, for a reason other than `disabled`, `switched-off` or `deferred-login`. |
+| `mismatch` | A path ran in a mode other than the one last compiled, or the compiled file differed between the paths or from the last compile's hash — the signature of a stale copy of the file on a web container that did not do the compile. Listed under `mismatch`. |
+
+For `mismatch`, the expected mode is the one the last compile wrote into the
+file (so the advanced YAML and `BASIC_FIREWALL_MODE` count), recorded with the
+file's hash prefix in the compile's meta. A panic file, `BASIC_FIREWALL_MODE`
+differing between the container that compiled and the one serving, and
+`lockdown` (which runs as `block`) change a path's mode legitimately; they are
+listed under `mode.overrides` rather than flagged. The early path now records
+the compiled file's hash prefix too (`compiled.early.hash`), and the last
+compile's in `compiled.meta`. Files are not compared within 30 seconds of a
+compile, which a request can straddle honestly.
  Each is kept for a day and written at most once
 every five seconds; WP-CLI and cron are never recorded. Nothing sensitive is
 kept: the URL path without its query string, the request method, and facts about
@@ -470,8 +481,9 @@ wp basic-firewall early-report    # both reports in full, as JSON (--format=yaml
 Site Health's evaluation check raises the last anomaly while it is less than
 six hours old: **critical** for a request let through unfiltered or rules that
 could not be constructed, in `block` or `exception` mode, and for a refusal the
-early path did not answer; **recommended** for those two in `log` mode and for
-an early path that did not evaluate, with the fix for the reason. The library
+early path did not answer; **recommended** for those two in `log` mode, for a
+`mismatch` (with the rebuild), and for an early path that did not evaluate,
+with the fix for the reason. The library
 logs each rule it could not construct, with the reason, as `Firewall rule could
 not be constructed and is NOT active`.
 

@@ -184,11 +184,19 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 		 * requests (WP-CLI through a hosting CLI, say), and a report taken
 		 * there says nothing about what a web container is reading. The
 		 * runner saves this beside its own view of the file, so the two can
-		 * be compared; see Diagnostics.
+		 * be compared; see Diagnostics. The hash prefix is what makes that
+		 * comparison mean something (#41): a container reading a stale copy
+		 * of the file -- shared storage that has not caught up, a deploy
+		 * that shipped an old one -- has a different hash from the last
+		 * compile's, and the report flags it as a `mismatch`. One hash of a
+		 * file of a few kilobytes, the same one the library is about to read.
 		 */
+		$hash = hash_file( 'sha256', $compiled );
+
 		$GLOBALS['basic_firewall_early']['compiled'] = array(
 			'path'  => $compiled,
 			'mtime' => (int) filemtime( $compiled ),
+			'hash'  => is_string( $hash ) ? substr( $hash, 0, 12 ) : null,
 		);
 
 		$runtime = basic_firewall_runtime( $options );
@@ -286,6 +294,13 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 			 * what was asked for; this is what a web request got.
 			 */
 			$GLOBALS['basic_firewall_early']['mode'] = basic_firewall_firewall_mode( $firewall );
+
+			/*
+			 * `panic` -- whether a panic file is what put the firewall in that
+			 * mode, so a mode that differs from the configured one is reported
+			 * as the override it is rather than flagged as a mismatch.
+			 */
+			$GLOBALS['basic_firewall_early']['panic'] = basic_firewall_panic_active( $firewall );
 
 			/*
 			 * `failed_rules` -- the rules this path's firewall could not
@@ -552,6 +567,23 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 		$mode = call_user_func( array( $firewall, 'getMode' ) );
 
 		return $mode instanceof \BackedEnum ? (string) $mode->value : null;
+	}
+
+	/**
+	 * Whether a panic file is changing a firewall's mode.
+	 *
+	 * @param object $firewall The firewall.
+	 *
+	 * @return bool
+	 */
+	function basic_firewall_panic_active( $firewall ) {
+		if ( ! is_callable( array( $firewall, 'getPanicSwitch' ) ) ) {
+			return false;
+		}
+
+		$switch = call_user_func( array( $firewall, 'getPanicSwitch' ) );
+
+		return is_array( $switch ) && ! empty( $switch['active'] );
 	}
 
 	/**

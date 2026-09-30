@@ -72,6 +72,14 @@ final class Diagnostics {
 	public const RECENT = 6 * HOUR_IN_SECONDS;
 
 	/**
+	 * How long after a compile its files are not compared, in seconds.
+	 *
+	 * A request that starts before a compile and ends after it sees two
+	 * files, honestly; that is not a stale copy.
+	 */
+	public const SETTLE = 30;
+
+	/**
 	 * The response header BASIC_FIREWALL_DEBUG adds.
 	 */
 	public const HEADER = 'X-Basic-Firewall-Early';
@@ -220,12 +228,13 @@ final class Diagnostics {
 	/**
 	 * This request's report.
 	 *
-	 * @return array{time: int, method: string, path: string, anomaly: string|null, anomalies: list<string>, early: array<string, mixed>, runner: array<string, mixed>, library: array<string, mixed>, compiled: array<string, mixed>, cache: array<string, mixed>, mode: array<string, mixed>}
+	 * @return array{time: int, method: string, path: string, anomaly: string|null, anomalies: list<string>, early: array<string, mixed>, runner: array<string, mixed>, library: array<string, mixed>, compiled: array<string, mixed>, cache: array<string, mixed>, mode: array<string, mixed>, mismatch: list<string>}
 	 */
 	public static function build(): array {
 		$early  = self::early();
 		$runner = self::runner();
 		$file   = Plugin::instance()->paths()->compiled_file();
+		$meta   = Plugin::instance()->compiled()->meta();
 
 		$report = array(
 			'time'      => time(),
@@ -237,8 +246,10 @@ final class Diagnostics {
 			'runner'    => $runner,
 			'mode'      => array(
 				'configured' => self::configured_mode(),
+				'compiled'   => is_string( $meta['mode'] ?? null ) ? $meta['mode'] : null,
 				'early'      => $early['mode'],
 				'runner'     => $runner['mode'],
+				'overrides'  => array(),
 			),
 			'library'   => array(
 				'copy'    => Library_Loader::is_scoped_build() ? 'scoped' : 'unscoped',
@@ -251,15 +262,24 @@ final class Diagnostics {
 				'mtime' => is_readable( $file ) ? (int) filemtime( $file ) : null,
 				'hash'  => is_readable( $file ) ? substr( (string) hash_file( 'sha256', $file ), 0, 12 ) : null,
 				'early' => $early['compiled'],
+				'meta'  => array(
+					'hash'        => is_string( $meta['hash'] ?? null ) ? $meta['hash'] : null,
+					'compiled_at' => isset( $meta['compiled_at'] ) ? (int) $meta['compiled_at'] : null,
+				),
 			),
 			'cache'     => array(
 				'early'  => null === $early['cache_dir'] ? null : 'files in ' . $early['cache_dir'],
 				'runner' => self::runner_cache(),
 			),
+			'mismatch'  => array(),
 		);
 
-		$report['anomalies'] = self::anomalies( $report );
-		$report['anomaly']   = $report['anomalies'][0] ?? null;
+		$compared = self::compare( $report );
+
+		$report['mismatch']          = $compared['mismatch'];
+		$report['mode']['overrides'] = $compared['overrides'];
+		$report['anomalies']         = self::anomalies( $report );
+		$report['anomaly']           = $report['anomalies'][0] ?? null;
 
 		return $report;
 	}
@@ -316,7 +336,108 @@ final class Diagnostics {
 			$found[] = 'not-evaluated';
 		}
 
+		if ( array() !== (array) ( $report['mismatch'] ?? array() ) ) {
+			$found[] = 'mismatch';
+		}
+
 		return $found;
+	}
+
+	/**
+	 * Where the two paths, and the last compile, disagree -- and what explains it.
+	 *
+	 * **The mode.** Each path's firewall reports the mode it actually ran in.
+	 * Expected is the mode the last compile wrote into the file (advanced
+	 * YAML and BASIC_FIREWALL_MODE included), or the configured mode where
+	 * no compile recorded one. Three things legitimately change it, and they
+	 * are reported under `overrides` rather than flagged: a panic file, which
+	 * the firewall says it applied; BASIC_FIREWALL_MODE, which both paths
+	 * apply over the file, so a constant that differs between the container
+	 * that compiled and the one serving is what the site asked for; and
+	 * `lockdown`, which the library runs as `block` with lockdown on.
+	 * Anything else is a `mismatch`.
+	 *
+	 * **The compiled file.** The early path records the file it read, its
+	 * modification time and a hash prefix; the runner reads the same file
+	 * at shutdown; the last compile recorded the hash of what it wrote. The
+	 * early path reading another file, the two hashes differing, or either
+	 * differing from the compile's is the signature of a stale copy on a
+	 * container that did not do the compile (#41). Not compared within
+	 * SETTLE seconds of a compile, when a request can straddle the write
+	 * and see both files honestly.
+	 *
+	 * Mismatches are kept in the anomaly slot, so the ordinary requests that
+	 * follow -- on a container that does have the right file -- do not
+	 * overwrite the one that did not.
+	 *
+	 * @param array<string, mixed> $report A report, as build() assembles it.
+	 *
+	 * @return array{mismatch: list<string>, overrides: list<string>}
+	 */
+	public static function compare( array $report ): array {
+		$mode      = (array) ( $report['mode'] ?? array() );
+		$compiled  = (array) ( $report['compiled'] ?? array() );
+		$expected  = (string) ( $mode['compiled'] ?? $mode['configured'] ?? '' );
+		$constant  = defined( 'BASIC_FIREWALL_MODE' ) && is_string( constant( 'BASIC_FIREWALL_MODE' ) ) ? (string) constant( 'BASIC_FIREWALL_MODE' ) : null;
+		$mismatch  = array();
+		$overrides = array();
+
+		foreach ( array( 'early', 'runner' ) as $where ) {
+			$ran  = $mode[ $where ] ?? null;
+			$half = (array) ( $report[ $where ] ?? array() );
+
+			if ( ! is_string( $ran ) || '' === $ran || '' === $expected ) {
+				continue;
+			}
+
+			if ( ! empty( $half['panic'] ) ) {
+				$overrides[] = sprintf( '%s: panic file (%s)', $where, $ran );
+			} elseif ( $ran === $expected ) {
+				continue;
+			} elseif ( 'lockdown' === $expected && 'block' === $ran ) {
+				$overrides[] = sprintf( '%s: lockdown (runs as block)', $where );
+			} elseif ( null !== $constant && $ran === $constant ) {
+				$overrides[] = sprintf( '%s: BASIC_FIREWALL_MODE (%s)', $where, $ran );
+			} else {
+				$mismatch[] = sprintf( 'mode (%s): ran %s, configured %s', $where, $ran, $expected );
+			}
+		}
+
+		$early   = is_array( $compiled['early'] ?? null ) ? $compiled['early'] : null;
+		$meta    = (array) ( $compiled['meta'] ?? array() );
+		$hash    = is_string( $compiled['hash'] ?? null ) ? $compiled['hash'] : null;
+		$written = max( (int) ( $meta['compiled_at'] ?? 0 ), (int) ( $compiled['mtime'] ?? 0 ) );
+
+		if ( null === $hash || time() - $written < self::SETTLE ) {
+			return array(
+				'mismatch'  => $mismatch,
+				'overrides' => $overrides,
+			);
+		}
+
+		if ( null !== $early ) {
+			$early_hash = is_string( $early['hash'] ?? null ) && '' !== $early['hash'] ? $early['hash'] : null;
+
+			if ( (string) ( $early['path'] ?? '' ) !== (string) ( $compiled['path'] ?? '' ) ) {
+				$mismatch[] = sprintf( 'compiled file: the early path read %s, the runner reads %s', (string) ( $early['path'] ?? '?' ), (string) ( $compiled['path'] ?? '?' ) );
+			} elseif ( null !== $early_hash && $early_hash !== $hash ) {
+				$mismatch[] = sprintf( 'compiled hash: the early path saw %s (mtime %d), the runner sees %s (mtime %d)', $early_hash, (int) ( $early['mtime'] ?? 0 ), $hash, (int) ( $compiled['mtime'] ?? 0 ) );
+			} elseif ( null === $early_hash && (int) ( $early['mtime'] ?? 0 ) !== (int) ( $compiled['mtime'] ?? 0 ) ) {
+				// A bootstrap from before the hash was recorded: the mtime is all there is.
+				$mismatch[] = sprintf( 'compiled mtime: the early path saw %d, the runner sees %d', (int) ( $early['mtime'] ?? 0 ), (int) ( $compiled['mtime'] ?? 0 ) );
+			}
+		}
+
+		$last = is_string( $meta['hash'] ?? null ) ? $meta['hash'] : null;
+
+		if ( null !== $last && $last !== $hash ) {
+			$mismatch[] = sprintf( 'compiled hash: this container\'s file is %s, the last compile wrote %s', $hash, $last );
+		}
+
+		return array(
+			'mismatch'  => $mismatch,
+			'overrides' => $overrides,
+		);
 	}
 
 	/**
@@ -376,7 +497,7 @@ final class Diagnostics {
 	/**
 	 * The bootstrap's report on this request, normalised.
 	 *
-	 * @return array{called: bool, evaluated: bool, reason: string|null, credentials: bool, responder: bool, autoloader: array{source: string|null, file: string|null, named: string|null}, library: string|null, mode: string|null, compiled: array{path: string, mtime: int}|null, cache_dir: string|null, outcome: string|null, deferred: bool, failure: string|null, failure_origin: string|null, refused: string|null, failed_rules: list<string>|null}
+	 * @return array{called: bool, evaluated: bool, reason: string|null, credentials: bool, responder: bool, autoloader: array{source: string|null, file: string|null, named: string|null}, library: string|null, mode: string|null, compiled: array{path: string, mtime: int, hash: string|null}|null, panic: bool, cache_dir: string|null, outcome: string|null, deferred: bool, failure: string|null, failure_origin: string|null, refused: string|null, failed_rules: list<string>|null}
 	 */
 	public static function early(): array {
 		$early = isset( $GLOBALS['basic_firewall_early'] ) && is_array( $GLOBALS['basic_firewall_early'] ) ? $GLOBALS['basic_firewall_early'] : array();
@@ -403,7 +524,9 @@ final class Diagnostics {
 			'compiled'       => null === $compiled ? null : array(
 				'path'  => (string) ( $compiled['path'] ?? '' ),
 				'mtime' => (int) ( $compiled['mtime'] ?? 0 ),
+				'hash'  => isset( $compiled['hash'] ) && is_string( $compiled['hash'] ) ? $compiled['hash'] : null,
 			),
+			'panic'          => ! empty( $early['panic'] ),
 			'cache_dir'      => $string( 'cache_dir' ),
 			'outcome'        => $string( 'outcome' ),
 			'deferred'       => null !== Runner::early_outcome() || null !== Runner::state()['early_verdict'],
@@ -417,7 +540,7 @@ final class Diagnostics {
 	/**
 	 * The runner's own report on this request.
 	 *
-	 * @return array{evaluated: bool, outcome: string|null, mode: string|null, early_verdict: string|null, failure: string|null, failure_detail: string|null, exempt: bool, failed_rules: list<string>|null}
+	 * @return array{evaluated: bool, outcome: string|null, mode: string|null, early_verdict: string|null, failure: string|null, failure_detail: string|null, exempt: bool, failed_rules: list<string>|null, panic: bool}
 	 */
 	public static function runner(): array {
 		$state = Runner::state();
@@ -431,6 +554,7 @@ final class Diagnostics {
 			'failure_detail' => '' === $state['failure_detail'] ? null : self::mask( $state['failure_detail'] ),
 			'exempt'         => $state['exempt'],
 			'failed_rules'   => $state['failed_rules'],
+			'panic'          => $state['panic'],
 		);
 	}
 
@@ -612,6 +736,16 @@ final class Diagnostics {
 			if ( null !== $failed && array() !== $failed ) {
 				$parts[] = sprintf( '%s failed rules: %d (%s)', $where, count( $failed ), implode( ', ', $failed ) );
 			}
+		}
+
+		foreach ( self::names( $report['mismatch'] ?? null ) ?? array() as $line ) {
+			$parts[] = 'mismatch: ' . $line;
+		}
+
+		$overrides = self::names( $report['mode']['overrides'] ?? null ) ?? array();
+
+		if ( array() !== $overrides ) {
+			$parts[] = 'mode overridden: ' . implode( ', ', $overrides );
 		}
 
 		$anomalies = self::names( $report['anomalies'] ?? null ) ?? ( null !== ( $report['anomaly'] ?? null ) ? array( (string) $report['anomaly'] ) : array() );

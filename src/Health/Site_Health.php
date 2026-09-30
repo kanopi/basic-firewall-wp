@@ -1278,7 +1278,8 @@ final class Site_Health {
 	 * request's report (see Diagnostics), and this raises it while it is
 	 * recent: critical for a request let through unfiltered, a verdict the
 	 * early path handed on, or rules that could not be built, in a mode that
-	 * refuses; recommended for an early path that did not evaluate.
+	 * refuses; recommended for an early path that did not evaluate, or a
+	 * request that saw another configuration from the one last compiled.
 	 *
 	 * @return array{status: string, label: string, description: string, actions: string}|null
 	 */
@@ -1359,6 +1360,29 @@ final class Site_Health {
 				return in_array( $mode, array( 'block', 'exception' ), true )
 					? self::critical( __( 'The firewall recently ran without some of its rules', 'basic-firewall' ), $body )
 					: self::recommended( __( 'The firewall recently ran without some of its rules', 'basic-firewall' ), $body );
+
+			case 'mismatch':
+				/*
+				 * Recommended rather than critical: the request was evaluated,
+				 * by a firewall built from a file, just not necessarily the
+				 * file the settings produced. Overrides -- a panic file,
+				 * BASIC_FIREWALL_MODE, lockdown -- never reach here; they are
+				 * in the report as what they are.
+				 */
+				$lines = '';
+
+				foreach ( (array) ( $report['mismatch'] ?? array() ) as $line ) {
+					$lines .= '<li><code>' . esc_html( (string) $line ) . '</code></li>';
+				}
+
+				return self::recommended(
+					__( 'A recent web request saw a different firewall configuration from the one last compiled', 'basic-firewall' ),
+					'<p>' . $when . esc_html__( 'was evaluated with a mode or a compiled file that does not match what the settings last compiled:', 'basic-firewall' ) . '</p>'
+					. '<ul>' . $lines . '</ul>'
+					. '<p>' . esc_html__( 'That is the signature of a stale copy of the compiled file on a web server that did not do the compile — the private directory not shared between servers, or storage that has not caught up — so that server enforces an older configuration than the one these screens describe.', 'basic-firewall' ) . '</p>'
+					. $capture,
+					self::rebuild_action()
+				);
 
 			case 'not-evaluated':
 				$reason = isset( $early['reason'] ) ? (string) $early['reason'] : null;

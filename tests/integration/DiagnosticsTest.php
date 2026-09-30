@@ -243,6 +243,182 @@ final class DiagnosticsTest extends Settings_Snapshot {
 	}
 
 	/**
+	 * A path running another mode from the one compiled is a mismatch; an override is not (#41).
+	 */
+	public function test_a_mode_mismatch_is_flagged_and_overrides_are_reported(): void {
+		$report = static fn ( array $mode, array $early = array(), array $runner = array() ): array => array(
+			'mode'     => $mode + array(
+				'configured' => 'block',
+				'compiled'   => 'block',
+				'early'      => null,
+				'runner'     => null,
+			),
+			'early'    => $early,
+			'runner'   => $runner,
+			'compiled' => array(),
+		);
+
+		$this->assertSame( array(), Diagnostics::compare( $report( array( 'early' => 'block' ) ) )['mismatch'] );
+
+		$this->assertSame(
+			array( 'mode (early): ran log, configured block' ),
+			Diagnostics::compare( $report( array( 'early' => 'log' ) ) )['mismatch'],
+			'A web request running log mode on a block-mode site was not flagged.'
+		);
+
+		// The compile's mode is what is expected, advanced YAML included.
+		$this->assertSame( array(), Diagnostics::compare( $report( array( 'compiled' => 'log', 'early' => 'log' ) ) )['mismatch'] ); // phpcs:ignore WordPress.Arrays.ArrayDeclarationSpacing.AssociativeArrayFound -- one line per case.
+
+		// A panic file changes the mode, and says so: an override.
+		$panicked = Diagnostics::compare( $report( array( 'runner' => 'log' ), array(), array( 'panic' => true ) ) );
+
+		$this->assertSame( array(), $panicked['mismatch'], 'A panic file was flagged as a mismatch.' );
+		$this->assertSame( array( 'runner: panic file (log)' ), $panicked['overrides'] );
+
+		// Lockdown is run as block with lockdown on.
+		$locked = Diagnostics::compare( $report( array( 'compiled' => 'lockdown', 'early' => 'block' ) ) ); // phpcs:ignore WordPress.Arrays.ArrayDeclarationSpacing.AssociativeArrayFound -- as above.
+
+		$this->assertSame( array(), $locked['mismatch'] );
+		$this->assertSame( array( 'early: lockdown (runs as block)' ), $locked['overrides'] );
+
+		// And it is an anomaly of its own.
+		$this->assertSame( 'mismatch', Diagnostics::anomaly( array( 'mismatch' => array( 'mode (early): ran log, configured block' ) ) ) );
+	}
+
+	/**
+	 * A compiled file that differs between the paths or from the last compile is a mismatch (#41).
+	 */
+	public function test_a_stale_compiled_file_is_flagged(): void {
+		$old     = time() - 3600;
+		$report  = static fn ( array $compiled ): array => array(
+			'mode'     => array(),
+			'compiled' => $compiled + array(
+				'path'  => '/private/firewall.yml',
+				'mtime' => time() - 3600,
+				'hash'  => 'aaaaaaaaaaaa',
+				'early' => null,
+				'meta'  => array(
+					'hash'        => 'aaaaaaaaaaaa',
+					'compiled_at' => time() - 3600,
+				),
+			),
+		);
+		$early   = static fn ( array $early ): array => $early + array(
+			'path'  => '/private/firewall.yml',
+			'mtime' => time() - 3600,
+			'hash'  => 'aaaaaaaaaaaa',
+		);
+		$compare = static fn ( array $compiled ): array => Diagnostics::compare( $report( $compiled ) )['mismatch'];
+
+		$this->assertSame( array(), $compare( array( 'early' => $early( array() ) ) ), 'Matching files were flagged.' );
+
+		$this->assertSame(
+			array( 'compiled hash: this container\'s file is bbbbbbbbbbbb, the last compile wrote aaaaaaaaaaaa' ),
+			$compare( array( 'hash' => 'bbbbbbbbbbbb', 'early' => $early( array( 'hash' => 'bbbbbbbbbbbb' ) ) ) ), // phpcs:ignore WordPress.Arrays.ArrayDeclarationSpacing.AssociativeArrayFound -- one line per case.
+			'A container reading a stale copy was not flagged.'
+		);
+
+		$this->assertStringStartsWith( 'compiled hash: the early path saw cccccccccccc', $compare( array( 'early' => $early( array( 'hash' => 'cccccccccccc' ) ) ) )[0] ?? '' );
+		$this->assertStringStartsWith( 'compiled file: the early path read /elsewhere/firewall.yml', $compare( array( 'early' => $early( array( 'path' => '/elsewhere/firewall.yml' ) ) ) )[0] ?? '' );
+
+		// A bootstrap from before the hash: the mtime is compared instead.
+		$this->assertStringStartsWith( 'compiled mtime:', $compare( array( 'early' => $early( array( 'hash' => null, 'mtime' => $old - 60 ) ) ) )[0] ?? '' ); // phpcs:ignore WordPress.Arrays.ArrayDeclarationSpacing.AssociativeArrayFound -- as above.
+
+		// A compile from before the hash was recorded is not compared with.
+		$this->assertSame( array(), $compare( array( 'hash' => 'bbbbbbbbbbbb', 'meta' => array( 'compiled_at' => $old ) ) ) ); // phpcs:ignore WordPress.Arrays.ArrayDeclarationSpacing.AssociativeArrayFound -- as above.
+
+		// Nor is anything within SETTLE seconds of a compile, which a request can straddle.
+		$this->assertSame(
+			array(),
+			$compare(
+				array(
+					'hash' => 'bbbbbbbbbbbb',
+					'meta' => array(
+						'hash'        => 'aaaaaaaaaaaa',
+						'compiled_at' => time() - 5,
+					),
+				)
+			)
+		);
+	}
+
+	/**
+	 * A compile records what it wrote, and a stale file is kept in the anomaly slot (#41).
+	 */
+	public function test_a_mismatch_survives_ordinary_requests(): void {
+		$this->given_exception_mode();
+
+		$meta = Plugin::instance()->compiled()->meta();
+		$file = Plugin::instance()->paths()->compiled_file();
+
+		$this->assertSame( substr( (string) hash_file( 'sha256', $file ), 0, 12 ), $meta['hash'] ?? null, 'The compile did not record the hash of what it wrote.' );
+		$this->assertSame( 'exception', $meta['mode'] ?? null, 'The compile did not record the mode it wrote.' );
+
+		$GLOBALS['basic_firewall_early'] = array( 'called' => false );
+
+		// The last compile wrote something other than what this container
+		// reads, an hour ago: well outside the window a request can straddle.
+		update_option(
+			\Kanopi\BasicFirewall\Compiler\Compiled_Config_Cache::META_OPTION,
+			array(
+				'hash'        => 'ffffffffffff',
+				'compiled_at' => time() - 3600,
+			) + $meta,
+			false
+		);
+		touch( $file, time() - 3600 ); // phpcs:ignore WordPress.WP.AlternativeFunctions -- ageing the compiled file, put back below.
+		clearstatcache();
+
+		try {
+			Diagnostics::persist();
+		} finally {
+			update_option( \Kanopi\BasicFirewall\Compiler\Compiled_Config_Cache::META_OPTION, $meta, false );
+			touch( $file ); // phpcs:ignore WordPress.WP.AlternativeFunctions -- put back.
+			clearstatcache();
+		}
+
+		$anomaly = Diagnostics::last_anomaly();
+
+		$this->assertIsArray( $anomaly, 'A stale compiled file was not kept as an anomaly.' );
+		$this->assertSame( 'mismatch', $anomaly['anomaly'] );
+		$this->assertStringContainsString( 'the last compile wrote ffffffffffff', (string) ( $anomaly['mismatch'][0] ?? '' ) );
+		$this->assertSame( 'ffffffffffff', $anomaly['compiled']['meta']['hash'] );
+		$this->assertStringContainsString( 'mismatch: compiled hash', Diagnostics::summary( $anomaly ) );
+
+		// An ordinary request afterwards does not overwrite it.
+		Diagnostics::reset_throttle();
+		Diagnostics::persist();
+
+		$this->assertSame( array(), Diagnostics::last()['mismatch'] ?? null );
+		$this->assertSame( 'mismatch', Diagnostics::last_anomaly()['anomaly'] ?? null, 'An ordinary request overwrote the mismatch.' );
+	}
+
+	/**
+	 * Site Health raises a recent mismatch as a recommendation, with the rebuild (#41).
+	 */
+	public function test_site_health_reports_a_recent_mismatch(): void {
+		$GLOBALS['basic_firewall_early'] = array( 'called' => false );
+
+		$this->given_anomaly(
+			array(
+				'anomaly'  => 'mismatch',
+				'mismatch' => array( 'compiled hash: this container\'s file is bbbbbbbbbbbb, the last compile wrote aaaaaaaaaaaa' ),
+				'early'    => array(
+					'called'    => true,
+					'evaluated' => true,
+				),
+			)
+		);
+
+		$check = Site_Health::check( 'evaluation' );
+
+		$this->assertSame( 'recommended', $check['status'] );
+		$this->assertSame( 'A recent web request saw a different firewall configuration from the one last compiled', $check['label'] );
+		$this->assertStringContainsString( 'the last compile wrote aaaaaaaaaaaa', $check['description'] );
+		$this->assertNotSame( '', $check['actions'], 'The rebuild is not offered.' );
+	}
+
+	/**
 	 * The last request and the last anomaly are kept apart.
 	 */
 	public function test_the_last_anomaly_survives_ordinary_requests(): void {

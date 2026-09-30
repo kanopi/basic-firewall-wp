@@ -46,6 +46,18 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   and as recommended in `log` mode. Reports now also carry `anomalies`, every
   anomaly a request had, most serious first.
 
+- **A `mismatch` anomaly** (#41). The report recorded the configured mode, the
+  mode each path ran and each path's view of the compiled file, but a
+  disagreement was not an anomaly, so the next ordinary request overwrote it.
+  It is now flagged when a path's mode differs from the one the last compile
+  wrote, or the compiled file's hash differs between the paths or from the last
+  compile's — the signature of a stale copy on a container that did not do the
+  compile — and kept in the anomaly slot; Site Health recommends a rebuild. A
+  panic file, `BASIC_FIREWALL_MODE` and lockdown are reported under
+  `mode.overrides` rather than flagged. The compile now records the hash prefix
+  and mode of what it wrote in its meta, and the early path records the
+  compiled file's hash prefix alongside its modification time.
+
 ### Fixed
 
 - **The early path no longer requires a second Composer autoloader when the
