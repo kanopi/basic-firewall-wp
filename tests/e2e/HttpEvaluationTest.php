@@ -878,6 +878,11 @@ final class HttpEvaluationTest extends TestCase {
 		$host   = (string) ( $parts['host'] ?? '127.0.0.1' );
 		$port   = (int) ( $parts['port'] ?? ( $secure ? 443 : 80 ) );
 
+		// The port too, when the URL names one: a multisite network answers
+		// only the domain it was installed on, `127.0.0.1:8080` in CI, and
+		// redirects anything else before the firewall has loaded.
+		$authority = isset( $parts['port'] ) ? $host . ':' . $port : $host;
+
 		$context = stream_context_create(
 			array(
 				'ssl' => array(
@@ -895,7 +900,7 @@ final class HttpEvaluationTest extends TestCase {
 		}
 
 		stream_set_timeout( $socket, 15 );
-		fwrite( $socket, 'GET ' . $path . " HTTP/1.0\r\nHost: " . $host . "\r\nUser-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Safari/605.1.15\r\nConnection: close\r\n\r\n" );
+		fwrite( $socket, 'GET ' . $path . " HTTP/1.0\r\nHost: " . $authority . "\r\nUser-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Safari/605.1.15\r\nConnection: close\r\n\r\n" );
 
 		$status = (string) fgets( $socket );
 		fclose( $socket );
