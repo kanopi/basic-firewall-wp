@@ -98,6 +98,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **A `/wp-login.php` rate limit counts `/WP-LOGIN.PHP` too** (#50). On a
+  case-insensitive filesystem the server runs `wp-login.php` for any casing,
+  and `path` keeps the client's; rate-limit patterns now ignore case, as URL
+  rules already did. Tests cover both, with the server values such a server
+  sends.
 - **Paths routed through `index.php` can no longer be spelled around a rule**
   (#51). The library normalises the path every rule sees, on both path
   sources, so `//wp-json/…`, `/./wp-json/…`, `/%2e/wp-json/…`,

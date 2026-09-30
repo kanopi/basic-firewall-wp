@@ -221,6 +221,63 @@ final class PathSpellingTest extends Honoured_Settings {
 	}
 
 	/**
+	 * A `/wp-login.php` rate limit counts `/WP-LOGIN.PHP` against the same budget (#50).
+	 *
+	 * On a case-insensitive filesystem (macOS, Windows, some mounted volumes)
+	 * the server runs wp-login.php for `/WP-LOGIN.PHP` and `SCRIPT_NAME` keeps
+	 * the client's case. Rate-limit patterns were case-sensitive until
+	 * kanopi/firewall 2.35.0, so each casing had a budget of its own.
+	 */
+	public function test_a_login_rate_limit_ignores_case(): void {
+		$firewall = $this->build(
+			array(
+				'rules' => array(
+					$this->rule(
+						'login-limit',
+						'rate_limit',
+						array(
+							'paths'                => array( '/wp-login.php 3 60' ),
+							'default_limit'        => 60,
+							'default_window'       => 60,
+							'limit_unlisted_paths' => false,
+							'storage'              => array(
+								'backend' => 'file',
+								'file'    => $this->scratch . '/ratelimit.data',
+							),
+						),
+						array( 'record' => 'no' )
+					),
+				),
+			)
+		);
+
+		$verdicts = array();
+
+		foreach ( array( '/wp-login.php', '/WP-LOGIN.PHP', '/Wp-Login.php', '/WP-LOGIN.PHP' ) as $index => $casing ) {
+			$verdicts[ $index . ' ' . $casing ] = $this->outcome( $firewall, $this->direct( $casing, '203.0.113.120', $casing ) )['verdict'];
+		}
+
+		$this->assertSame( array( 'allow', 'allow', 'allow', 'block' ), array_values( $verdicts ), 'Some casings of wp-login.php were not counted against its limit: ' . wp_json_encode( $verdicts ) );
+	}
+
+	/**
+	 * A URL rule on `/wp-login.php` already ignored case, and still does (#50).
+	 */
+	public function test_a_login_block_ignores_case(): void {
+		$firewall = $this->build(
+			array(
+				'rules' => array(
+					$this->rule( 'login-block', 'url', array( 'conditions' => array( self::condition( 'path', 'equals', '/wp-login.php' ) ) ), array( 'expiration' => 1 ) ),
+				),
+			)
+		);
+
+		foreach ( array( '/WP-LOGIN.PHP', '/Wp-Login.Php' ) as $index => $casing ) {
+			$this->assertSame( 'block', $this->outcome( $firewall, $this->direct( $casing, '203.0.113.' . ( 130 + $index ), $casing ) )['verdict'], $casing . ' ran wp-login.php and was let past a block on /wp-login.php.' );
+		}
+	}
+
+	/**
 	 * The request a web server hands PHP for a spelling of a file, built as the early path builds it.
 	 *
 	 * @param string $uri    REQUEST_URI, as the client sent it.

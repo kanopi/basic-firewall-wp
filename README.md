@@ -749,6 +749,16 @@ resolving it would turn `/wp-json/wp/v2/x/../../../y` into `/y` for the rules
 while WordPress still served the REST API. The log's `path` and block records
 show the normalised path.
 
+**Case.** On a case-insensitive filesystem (macOS, Windows, some mounted
+volumes) the server runs `wp-login.php` for `/WP-LOGIN.PHP`, and `path` keeps
+the client's case, because it is the name the server was asked for. URL rules
+compare paths without regard to case unless you tick *Case sensitive*, and
+from `kanopi/firewall` 2.35.0 rate-limit patterns do too
+([kanopi/firewall#426](https://github.com/kanopi/firewall/issues/426)), so a
+`/wp-login.php` limit counts `/WP-LOGIN.PHP` against the same budget (#50). A
+pattern written as a regular expression keeps its own flags, and the `path`
+key component is lower-cased, so a lower-case path keys exactly as before.
+
 `path` follows where the site's `index.php`, the front controller, is served:
 
 | Layout | Site Address / WordPress Address | Compiled `base_path` | The login page matches as |
