@@ -685,9 +685,12 @@ final class Site_Health {
 	 * leave rules that read as protection and match nothing. One request
 	 * object each, no evaluation.
 	 *
-	 * A recommendation where WordPress has its own directory and something
-	 * still names its files without that directory: see Site_Layout for why
-	 * those are matched with the prefix.
+	 * A recommendation where WordPress has its own directory and one of the
+	 * site's own rules, or an enabled preset's rate limit, matches its files
+	 * only at the root: see Site_Layout for why those are matched with the
+	 * prefix, and Unprefixed_Core_Paths for what counts. Presets are otherwise
+	 * no longer flagged, since kanopi/firewall 2.35.0 matches WordPress's
+	 * paths at any depth in them (#45).
 	 *
 	 * @return array{status: string, label: string, description: string, actions: string}
 	 */
@@ -754,18 +757,34 @@ final class Site_Health {
 		}
 
 		if ( '' !== $prefix ) {
-			$unprefixed = self::unprefixed_core_paths( (string) $compiled, $config, $prefix );
+			$rules   = (array) Plugin::instance()->settings()->get( 'rules', array() );
+			$own     = Unprefixed_Core_Paths::in_rules( $rules, $prefix );
+			$presets = Unprefixed_Core_Paths::in_preset_rate_limits( self::enabled_presets( is_array( $config ) ? $config : array() ), $prefix );
 
 			$description = '<p>' . esc_html(
 				sprintf(
 					/* translators: 1: the directory WordPress is in, e.g. /wp, 2: the login path with it, e.g. /wp/wp-login.php. */
-					__( 'WordPress has its own directory, %1$s, so its own files are matched with it: a direct request for the login page reaches the rules as %2$s, and admin screens as %1$s/wp-admin/…. A rule on /wp-login.php matches only the bare address, which WordPress redirects.', 'basic-firewall' ),
+					__( 'WordPress has its own directory, %1$s, so its own files are matched with it: a direct request for the login page reaches the rules as %2$s, and admin screens as %1$s/wp-admin/…. A rule that has to equal or start with /wp-login.php matches only the bare address, which WordPress redirects; ends with and contains match either. The firewall library\'s WordPress presets match these files wherever WordPress is installed.', 'basic-firewall' ),
 					$prefix,
 					$expected
 				)
 			) . '</p>';
 
-			if ( $unprefixed ) {
+			if ( array() !== $own || array() !== $presets ) {
+				$items = array();
+
+				foreach ( $own as $found ) {
+					$items[] = sprintf( '<li><strong>%s</strong> — <code>%s</code></li>', esc_html( $found['label'] ), esc_html( $found['value'] ) );
+				}
+
+				foreach ( $presets as $pattern ) {
+					$items[] = sprintf(
+						'<li>%s — <code>%s</code></li>',
+						esc_html__( 'an enabled preset\'s rate limit', 'basic-firewall' ),
+						esc_html( $pattern )
+					);
+				}
+
 				return self::recommended(
 					sprintf(
 						/* translators: %s: the directory WordPress is in, e.g. /wp. */
@@ -775,10 +794,10 @@ final class Site_Health {
 					$description . '<p>' . esc_html(
 						sprintf(
 							/* translators: %s: the directory WordPress is in, e.g. /wp. */
-							__( 'A rule or an enabled preset names /wp-login.php, /xmlrpc.php, /wp-cron.php or /wp-admin without %s, so it does not match those files on this site. The presets are written for WordPress at the root. Add rules for the prefixed paths, or match with ends with or contains.', 'basic-firewall' ),
+							__( 'These match /wp-login.php, /xmlrpc.php, /wp-cron.php or /wp-admin only at the site root, so they do not match those files on this site. Write them with %s, or match with ends with or contains. A rate limit pattern is always anchored, so it needs the prefix, or a leading *.', 'basic-firewall' ),
 							$prefix
 						)
-					) . '</p>'
+					) . '</p><ul>' . implode( '', $items ) . '</ul>'
 				);
 			}
 
@@ -792,35 +811,32 @@ final class Site_Health {
 	}
 
 	/**
-	 * Whether the compiled file or an enabled preset names a core file bare.
+	 * The enabled presets the compiled file includes, parsed.
 	 *
-	 * Comment lines are skipped, because the presets' headers talk about the
-	 * paths they cover. A regular expression's escaped dot counts as a mention.
+	 * @param array<mixed> $config The compiled file, parsed.
 	 *
-	 * @param string       $compiled The compiled file's contents.
-	 * @param array<mixed> $config   The compiled file, parsed.
-	 * @param string       $prefix   WordPress's directory, e.g. `/wp`.
+	 * @return list<array<mixed>>
 	 */
-	private static function unprefixed_core_paths( string $compiled, array $config, string $prefix ): bool {
-		$texts = array( $compiled );
+	private static function enabled_presets( array $config ): array {
+		$presets = array();
 
 		foreach ( (array) ( $config['configs'] ?? array() ) as $file ) {
-			if ( is_string( $file ) && is_readable( $file ) ) {
-				$texts[] = (string) file_get_contents( $file ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- a local preset file.
+			if ( ! is_string( $file ) || ! is_readable( $file ) ) {
+				continue;
+			}
+
+			try {
+				$parsed = Yaml::parseFile( $file );
+			} catch ( \Throwable $e ) {
+				continue;
+			}
+
+			if ( is_array( $parsed ) ) {
+				$presets[] = $parsed;
 			}
 		}
 
-		$pattern = '#(?<!' . preg_quote( $prefix, '#' ) . ')/(?:wp-login\\\\?\.php|xmlrpc\\\\?\.php|wp-cron\\\\?\.php|wp-admin\b)#';
-
-		foreach ( $texts as $text ) {
-			$lines = preg_replace( '/^\s*#.*$/m', '', $text );
-
-			if ( is_string( $lines ) && 1 === preg_match( $pattern, $lines ) ) {
-				return true;
-			}
-		}
-
-		return false;
+		return $presets;
 	}
 
 	/**

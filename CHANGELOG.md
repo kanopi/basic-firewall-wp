@@ -98,6 +98,18 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **WordPress in its own directory: presets fire, and Site Health flags only
+  the site's own rules** (#45). kanopi/firewall 2.35.0 made `wordpress.yml`
+  and `search-bots.yml` match WordPress's paths at any depth, so the crawler
+  allow no longer covers `/wp/wp-login.php`. Site Health's *request path*
+  check no longer flags every enabled preset: it asks each of the site's own
+  enabled rules whether it matches `/wp-login.php`, `/xmlrpc.php`,
+  `/wp-cron.php` or `/wp-admin` at the root and misses it under the prefix
+  (`equals`, `is one of`, `starts with`, a regular expression, a rate limit
+  pattern; `ends with` and `contains` pass), and lists each by name. An
+  enabled preset's rate limit on a bare core path, such as
+  `rate-limiting.yml`'s `/wp-login.php`, is still named, since that preset
+  is unchanged and rate limit patterns are anchored.
 - **A `/wp-login.php` rate limit counts `/WP-LOGIN.PHP` too** (#50). On a
   case-insensitive filesystem the server runs `wp-login.php` for any casing,
   and `path` keeps the client's; rate-limit patterns now ignore case, as URL

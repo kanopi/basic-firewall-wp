@@ -778,14 +778,27 @@ key component is lower-cased, so a lower-case path keys exactly as before.
   `/wp/index.php` the front controller, and then every front-end request would
   match as `/index.php`. So on this layout WordPress's own files match with
   their directory: **write rules as `/wp/wp-login.php`, `/wp/xmlrpc.php` and
-  `/wp/wp-admin`**, or use *ends with* or *contains*. A rule on `/wp-login.php`
-  matches only the bare address, which the server routes through `index.php` and
-  WordPress then redirects. The library's presets name the root paths, so their
-  rules on WordPress's own files don't fire on this layout. Site Health says so,
-  and the Test screen's default path is `/wp/wp-login.php` on this layout. This
-  is a trade-off, and the plugin makes it on purpose. The only way to strip the
-  directory without a library change is to read the path back out of the raw
-  URL, and that brings the spelling bypass back.
+  `/wp/wp-admin`**, or use *ends with* or *contains*. A condition that has to
+  *equal* or *start with* `/wp-login.php`, and a rate limit on it (a rate limit
+  pattern is always anchored), matches only the bare address, which the server
+  routes through `index.php` and WordPress then redirects. The Test screen's
+  default path is `/wp/wp-login.php` on this layout. This is a trade-off, and
+  the plugin makes it on purpose: the only way to strip the directory is to read
+  the path back out of the raw URL, and that brings the spelling bypass back.
+
+  The library's WordPress presets need no change. From `kanopi/firewall` 2.35.0
+  (Preset-Version 2 of `wordpress.yml` and `search-bots.yml`,
+  [kanopi/firewall#420](https://github.com/kanopi/firewall/issues/420)) they
+  match WordPress's files at any depth, on a segment boundary, so
+  `search-bots.yml`'s crawler allow no longer covers `/wp/wp-login.php` (#45).
+  Site Health's *request path* check recommends a fix only for **this site's own
+  enabled rules** that would match a core file at the root and miss it under
+  the prefix — `equals`, `is one of`, `starts with`, a regular expression, or a
+  rate limit pattern — and lists each one; *ends with* and *contains* are fine
+  as they are. The one preset it still names is an enabled preset's rate limit
+  on a bare core path, such as `rate-limiting.yml`'s `/wp-login.php`, which the
+  library has not changed. Referenced lists and the Advanced YAML are not
+  examined.
 - **Multisite.** On a subdirectory network, the server rewrites
   `/site2/wp-login.php` to the network's own `wp-login.php`, so the base path is
   the network's path and not each site's.
