@@ -336,10 +336,12 @@ it needs a Composer autoloader. It uses the first of these that applies:
 3. **The `BASIC_FIREWALL_AUTOLOADER` constant.** The same thing, said once per
    environment. The option beats it, as every bootstrap option beats the
    constant it defaults to.
-4. **A `vendor/` beside the WordPress root** — `dirname( ABSPATH ) . '/vendor'`,
+4. **A library that is already loaded**, because `wp-config.php` required the
+   site's autoloader above the snippet. Nothing more to require — and nothing
+   else is: a different `vendor/` beside the WordPress root is left alone, so
+   classes cannot end up resolving from two Composer trees at once.
+5. **A `vendor/` beside the WordPress root** — `dirname( ABSPATH ) . '/vendor'`,
    where Bedrock and most Composer-built sites keep it.
-5. **A library that is already loaded**, because `wp-config.php` required the
-   site's autoloader above the snippet. Nothing more to require.
 
 So a site that installs the plugin with Composer and a custom `vendor-dir` adds
 one line:
@@ -440,12 +442,46 @@ from any container: whether the early path was called and evaluated, why not if
 it did not, which autoloader and library copy it used, the verdict it reached,
 any failure (class, message and file:line), and whether it handed a verdict on;
 what the runner itself did; the mode each path's firewall was actually in; the
+rules each path's firewall could not construct (`failed_rules`, as
+`bucket/Class:index` — names only — with `failed_rules_sampled` saying why this
+request asked; see below); the
 compiled file's path, modification time and a hash prefix, as each path saw it;
 and the cache backend on each path. Two are kept: the last request, and the last
-**anomalous** one — a fail-open, an early path that did not evaluate for a
-reason other than `disabled`, `switched-off` or `deferred-login`, or a refusal
-the early path handed on instead of answering — so ordinary traffic does not
-overwrite the one worth reading. Each is kept for a day and written at most once
+**anomalous** one, so ordinary traffic does not overwrite the one worth reading.
+`anomalies` lists everything wrong with a request, most serious first, and
+`anomaly` is the first of them:
+
+| Anomaly | Meaning |
+|---|---|
+| `fail-open` | Either path failed and let the request through unfiltered. |
+| `early-verdict-deferred` | The early path reached a refusal and handed it on instead of answering it. |
+| `failed-rules` | A firewall either path built could not construct one or more rules. The library skips such a rule and carries on, so part of the configuration was not enforced on that request — and a rule that fails only on the web containers (a storage or reputation host only they cannot reach, a missing extension) shows up nowhere else. |
+| `not-evaluated` | The early path was called and did not evaluate, for a reason other than `disabled`, `switched-off` or `deferred-login`. |
+| `mismatch` | A path ran in a mode other than the one last compiled, or the compiled file differed between the paths or from the last compile's hash — the signature of a stale copy of the file on a web container that did not do the compile. Listed under `mismatch`. |
+
+**Failed rules are sampled, not checked on every request.** The library can
+only say which rules failed to construct by constructing all of them, which
+undoes its lazy construction: every visitor would pay for CRS, GeoIP readers
+and the rest even when an earlier rule settled the request. So each path asks
+only with `BASIC_FIREWALL_DEBUG` on (`debug`), on a request that failed open
+(`failure`), or at most once a minute per web container otherwise
+(`interval`, kept in a `.sampled-failed-rules-*` marker file in the private
+directory — one stat when not due). The trade-off: a rule that fails
+intermittently can be missed between samples. On any other request
+`failed_rules` is `null`, meaning "not asked", not "none failed"; the latest
+sample from each path is kept on its own, and `early-report`
+(`failed_rules_sample`) and `status` ("Failed rules (last sample)") show it.
+
+For `mismatch`, the expected mode is the one the last compile wrote into the
+file (so the advanced YAML and `BASIC_FIREWALL_MODE` count), recorded with the
+file's hash prefix in the compile's meta. A panic file, `BASIC_FIREWALL_MODE`
+differing between the container that compiled and the one serving, and
+`lockdown` (which runs as `block`) change a path's mode legitimately; they are
+listed under `mode.overrides` rather than flagged. The early path now records
+the compiled file's hash prefix too (`compiled.early.hash`), and the last
+compile's in `compiled.meta`. Files are not compared within 30 seconds of a
+compile, which a request can straddle honestly.
+ Each is kept for a day and written at most once
 every five seconds; WP-CLI and cron are never recorded. Nothing sensitive is
 kept: the URL path without its query string, the request method, and facts about
 the firewall — no cookies, headers or client address, and credentials in a URL
@@ -457,15 +493,24 @@ wp basic-firewall early-report    # both reports in full, as JSON (--format=yaml
 ```
 
 Site Health's evaluation check raises the last anomaly while it is less than
-six hours old: **critical** for a request let through unfiltered in `block` or
-`exception` mode, or a refusal the early path did not answer; **recommended**
-for an early path that did not evaluate, with the fix for the reason.
+six hours old: **critical** for a request let through unfiltered or rules that
+could not be constructed, in `block` or `exception` mode, and for a refusal the
+early path did not answer; **recommended** for those two in `log` mode, for a
+`mismatch` (with the rebuild), and for an early path that did not evaluate,
+with the fix for the reason. The library
+logs each rule it could not construct, with the reason, as `Firewall rule could
+not be constructed and is NOT active`.
 
 **The PHP error log.** Anything that makes either path let a request through
-unfiltered is logged, every time, and so is an early path that is called and
-does not evaluate — that one at most once every 15 minutes per reason, however
-many containers serve the site (the interval is kept in a marker file in the
-private directory). Search for `Basic Firewall [warning]:`:
+unfiltered is logged: the first time always, then at most once a minute for the
+same exception class from the same file and line, with the next line saying how
+many were held back — `… (12 more since 2026-01-01 12:00:00 UTC)` — so a
+persistent failure on a busy site (a storage outage, say) does not write a line
+per request. An early path that is called and does not evaluate is logged at
+most once every 15 minutes per reason. Both intervals hold however many
+containers serve the site: they are kept in marker files in the private
+directory (`.warned-*`), shared wherever that directory is. Search for
+`Basic Firewall [warning]:`:
 
 ```
 Basic Firewall [warning]: fail-open (early): the firewall threw RuntimeException "…" at /path/to/File.php:123 on the wp-config.php path, so the request was let through unfiltered.
@@ -485,7 +530,7 @@ with the compact report as JSON:
 
 ```bash
 curl -sI "https://example.com/some-path/?nocache=$RANDOM" | grep -i x-basic-firewall-early
-# X-Basic-Firewall-Early: {"early":{"called":true,"evaluated":true,"reason":null,"autoloader":"option","library":"unscoped","mode":"exception","outcome":null,"failure":null,"refused":false,"responder":true},"runner":{...}}
+# X-Basic-Firewall-Early: {"early":{"called":true,"evaluated":true,"reason":null,"autoloader":"option","library":"unscoped","mode":"exception","outcome":null,"failure":null,"refused":false,"responder":true,"failed_rules":[],"failed_rules_sampled":"debug"},"runner":{...}}
 ```
 
 It carries no paths beyond a file name and no message text, but it does tell
@@ -1653,17 +1698,39 @@ so give each site its own.
 **Authentication.** A password alone is the ordinary `requirepass` case; fill in
 the username as well only for a server using ACLs. The password is kept as typed
 — not trimmed — and never echoed back into the page: leave the field blank to
-keep the stored one, or tick *Remove the stored password*. It is written into the
-compiled file and stripped from an export, so `%env(YOUR_VARIABLE)%` is the
-better answer: that token is not a credential, survives an export, and never
-reaches the database.
+keep the stored one, or tick *Remove the stored password*.
 
-It is not injected at request time the way WordPress's database credentials
-are. Those come from constants that exist on both evaluation paths; this password
-lives in the settings option, which the wp-config.php path cannot read without
-WordPress. Getting it there would mean writing it to a file beside the compiled
-one — the same plaintext on the same disk, with one more file to protect. The
-token is the way to keep it off disk.
+Where the password comes from decides where it ends up. Best first:
+
+1. **`BASIC_FIREWALL_REDIS_PASSWORD` in wp-config.php**, above the firewall
+   snippet. It is handed to the library at request time on **both** evaluation
+   paths, the way WordPress's database credentials are, and written to no file
+   at all: the compiler leaves `auth` out of the compiled file and records only
+   *where* it belongs — in an option for the runner, and in
+   `redis-auth-paths.json` beside the compiled file for the wp-config.php path
+   (paths and the ACL username; never the password). It applies to every Redis
+   connection — the block list and every rate limit counting in Redis — and
+   while it is defined the Storage screen shows the field as set in
+   wp-config.php. Defining it takes effect on the next request; rebuild to take
+   an older password out of the file, which Site Health prompts for.
+2. **`%env(YOUR_VARIABLE)%` in the field.** Only the name reaches the database
+   and the compiled file, and the library resolves it each time it loads the
+   file (its parse cache, a PHP file readable only by its owner, holds the
+   resolved value). It survives an export. The block list screen and WP-CLI
+   resolve it the same way.
+3. **The password typed as is.** It still works, and it is still written into
+   the compiled file, because the wp-config.php path cannot read the settings and
+   putting it in a sidecar would be the same plaintext on the same disk. Site
+   Health marks this *recommended*: define the constant or use `%env()%`.
+
+```php
+// wp-config.php, above the Basic Firewall snippet.
+define( 'BASIC_FIREWALL_REDIS_PASSWORD', getenv( 'REDIS_PASSWORD' ) );
+```
+
+An empty constant counts as not defined. Removing the constant without
+rebuilding leaves a compiled file with no password in it, and every Redis
+connection fails to authenticate; Site Health reports that as critical.
 
 Redis needs no WordPress credentials, so it works on the wp-config.php
 evaluation path exactly as it does on the mu-plugin path. If the server cannot be
@@ -2156,6 +2223,11 @@ define( 'BASIC_FIREWALL_AUTOLOADER', __DIR__ . '/wp-content/mu-plugins/vendor/au
 // Supply the challenge signing secret without storing it in the database.
 define( 'BASIC_FIREWALL_CHALLENGE_SECRET', getenv( 'FIREWALL_CHALLENGE_SECRET' ) );
 
+// The password for every Redis connection -- the block list and rate limit
+// counters -- injected on each request and never written to the compiled
+// file. Read on both paths. See "Redis, and why expiry is the interesting part".
+define( 'BASIC_FIREWALL_REDIS_PASSWORD', getenv( 'REDIS_PASSWORD' ) );
+
 // Addresses permitted to declare the client address.
 define( 'BASIC_FIREWALL_TRUSTED_PROXIES', array( '10.0.0.0/8' ) );
 
@@ -2211,6 +2283,10 @@ secret:   %file(/etc/firewall/hmac.key)%
 
 `${VAR}` does **not** work — only the `%env(...)%` form is substituted.
 
+The Redis password has a constant as well, `BASIC_FIREWALL_REDIS_PASSWORD`,
+which keeps it out of the compiled file entirely rather than putting a token
+there; see *Redis, and why expiry is the interesting part*.
+
 One token naming a variable that does not exist means **the entire configuration
 fails to load** — every rule, not just the setting the token appeared in — and
 the firewall then allows all traffic. Site Health reports it and
@@ -2220,6 +2296,46 @@ the firewall then allows all traffic. Site Health reports it and
 from**. Only the `file` processor is ever enabled, never `require`: the library
 offers both behind one switch, and `require` executes the path it is given, which
 would turn any environment-variable injection into remote code execution.
+
+### Credentials in the Advanced YAML
+
+The Advanced screen's YAML is free-form, so no declared secret path reaches
+inside it. Its credentials are recognised by the key they sit under instead, and
+shown as `[redacted]` in the box, stripped from an export, and hidden on the
+Compiled screen. Key names are compared case-insensitively, with `-` read as
+`_`, at any depth:
+
+- a name containing `password`, `passwd`, `secret` or `token` — unless it ends
+  in a suffix that makes it a description of one, such as `_name`, `_ttl`,
+  `_header`, `_cookie`, `_param`, `_field`, `_length`, `_file` or `_path`, so
+  `cookie_name` and `token_ttl` stay visible;
+- exactly `pass`, `pwd`, `auth`, `api_key`, `apikey`, `access_key`,
+  `private_key`, `secret_key` or `license_key`; everything under `auth` or
+  `credentials`, except an auth map's `type`, `header` and `username`;
+- under `headers`, a header whose name mentions `auth`, `token`, `secret`,
+  `cookie`, `password` or `api-key` (`Authorization`, `X-Api-Key`, `Cookie`);
+- in any string: the password in `scheme://user:pass@host` (or the user part
+  when it has no colon, which is how a token goes in a URL), a query parameter
+  named like a credential, and a `password=` segment of a PDO-style DSN. Only
+  that part is masked, so the host stays readable.
+
+A bare `key` is **not** a credential — it is what a rate limit counts — and
+neither are `site_key`, `public_key` or `default_key`. `%env()%` and `%file()%`
+tokens are always shown.
+
+Leave a `[redacted]` as it is and the save keeps the stored value, provided it is
+still at the same place with the same host, port or URL beside it. A placeholder
+that has moved, or whose connection changed, is refused with a message naming
+it: a stored `[redacted]` would be a credential that silently stopped working.
+The box keeps your comments and layout, except where a credential also appears
+somewhere the substitution cannot safely reach (a comment, a block scalar, an
+anchor), in which case it is shown re-written from its parsed form.
+
+An export lists each one as `advanced_yaml: <path>`. Importing it on the same
+site restores them; elsewhere a placeholder with nothing to restore from is
+dropped and named in the preview. An imported document whose Advanced YAML
+carries credentials in the clear is stored as written, and the preview names
+them.
 
 ## WP-CLI commands
 
@@ -2422,20 +2538,30 @@ these are the cases to check by hand:
 
 ## Continuous integration
 
-CircleCI, in `.circleci/config.yml`. Twelve jobs on every push, a thirteenth on
-a release tag, and none of them advisory:
+CircleCI, in `.circleci/config.yml`. Thirteen jobs on every push, a fourteenth
+on a release tag, and none of them advisory:
 
 | Job | Runs |
 |---|---|
 | `static` | `check-platform-reqs --no-dev`, PHPCS, PHPStan — on 8.1, the declared floor |
 | `unit-php-*` | The unit suite on 8.1, 8.2, 8.3, 8.4 and 8.5 |
-| `integration-*` | Integration, end-to-end over real HTTP, and the WP-CLI suite, against WP 6.4/PHP 8.1, WP latest/PHP 8.3, and WP nightly on both PHP 8.4 and 8.5 |
+| `integration-*` | Integration, end-to-end over real HTTP, and the WP-CLI suite, against WP 6.4/PHP 8.1, WP latest/PHP 8.3, and WP nightly on both PHP 8.4 and 8.5. Every cell has a password-protected Redis service container; WP latest/PHP 8.3 and nightly/PHP 8.4 also install ext-redis and ext-apcu (with `apc.enable_cli=1`), so the live Redis block list, uninstall's Redis SCAN/DEL and the APCu cache tests run there, while the other two keep running the tests that need those extensions absent |
+| `integration-multisite-wplatest-php8.3` | The same three suites on a subdirectory network with a second site and the plugin network-activated: the early path stepping aside, the network-wide mu-loader surviving a site's deactivation, Site Health on a network, and uninstall visiting every site |
 | `versions` | `build/check-versions.sh`: the plugin header, `BASIC_FIREWALL_VERSION` and `readme.txt`'s `Stable tag` agree. On a tag, the tag and the newest CHANGELOG heading must agree too |
 | `package` | Builds the zip, then `tests/package/smoke.sh` on a clean WordPress with the Composer binary removed from `PATH`: installs and activates the zip, checks it loaded scoped, imports a block rule, asserts over HTTP that an unmatched request gets 200 and the matched one a 403 with the configured message, then deactivates and uninstalls and checks both exit 0 and leave nothing behind |
 | `release` | Tags only, after every job above has passed. Publishes the zip `package` tested to a GitHub Release; see [Releasing](#releasing) |
 
 The two nightly rows differ only in PHP, which is the point: a failure on 8.5
 that passes on 8.4 says "PHP 8.5" rather than "WordPress trunk moved".
+
+A test that needs Redis, APCu or a network skips where they are absent, which
+is right on a laptop and would be wrong in CI: a Redis container that failed to
+start would go green with the Redis tests skipped. So the jobs declare what they
+provide -- `BASIC_FIREWALL_TEST_REDIS=host:port` (with
+`BASIC_FIREWALL_TEST_REDIS_PASSWORD` when it needs one), `BASIC_FIREWALL_TEST_APCU=1`,
+`BASIC_FIREWALL_MULTISITE=1` -- and a declared service that is missing fails the
+test instead. Set the same variables to run those tests locally, for instance
+against a throwaway `redis-server`.
 
 `static` runs on the floor deliberately: the lock is resolved for PHP 8.1 by
 `config.platform`, and `check-platform-reqs` there is what stops a dependency

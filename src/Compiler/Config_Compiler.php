@@ -16,6 +16,7 @@ use Kanopi\BasicFirewall\Library_Capabilities;
 use Kanopi\BasicFirewall\Logging\Redaction;
 use Kanopi\BasicFirewall\Install\Challenge_Secret;
 use Kanopi\BasicFirewall\Plugin;
+use Kanopi\BasicFirewall\Redis_Password;
 use Kanopi\BasicFirewall\RuleType\Condition_Rule_Type_Base;
 use Kanopi\BasicFirewall\RuleType\Registry;
 use Kanopi\BasicFirewall\RuleType\Response_Settings;
@@ -83,6 +84,17 @@ final class Config_Compiler {
 	private array $connection_paths = array();
 
 	/**
+	 * Where a Redis connection's `auth` belongs, with the username that goes with it.
+	 *
+	 * Symfony property-access paths, like the connection paths. The runner and
+	 * the wp-config.php path inject BASIC_FIREWALL_REDIS_PASSWORD at each; see
+	 * Redis_Password.
+	 *
+	 * @var array<string, string>
+	 */
+	private array $redis_auth_paths = array();
+
+	/**
 	 * Paths where the object cache pool for agent detection belongs.
 	 *
 	 * @var list<string>
@@ -110,6 +122,7 @@ final class Config_Compiler {
 	 */
 	public function compile(): array {
 		$this->connection_paths   = array();
+		$this->redis_auth_paths   = array();
 		$this->cache_pool_paths   = array();
 		$this->verify_cache_paths = array();
 		$this->problems           = array();
@@ -185,8 +198,75 @@ final class Config_Compiler {
 		}
 
 		$compiled = $this->apply_advanced_yaml( $compiled, (string) $settings->get( 'advanced_yaml', '' ) );
+		$compiled = $this->apply_redis_password( $compiled, trim( (string) $settings->get( 'storage.redis.username', '' ) ) );
 
 		return $this->apply_enabled( $compiled, (bool) $settings->get( 'enabled', true ) );
+	}
+
+	/**
+	 * Record where each Redis connection's password belongs, and keep it out of the file when a constant supplies it.
+	 *
+	 * After the advanced YAML, so a connection written there -- or a rate limit
+	 * whose index it changed -- is found where it actually ended up. Both uses
+	 * are covered: the block list's `storage.config.redis`, and every plugin's
+	 * `metadata.storage.config.redis`, which is where a rate limit keeps its
+	 * counters.
+	 *
+	 * The paths are recorded whether or not the constant is defined today, so
+	 * defining it later takes effect on the next request rather than the next
+	 * rebuild -- only the literal left in the file waits for a rebuild, and
+	 * Site Health says so. The password itself is removed only when the
+	 * constant is defined: otherwise the file is still the only place the
+	 * wp-config.php path can get it from. See Redis_Password.
+	 *
+	 * @param array<string, mixed> $compiled The compiled configuration.
+	 * @param string               $username The block list's ACL username.
+	 *
+	 * @return array<string, mixed>
+	 */
+	private function apply_redis_password( array $compiled, string $username ): array {
+		$overridden = Redis_Password::is_overridden();
+
+		if ( is_array( $compiled['storage']['config']['redis'] ?? null ) ) {
+			$this->redis_auth_paths['[storage][config][redis][auth]'] = self::redis_username( $compiled['storage']['config']['redis'], $username );
+
+			if ( $overridden ) {
+				unset( $compiled['storage']['config']['redis']['auth'] );
+			}
+		}
+
+		foreach ( (array) ( $compiled['plugins'] ?? array() ) as $index => $plugin ) {
+			if ( ! is_array( $plugin ) || ! is_array( $plugin['metadata']['storage']['config']['redis'] ?? null ) ) {
+				continue;
+			}
+
+			$this->redis_auth_paths[ sprintf( '[plugins][%s][metadata][storage][config][redis][auth]', $index ) ] = self::redis_username( $plugin['metadata']['storage']['config']['redis'], '' );
+
+			if ( $overridden ) {
+				unset( $compiled['plugins'][ $index ]['metadata']['storage']['config']['redis']['auth'] );
+			}
+		}
+
+		return $compiled;
+	}
+
+	/**
+	 * The ACL username a Redis connection authenticates as, if any.
+	 *
+	 * The one already in its `auth` pair when there is one -- typed in the
+	 * advanced YAML, say -- and otherwise the one the settings give.
+	 *
+	 * @param array<string, mixed> $redis    The connection's options.
+	 * @param string               $fallback The username the settings give.
+	 */
+	private static function redis_username( array $redis, string $fallback ): string {
+		$auth = $redis['auth'] ?? null;
+
+		if ( is_array( $auth ) && 2 === count( $auth ) && is_string( reset( $auth ) ) ) {
+			return (string) reset( $auth );
+		}
+
+		return $fallback;
 	}
 
 	/**
@@ -734,10 +814,11 @@ final class Config_Compiler {
 	 * key looks configured and does nothing.
 	 *
 	 * @param array<string, mixed> $redis Stored `storage.redis` settings.
+	 * @param bool                 $live  For a connection opened now, rather than for the compiled file.
 	 *
 	 * @return array<string, mixed>
 	 */
-	public static function redis_storage_options( array $redis ): array {
+	public static function redis_storage_options( array $redis, bool $live = false ): array {
 		$host = trim( (string) ( $redis['host'] ?? '' ) );
 
 		$options = array(
@@ -765,8 +846,18 @@ final class Config_Compiler {
 		$username = trim( (string) ( $redis['username'] ?? '' ) );
 		$password = (string) ( $redis['password'] ?? '' );
 
+		/*
+		 * Opening a connection now, the password is the one in force: the
+		 * constant, or a token resolved. Compiling, it is what is stored --
+		 * a token stays a token for the library to resolve, and the compiler
+		 * removes it altogether when the constant supplies it.
+		 */
+		if ( $live ) {
+			$password = Redis_Password::live( $password );
+		}
+
 		if ( '' !== $password ) {
-			$options['auth'] = '' === $username ? $password : array( $username, $password );
+			$options['auth'] = Redis_Password::auth( $username, $password );
 		}
 
 		return $options;
@@ -1783,6 +1874,15 @@ final class Config_Compiler {
 	 */
 	public function connection_paths(): array {
 		return $this->connection_paths;
+	}
+
+	/**
+	 * Where a Redis password belongs, with the username that goes with it.
+	 *
+	 * @return array<string, string> Property-access path => ACL username, or empty.
+	 */
+	public function redis_auth_paths(): array {
+		return $this->redis_auth_paths;
 	}
 
 	/**

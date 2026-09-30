@@ -17,6 +17,7 @@ use Kanopi\BasicFirewall\Install\Upgrader;
 use Kanopi\BasicFirewall\Library_Capabilities;
 use Kanopi\BasicFirewall\Library_Loader;
 use Kanopi\BasicFirewall\Plugin;
+use Kanopi\BasicFirewall\Redis_Password;
 use Kanopi\BasicFirewall\Request_Tester;
 use Kanopi\BasicFirewall\RuleType\Types\Rate_Limit;
 use Kanopi\BasicFirewall\RuleType\Types\User_Agent;
@@ -96,6 +97,7 @@ final class Site_Health {
 			'proxy'        => __( 'Basic Firewall client IP', 'basic-firewall' ),
 			'mode'         => __( 'Basic Firewall operating mode', 'basic-firewall' ),
 			'storage'      => __( 'Basic Firewall block list storage', 'basic-firewall' ),
+			'redis_secret' => __( 'Basic Firewall Redis password', 'basic-firewall' ),
 			'cache'        => __( 'Basic Firewall cache', 'basic-firewall' ),
 			'logging'      => __( 'Basic Firewall logging', 'basic-firewall' ),
 			'records'      => __( 'Basic Firewall block records', 'basic-firewall' ),
@@ -141,6 +143,7 @@ final class Site_Health {
 			'proxy'       => self::check_proxy(),
 			'mode'        => self::check_mode(),
 			'storage'     => self::check_storage(),
+			'redis_secret' => self::check_redis_secret(),
 			'cache'       => self::check_cache(),
 			'logging'     => self::check_logging(),
 			'records'     => self::check_records(),
@@ -1276,9 +1279,10 @@ final class Site_Health {
 	 * path, and which on a host with several web servers may not even have
 	 * reached the one a visitor did. The runner saves the last anomalous web
 	 * request's report (see Diagnostics), and this raises it while it is
-	 * recent: critical for a request let through unfiltered or a verdict
-	 * the early path handed on in a mode that refuses, recommended for an
-	 * early path that did not evaluate.
+	 * recent: critical for a request let through unfiltered, a verdict the
+	 * early path handed on, or rules that could not be built, in a mode that
+	 * refuses; recommended for an early path that did not evaluate, or a
+	 * request that saw another configuration from the one last compiled.
 	 *
 	 * @return array{status: string, label: string, description: string, actions: string}|null
 	 */
@@ -1325,6 +1329,80 @@ final class Site_Health {
 					) . '</p>'
 					. ( null !== ( $early['refused'] ?? null ) ? '<p>' . esc_html( (string) $early['refused'] ) . '</p>' : '' )
 					. $capture
+				);
+
+			case 'failed-rules':
+				/*
+				 * A rule the library could not construct is skipped, so on
+				 * that request part of the configuration was not enforced --
+				 * for a block rule, a fail-open for exactly the traffic it
+				 * names. Critical where the mode refuses, as a fail-open is.
+				 * The compiled-configuration check reports rules the compiler
+				 * itself left out; these compiled and then failed to build on
+				 * a web request, which that check, run from this request,
+				 * cannot see.
+				 */
+				$lines = '';
+
+				foreach ( array(
+					'early'  => __( 'On the wp-config.php path', 'basic-firewall' ),
+					'runner' => __( 'On the mu-plugin path', 'basic-firewall' ),
+				) as $half => $where ) {
+					$names = array_map( 'strval', (array) ( ( 'early' === $half ? $early : $runner )['failed_rules'] ?? array() ) );
+
+					if ( array() !== $names ) {
+						$lines .= '<li>' . esc_html( $where ) . ': <code>' . implode( '</code>, <code>', array_map( 'esc_html', $names ) ) . '</code></li>';
+					}
+				}
+
+				/*
+				 * Said, because it is sampled: asking builds every rule, so it
+				 * is asked at most once a minute per server, with
+				 * BASIC_FIREWALL_DEBUG, or on a failure -- not on every
+				 * request, and a report without it is not a clean one.
+				 */
+				$sampled = (string) ( $early['failed_rules_sampled'] ?? $runner['failed_rules_sampled'] ?? '' );
+
+				if ( '' !== $sampled ) {
+					$lines .= '<li>' . esc_html(
+						sprintf(
+							/* translators: %s: why the request was sampled: interval, debug or failure. */
+							__( 'Found on a sampled request (%s). The rules are checked at most once a minute per web server, with BASIC_FIREWALL_DEBUG on, or when a request fails — not on every request.', 'basic-firewall' ),
+							$sampled
+						)
+					) . '</li>';
+				}
+
+				$body = '<p>' . $when . esc_html__( 'was evaluated by a firewall that could not construct some of its rules, so those rules did not run. The library skips a rule whose constructor fails rather than stopping, so everything else went on working — which is why nothing else looks wrong.', 'basic-firewall' ) . '</p>'
+					. '<ul>' . $lines . '</ul>'
+					. '<p>' . esc_html__( 'A rule that fails on web requests and not here usually depends on something only the web servers lack: a storage or reputation host they cannot reach, a PHP extension, a file. The library logs each one with its reason, as "Firewall rule could not be constructed and is NOT active".', 'basic-firewall' ) . '</p>'
+					. $capture;
+
+				return in_array( $mode, array( 'block', 'exception' ), true )
+					? self::critical( __( 'The firewall recently ran without some of its rules', 'basic-firewall' ), $body )
+					: self::recommended( __( 'The firewall recently ran without some of its rules', 'basic-firewall' ), $body );
+
+			case 'mismatch':
+				/*
+				 * Recommended rather than critical: the request was evaluated,
+				 * by a firewall built from a file, just not necessarily the
+				 * file the settings produced. Overrides -- a panic file,
+				 * BASIC_FIREWALL_MODE, lockdown -- never reach here; they are
+				 * in the report as what they are.
+				 */
+				$lines = '';
+
+				foreach ( (array) ( $report['mismatch'] ?? array() ) as $line ) {
+					$lines .= '<li><code>' . esc_html( (string) $line ) . '</code></li>';
+				}
+
+				return self::recommended(
+					__( 'A recent web request saw a different firewall configuration from the one last compiled', 'basic-firewall' ),
+					'<p>' . $when . esc_html__( 'was evaluated with a mode or a compiled file that does not match what the settings last compiled:', 'basic-firewall' ) . '</p>'
+					. '<ul>' . $lines . '</ul>'
+					. '<p>' . esc_html__( 'That is the signature of a stale copy of the compiled file on a web server that did not do the compile — the private directory not shared between servers, or storage that has not caught up — so that server enforces an older configuration than the one these screens describe.', 'basic-firewall' ) . '</p>'
+					. $capture,
+					self::rebuild_action()
 				);
 
 			case 'not-evaluated':
@@ -1912,6 +1990,148 @@ final class Site_Health {
 				$listing['supported'] ? (string) count( $listing['clients'] ) : esc_html__( 'an unknown number', 'basic-firewall' )
 			)
 		);
+	}
+
+	/**
+	 * Is a Redis password written into the compiled file in plain text?
+	 *
+	 * The compiled file lives under uploads, which on nginx is web-readable,
+	 * so a password there is a password anybody may be able to fetch. The
+	 * constant keeps it out entirely, and a `%env()%` token puts only a name
+	 * there; see Redis_Password. Read from the file in force rather than from
+	 * the settings, because the advanced YAML can write a Redis connection too.
+	 *
+	 * Also catches the two ways the constant and the file can disagree: one
+	 * defined since the last rebuild, which leaves the old password in the file
+	 * until the next; and one removed since, which leaves a file with no
+	 * password at all and every Redis connection failing to authenticate.
+	 *
+	 * @return array{status: string, label: string, description: string, actions: string}
+	 */
+	private static function check_redis_secret(): array {
+		$compiled = Plugin::instance()->compiled();
+		$paths    = $compiled->redis_auth_paths();
+
+		if ( array() === $paths ) {
+			return self::ok(
+				__( 'No Redis connection is configured', 'basic-firewall' ),
+				esc_html__( 'Neither the block list nor a rate limit keeps its data in Redis, so there is no Redis password to protect.', 'basic-firewall' )
+			);
+		}
+
+		$plaintext = self::plaintext_redis_passwords( $paths );
+
+		if ( Redis_Password::is_overridden() ) {
+			if ( array() !== $plaintext ) {
+				return self::recommended(
+					__( 'Rebuild the firewall to take the Redis password out of the compiled file', 'basic-firewall' ),
+					sprintf(
+						/* translators: %s: constant name. */
+						esc_html__( '%s is defined and is what the firewall connects with, but the compiled file was written before it was and still holds the password in plain text. A rebuild removes it.', 'basic-firewall' ),
+						'<code>' . esc_html( Redis_Password::CONSTANT ) . '</code>'
+					),
+					self::rebuild_action()
+				);
+			}
+
+			if ( ! is_readable( Plugin::instance()->paths()->redis_auth_paths_file() ) ) {
+				return self::recommended(
+					__( 'The wp-config.php path cannot tell where the Redis password goes', 'basic-firewall' ),
+					esc_html__( 'The sidecar naming where each Redis connection\'s password belongs is missing from the private directory, so requests answered before WordPress loads connect to Redis without it. A rebuild writes it again.', 'basic-firewall' ),
+					self::rebuild_action()
+				);
+			}
+
+			return self::ok(
+				__( 'The Redis password is supplied by wp-config.php', 'basic-firewall' ),
+				sprintf(
+					/* translators: %s: constant name. */
+					esc_html__( '%s is injected into every Redis connection at request time, on both evaluation paths, and is not written to the compiled file or anywhere else on disk.', 'basic-firewall' ),
+					'<code>' . esc_html( Redis_Password::CONSTANT ) . '</code>'
+				)
+			);
+		}
+
+		if ( $compiled->compiled_with_redis_constant() ) {
+			return self::critical(
+				__( 'The Redis password constant was removed after the firewall was built', 'basic-firewall' ),
+				sprintf(
+					/* translators: %s: constant name. */
+					esc_html__( 'The compiled file was written while %s was defined, so it holds no Redis password, and the constant is no longer defined to supply one. Every Redis connection fails to authenticate: rules still run, but the block list or rate limit counts are not kept. Define the constant again, or rebuild to use the password in the settings.', 'basic-firewall' ),
+					'<code>' . esc_html( Redis_Password::CONSTANT ) . '</code>'
+				),
+				self::rebuild_action()
+			);
+		}
+
+		if ( array() !== $plaintext ) {
+			return self::recommended(
+				__( 'The Redis password is stored in plain text in the compiled file', 'basic-firewall' ),
+				'<p>' . sprintf(
+					/* translators: 1: constant name, 2: an example token. */
+					esc_html__( 'The Redis password is stored in plain text in the compiled file; define %1$s in wp-config.php or use %2$s. The compiled file lives under uploads, which some servers will hand to anybody who asks for it.', 'basic-firewall' ),
+					'<code>' . esc_html( Redis_Password::CONSTANT ) . '</code>',
+					'<code>%env()%</code>'
+				) . '</p><p>' . sprintf(
+					/* translators: %s: where the plain-text passwords are, in the compiled configuration. */
+					esc_html__( 'Found at: %s.', 'basic-firewall' ),
+					esc_html( implode( ', ', $plaintext ) )
+				) . '</p>',
+				sprintf(
+					'<p><a href="%s">%s</a></p>',
+					esc_url( Admin::url( 'basic-firewall-storage' ) ),
+					esc_html__( 'Open the Storage screen', 'basic-firewall' )
+				)
+			);
+		}
+
+		return self::ok(
+			__( 'No Redis password is written in plain text', 'basic-firewall' ),
+			/* translators: the %env()% below is a literal token the firewall reads, not a placeholder. */
+			esc_html__( 'Every Redis connection either has no password or reads it from a %env()% token, which puts a name in the compiled file rather than the value.', 'basic-firewall' )
+		);
+	}
+
+	/**
+	 * Which recorded Redis connections have a literal password in the compiled file.
+	 *
+	 * @param array<string, string> $paths Property-access path => username.
+	 *
+	 * @return list<string> The paths, dotted, for a person.
+	 */
+	private static function plaintext_redis_passwords( array $paths ): array {
+		$contents = Plugin::instance()->compiled()->contents();
+
+		try {
+			$compiled = null === $contents ? null : Yaml::parse( $contents );
+		} catch ( \Throwable $e ) {
+			$compiled = null;
+		}
+
+		if ( ! is_array( $compiled ) ) {
+			return array();
+		}
+
+		$found = array();
+
+		foreach ( array_keys( $paths ) as $path ) {
+			preg_match_all( '/\[([^\]]*)\]/', $path, $segments );
+
+			$node = $compiled;
+
+			foreach ( $segments[1] as $segment ) {
+				$node = is_array( $node ) && array_key_exists( $segment, $node ) ? $node[ $segment ] : null;
+			}
+
+			// An ACL pair's password is its second half.
+			$password = is_array( $node ) ? ( array_values( $node )[1] ?? null ) : $node;
+
+			if ( Redis_Password::is_plaintext( $password ) ) {
+				$found[] = implode( '.', $segments[1] );
+			}
+		}
+
+		return $found;
 	}
 
 	/**

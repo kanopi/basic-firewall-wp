@@ -123,6 +123,24 @@ final class Exporter {
 			}
 		}
 
+		/*
+		 * The advanced YAML is free-form, so no schema path reaches inside
+		 * it. Its credentials are masked where they stand -- the rest of the
+		 * block, comments included, travels as typed -- and listed as
+		 * `advanced_yaml: <path>`. An import restores each one from the
+		 * receiving site's own block where that has the same credential at the
+		 * same place, as the Advanced screen does on save.
+		 */
+		if ( is_string( $document['advanced_yaml'] ?? null ) ) {
+			$masked = Advanced_Yaml_Secrets::mask( $document['advanced_yaml'] );
+
+			$document['advanced_yaml'] = $masked['text'];
+
+			foreach ( $masked['redacted'] as $path ) {
+				$redacted[] = 'advanced_yaml: ' . $path;
+			}
+		}
+
 		return array(
 			'document'      => $document,
 			'redacted'      => $redacted,
@@ -202,6 +220,13 @@ final class Exporter {
 				foreach ( $urls as $path ) {
 					$header .= '#   - ' . $path . "\n";
 				}
+			}
+
+			if ( array() !== array_filter( $redacted, static fn ( string $path ): bool => 0 === strpos( $path, 'advanced_yaml: ' ) ) ) {
+				$header .= "#\n# Entries starting advanced_yaml: are credentials in the Advanced YAML,\n"
+					. "# shown there as [redacted]. An import keeps the receiving site's own\n"
+					. "# value where its Advanced YAML has one at the same place, and drops\n"
+					. "# the key -- and says so -- where it does not.\n";
 			}
 
 			$header .= "#\n# An %env(NAME)% or %file(/path)% token is a reference rather than a\n"

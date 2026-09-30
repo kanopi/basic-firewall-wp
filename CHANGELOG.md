@@ -45,8 +45,77 @@ What changed since 1.0.0-rc.4 is below.
   that reach WordPress. Troubleshooting only, and off by default: it tells
   anybody who can make a request how the firewall is deployed.
 
+- **Rules that failed to construct, per path** (#41). The library skips a rule
+  whose constructor throws and carries on, so a rule failing only on the web
+  containers showed up nowhere. Both paths now record their firewall's
+  `getFailedRules()` as `bucket/Class:index` names (`failed_rules`; no
+  messages) in the saved report, `early-report`, the `status` summary and the
+  debug header. Sampled rather than asked on every request, because answering
+  builds every rule and so defeats the library's lazy construction: each path
+  asks with `BASIC_FIREWALL_DEBUG` on, on a request that failed open, or at
+  most once a minute per container (a marker file, one stat when not due).
+  The trade-off is that an intermittent failure can fall between samples.
+  `failed_rules_sampled` says why a request asked (`null` otherwise), and the
+  latest sample from each path is kept apart and shown by `early-report`
+  (`failed_rules_sample`) and `status` ("Failed rules (last sample)"). Any failed rule makes the request a new `failed-rules`
+  anomaly, which Site Health raises as critical in `block` or `exception` mode
+  and as recommended in `log` mode. Reports now also carry `anomalies`, every
+  anomaly a request had, most serious first.
+
+- **A `mismatch` anomaly** (#41). The report recorded the configured mode, the
+  mode each path ran and each path's view of the compiled file, but a
+  disagreement was not an anomaly, so the next ordinary request overwrote it.
+  It is now flagged when a path's mode differs from the one the last compile
+  wrote, or the compiled file's hash differs between the paths or from the last
+  compile's — the signature of a stale copy on a container that did not do the
+  compile — and kept in the anomaly slot; Site Health recommends a rebuild. A
+  panic file, `BASIC_FIREWALL_MODE` and lockdown are reported under
+  `mode.overrides` rather than flagged. The compile now records the hash prefix
+  and mode of what it wrote in its meta, and the early path records the
+  compiled file's hash prefix alongside its modification time.
+
+- **`BASIC_FIREWALL_REDIS_PASSWORD`** (#48): the password for every Redis
+  connection — block list storage and rate limit counters — supplied from
+  wp-config.php and injected at request time on both evaluation paths, the way
+  the `DB_*` credentials are. With it defined the compiled file holds no Redis
+  password; the compiler records only where each connection's `auth` belongs,
+  in the compile metadata and a `redis-auth-paths.json` sidecar (paths and ACL
+  usernames, never a password). The Storage screen shows the field as set in
+  wp-config.php while it is defined, and the rate limit editor says it is
+  overridden.
+- **Site Health: "Basic Firewall Redis password"** (#48). *Recommended* when a
+  Redis password is written into the compiled file in plain text (define the
+  constant or use `%env()%`), or when the constant was defined after the last
+  rebuild; *critical* when the file was built with the constant and it has
+  since been removed.
+
+### Changed
+
+- **`fail-open (early|runner)` log lines are rate-limited** (#41). They were
+  written on every request, so a persistent failure on a busy site logged one
+  line per request. The first is still always written; after that, at most one
+  line a minute per exception class and file:line, and the next line written
+  says how many were held back (`… (N more since <time> UTC)`). The state is
+  kept in a marker file in the private directory, as the `not-evaluated`
+  warning's is, so the limit holds across workers and containers; a marker
+  that cannot be written means logging every time. The report still records
+  every failure.
+
 ### Fixed
 
+- **The block list screen and WP-CLI resolve a `%env()%` Redis password**
+  rather than sending the token itself as the password (#48).
+
+- **The early path no longer requires a second Composer autoloader when the
+  library is already loaded** (#44). A site whose `wp-config.php` required one
+  autoloader above the snippet while a different `vendor/` sat beside the
+  WordPress root had that second one required too, so classes could resolve
+  from either tree. "Library already loaded" is now asked before the fixed
+  site locations: the order is the plugin's own `vendor/`, the `autoloader`
+  option, `BASIC_FIREWALL_AUTOLOADER`, a library already loaded (`loaded`),
+  then `dirname( ABSPATH ) . '/vendor'` (`site`). The plugin's scoped copy
+  still wins, and a named autoloader that cannot be read still stops the
+  search with `autoloader-unreadable`.
 - **A firewall failure that fails open is now logged.** Anything other than a
   verdict that made either evaluation path let a request through — the library
   failing to start, or throwing partway through evaluating — was recorded only
@@ -58,6 +127,34 @@ What changed since 1.0.0-rc.4 is below.
 - **An early path that is called and does not evaluate is logged**, at most
   once every 15 minutes per reason across every web container (a marker file in
   the private directory): `Basic Firewall [warning]: not-evaluated (early)`.
+- **Uninstall removes the runtime sidecar from a pre-existing private
+  directory** (#43). Where the `basic_firewall_private_path` filter names a
+  directory the plugin did not create, uninstall removes only the plugin's own
+  files from it, and `runtime.json` (written when the firewall is switched off
+  in the admin or its mode pinned) was missing from that list, so it outlived
+  the plugin. A directory the plugin created was always removed whole.
+
+### Security
+
+- **Credentials in the Advanced YAML are no longer shown or exported** (#47).
+  The box was a free-form pass-through, outside the redaction #17 and #23
+  applied, so a Redis password, API key, token or DSN typed there went back
+  into the page and into every export in the clear. A value under a
+  credential-shaped key (`*password*`, `*secret*`, `*token*`, `auth`,
+  `api_key` and a few more; never a bare `key`), a credential header, and the
+  password in a URL are now shown as `[redacted]`, and `%env()%`/`%file()%`
+  tokens stay visible. A placeholder saved back unchanged keeps the stored
+  value; one that moved, or whose host changed beside it, refuses the save
+  rather than storing `[redacted]`. An export masks them and lists each as
+  `advanced_yaml: <path>`; an import restores them from the receiving site's
+  own block or drops and reports them, and names any credential an imported
+  block carries in the clear. The Compiled screen hides them too.
+- **The Redis password can be kept out of the compiled file** (#48), which
+  lives under uploads and is web-readable on some servers: define
+  `BASIC_FIREWALL_REDIS_PASSWORD` (injected at runtime, never written) or use a
+  `%env()%` token (only the name is written). A password typed literally is
+  still written, because the wp-config.php path cannot read the settings, and
+  Site Health now recommends against it.
 
 ## [1.0.0-rc.4]
 
