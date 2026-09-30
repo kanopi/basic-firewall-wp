@@ -286,6 +286,80 @@ final class EarlyDiagnosticsTest extends TestCase {
 	}
 
 	/**
+	 * The early path samples failed rules, rather than asking on every request (#41).
+	 *
+	 * Asking builds every rule, undoing the library's lazy construction, so
+	 * an ordinary request with no sample due must never ask.
+	 */
+	public function test_failed_rules_are_sampled_on_the_early_path(): void {
+		$options  = basic_firewall_options( array( 'private_path' => $this->private ) );
+		$firewall = new class() {
+			/**
+			 * How many times the library was asked.
+			 *
+			 * @var int
+			 */
+			public int $asked = 0;
+
+			/**
+			 * Count the question.
+			 *
+			 * @return list<array{bucket: string, plugin: string, error: string}>
+			 */
+			public function getFailedRules(): array { // phpcs:ignore WordPress.NamingConventions.ValidFunctionName.MethodNameInvalid -- the library's method name.
+				++$this->asked;
+
+				return array(
+					array(
+						'bucket' => 'block',
+						'plugin' => 'Url:0',
+						'error'  => 'broken',
+					),
+				);
+			}
+		};
+
+		// The throttle lets the first request through.
+		$GLOBALS['basic_firewall_early'] = array( 'called' => true );
+
+		$this->assertTrue( basic_firewall_sample_failed_rules( $firewall, $options ) );
+		$this->assertSame( array( 'block/Url:0' ), $GLOBALS['basic_firewall_early']['failed_rules'] );
+		$this->assertSame( 'interval', $GLOBALS['basic_firewall_early']['failed_rules_sampled'] );
+		$this->assertFileExists( $this->private . '/.sampled-failed-rules-early' );
+
+		// Ordinary requests within the interval never ask.
+		for ( $i = 0; $i < 5; $i++ ) {
+			$GLOBALS['basic_firewall_early'] = array( 'called' => true );
+
+			$this->assertFalse( basic_firewall_sample_failed_rules( $firewall, $options ) );
+			$this->assertNull( $GLOBALS['basic_firewall_early']['failed_rules'] );
+			$this->assertNull( $GLOBALS['basic_firewall_early']['failed_rules_sampled'] );
+		}
+
+		$this->assertSame( 1, $firewall->asked, 'An ordinary request built every rule to ask.' );
+		$this->assertNull( basic_firewall_debug_report()['failed_rules'] );
+
+		// Debug and a failure ask regardless -- once per request.
+		$this->assertTrue( basic_firewall_sample_failed_rules( $firewall, $options, 'failure' ) );
+		$this->assertFalse( basic_firewall_sample_failed_rules( $firewall, $options, 'failure' ), 'One request asked twice.' );
+		$this->assertSame( 'failure', basic_firewall_debug_report()['failed_rules_sampled'] );
+
+		$GLOBALS['basic_firewall_early'] = array( 'called' => true );
+
+		$this->assertTrue( basic_firewall_sample_failed_rules( $firewall, $options, 'debug' ) );
+		$this->assertSame( 3, $firewall->asked );
+
+		// Once the interval has passed, the next ordinary request asks.
+		touch( $this->private . '/.sampled-failed-rules-early', time() - 61 ); // phpcs:ignore WordPress.WP.AlternativeFunctions -- ageing the marker.
+		clearstatcache();
+
+		$GLOBALS['basic_firewall_early'] = array( 'called' => true );
+
+		$this->assertTrue( basic_firewall_sample_failed_rules( $firewall, $options ) );
+		$this->assertSame( 4, $firewall->asked );
+	}
+
+	/**
 	 * What was logged.
 	 */
 	private function logged(): string {

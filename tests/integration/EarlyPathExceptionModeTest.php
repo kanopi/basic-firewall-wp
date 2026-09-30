@@ -1177,9 +1177,22 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 	public function test_failed_rules_on_the_early_path_are_recorded(): void {
 		$this->given_rule( 'block', 'block' );
 
+		$marker = Plugin::instance()->paths()->base() . '/.sampled-failed-rules-early';
+
+		wp_delete_file( $marker );
+
+		// The first request samples: the throttle lets it through.
 		$healthy = $this->request( '/bfw-early-other' );
 
 		$this->assertSame( 'none', $healthy['failed_rules'], 'A firewall whose rules all built reported a failed one.' );
+		$this->assertSame( 'interval', $healthy['sampled'] );
+		$this->assertFileExists( $marker );
+
+		// The next, within the minute, does not ask at all.
+		$ordinary = $this->request( '/bfw-early-other', array( 'X-Bfw-Test-Failed-Rule' => '1' ) );
+
+		$this->assertSame( 'unknown', $ordinary['failed_rules'], 'An ordinary request built every rule to ask.' );
+		$this->assertSame( 'no', $ordinary['sampled'] );
 
 		$broken = $this->request(
 			'/bfw-early-match',
@@ -1191,6 +1204,7 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 
 		$this->assertSame( 200, $broken['status'], 'The fixture\'s rule still ran, so nothing failed to construct.' );
 		$this->assertSame( 'block/Reputation:0', $broken['failed_rules'] );
+		$this->assertSame( 'debug', $broken['sampled'], 'BASIC_FIREWALL_DEBUG did not sample regardless of the interval.' );
 		$this->assertSame( 'yes', $broken['evaluated'] );
 
 		$report = json_decode( $broken['debug'], true );
@@ -1201,6 +1215,15 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 
 		// Not evaluated here, so nothing to say rather than nothing failed.
 		$this->assertSame( 'unknown', $this->request( '/bfw-early-other', array( 'X-Bfw-Test-Plugin' => 'bare' ) )['failed_rules'] );
+
+		// A failure samples even with no sample due.
+		$failed = $this->request( '/bfw-early-other', array( 'X-Bfw-Test-Throw' => 'evaluate' ) );
+
+		$this->assertSame( 'failure', $failed['sampled'] );
+		$this->assertSame( 'none', $failed['failed_rules'] );
+
+		wp_delete_file( $marker );
+		Diagnostics::reset_throttle();
 	}
 
 	/**
@@ -1381,7 +1404,7 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 	 * @param string $plugin     `bare` for the copy with no vendor/, or empty for this one.
 	 * @param string $autoloader The fixture's autoloader scenario.
 	 *
-	 * @return array{status: int, body: string, type: string, cache: string, location: string, retry: string, stashed: string, outcome: string, reason: string, evaluated: string, autoloader: string, autoloader_file: string, autoloader_named: string, custom: string, site: string, failed_rules: string, mode: string, panic: string, hash: string, pragma: string, expires: string, surrogate: string, cdn: string, debug: string}
+	 * @return array{status: int, body: string, type: string, cache: string, location: string, retry: string, stashed: string, outcome: string, reason: string, evaluated: string, autoloader: string, autoloader_file: string, autoloader_named: string, custom: string, site: string, failed_rules: string, sampled: string, mode: string, panic: string, hash: string, pragma: string, expires: string, surrogate: string, cdn: string, debug: string}
 	 */
 	private function request_with_autoloader( string $plugin, string $autoloader ): array {
 		$response = $this->request(
@@ -1403,7 +1426,7 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 	 * @param string                $path    Path to request.
 	 * @param array<string, string> $headers Request headers.
 	 *
-	 * @return array{status: int, body: string, type: string, cache: string, location: string, retry: string, stashed: string, outcome: string, reason: string, evaluated: string, autoloader: string, autoloader_file: string, autoloader_named: string, custom: string, site: string, failed_rules: string, mode: string, panic: string, hash: string, pragma: string, expires: string, surrogate: string, cdn: string, debug: string}
+	 * @return array{status: int, body: string, type: string, cache: string, location: string, retry: string, stashed: string, outcome: string, reason: string, evaluated: string, autoloader: string, autoloader_file: string, autoloader_named: string, custom: string, site: string, failed_rules: string, sampled: string, mode: string, panic: string, hash: string, pragma: string, expires: string, surrogate: string, cdn: string, debug: string}
 	 */
 	private function request( string $path, array $headers = array() ): array {
 		$response = wp_remote_get(
@@ -1436,6 +1459,7 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 			'custom'           => (string) wp_remote_retrieve_header( $response, 'x-early-custom-loaded' ),
 			'site'             => (string) wp_remote_retrieve_header( $response, 'x-early-site-loaded' ),
 			'failed_rules'     => (string) wp_remote_retrieve_header( $response, 'x-early-failed-rules' ),
+			'sampled'          => (string) wp_remote_retrieve_header( $response, 'x-early-failed-rules-sampled' ),
 			'mode'             => (string) wp_remote_retrieve_header( $response, 'x-early-mode' ),
 			'panic'            => (string) wp_remote_retrieve_header( $response, 'x-early-panic' ),
 			'hash'             => (string) wp_remote_retrieve_header( $response, 'x-early-compiled-hash' ),

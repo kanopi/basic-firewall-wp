@@ -1352,6 +1352,24 @@ final class Site_Health {
 					}
 				}
 
+				/*
+				 * Said, because it is sampled: asking builds every rule, so it
+				 * is asked at most once a minute per server, with
+				 * BASIC_FIREWALL_DEBUG, or on a failure -- not on every
+				 * request, and a report without it is not a clean one.
+				 */
+				$sampled = (string) ( $early['failed_rules_sampled'] ?? $runner['failed_rules_sampled'] ?? '' );
+
+				if ( '' !== $sampled ) {
+					$lines .= '<li>' . esc_html(
+						sprintf(
+							/* translators: %s: why the request was sampled: interval, debug or failure. */
+							__( 'Found on a sampled request (%s). The rules are checked at most once a minute per web server, with BASIC_FIREWALL_DEBUG on, or when a request fails — not on every request.', 'basic-firewall' ),
+							$sampled
+						)
+					) . '</li>';
+				}
+
 				$body = '<p>' . $when . esc_html__( 'was evaluated by a firewall that could not construct some of its rules, so those rules did not run. The library skips a rule whose constructor fails rather than stopping, so everything else went on working — which is why nothing else looks wrong.', 'basic-firewall' ) . '</p>'
 					. '<ul>' . $lines . '</ul>'
 					. '<p>' . esc_html__( 'A rule that fails on web requests and not here usually depends on something only the web servers lack: a storage or reputation host they cannot reach, a PHP extension, a file. The library logs each one with its reason, as "Firewall rule could not be constructed and is NOT active".', 'basic-firewall' ) . '</p>'

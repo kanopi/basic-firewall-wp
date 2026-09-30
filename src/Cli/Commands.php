@@ -326,6 +326,10 @@ final class Commands {
 				'value'   => Diagnostics::summary( Diagnostics::last_anomaly() ),
 			),
 			array(
+				'setting' => 'Failed rules (last sample)',
+				'value'   => Diagnostics::sample_summary( Diagnostics::last_sample() ),
+			),
+			array(
 				'setting' => 'Proxy posture',
 				'value'   => $this->proxy_summary(),
 			),
@@ -367,8 +371,9 @@ final class Commands {
 	 * last anomalous one (a fail-open, a verdict handed on instead of
 	 * answered, rules a firewall could not construct, an early path that did
 	 * not evaluate, a mode or compiled file that does not match the last
-	 * compile) -- and this prints both in
-	 * full. Nothing in them is secret: no query strings, cookies or client
+	 * compile) -- and this prints both in full, with the latest sample of
+	 * the rules each path could not construct (sampled at most once a minute
+	 * per container, since asking builds every rule). Nothing in them is secret: no query strings, cookies or client
 	 * addresses.
 	 *
 	 * ## OPTIONS
@@ -394,8 +399,13 @@ final class Commands {
 	 */
 	public function early_report( array $args, array $assoc_args ): void {
 		$reports = array(
-			'last_request' => Diagnostics::last(),
-			'last_anomaly' => Diagnostics::last_anomaly(),
+			'last_request'        => Diagnostics::last(),
+			'last_anomaly'        => Diagnostics::last_anomaly(),
+
+			// Most requests do not ask for failed rules, so a report's
+			// `failed_rules: null` means "not sampled"; this is the latest
+			// answer from each path.
+			'failed_rules_sample' => Diagnostics::last_sample(),
 		);
 
 		if ( 'yaml' === ( $assoc_args['format'] ?? 'json' ) ) {

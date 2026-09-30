@@ -53,6 +53,7 @@ final class DiagnosticsTest extends Settings_Snapshot {
 			'server'    => $_SERVER,
 			'last'      => get_transient( Diagnostics::LAST ),
 			'anomaly'   => get_transient( Diagnostics::ANOMALY ),
+			'sample'    => get_transient( Diagnostics::SAMPLE ),
 			'error_log' => (string) ini_get( 'error_log' ),
 		);
 
@@ -77,6 +78,7 @@ final class DiagnosticsTest extends Settings_Snapshot {
 		foreach ( array(
 			Diagnostics::LAST    => 'last',
 			Diagnostics::ANOMALY => 'anomaly',
+			Diagnostics::SAMPLE  => 'sample',
 		) as $transient => $key ) {
 			if ( false === $this->saved[ $key ] ) {
 				delete_transient( $transient );
@@ -241,13 +243,113 @@ final class DiagnosticsTest extends Settings_Snapshot {
 		$this->assertSame( array( 'challenge/Reputation:0' ), $report['runner']['failed_rules'] );
 		$this->assertNull( $report['early']['failed_rules'], 'An early path that built no firewall reported an empty list.' );
 		$this->assertStringNotContainsString( 'upstream', (string) wp_json_encode( $report ), 'The constructor\'s message reached the report.' );
-		$this->assertStringContainsString( 'runner failed rules: 1 (challenge/Reputation:0)', Diagnostics::summary( $report ) );
+		$this->assertStringContainsString( 'runner failed rules: 1 (challenge/Reputation:0; sampled: interval)', Diagnostics::summary( $report ) );
+		$this->assertSame( 'interval', $report['runner']['failed_rules_sampled'] );
 
-		// A healthy firewall records an empty list, which is not an anomaly.
+		// The sample is kept on its own, for status and early-report.
+		$sample = Diagnostics::last_sample();
+
+		$this->assertSame( array( 'challenge/Reputation:0' ), $sample['runner']['failed_rules'] ?? null );
+		$this->assertStringContainsString( 'runner: 1 failed: challenge/Reputation:0', Diagnostics::sample_summary( $sample ) );
+
+		// The next request, within the interval, is not sampled: null, not "none failed".
 		Runner::reset();
 
 		$this->evaluate_compiled( Plugin::instance()->paths()->compiled_file(), Request::create( '/nothing-matches-this' ) );
 
+		$this->assertNull( Runner::state()['failed_rules'], 'A request within the interval built every rule to ask.' );
+		$this->assertNull( Runner::state()['failed_rules_sampled'] );
+
+		// Once it is due, a healthy firewall records an empty list, which is not an anomaly.
+		Diagnostics::reset_throttle();
+		Runner::reset();
+
+		$this->evaluate_compiled( Plugin::instance()->paths()->compiled_file(), Request::create( '/nothing-matches-this' ) );
+
+		$this->assertSame( array(), Runner::state()['failed_rules'] );
+		$this->assertSame( 'interval', Runner::state()['failed_rules_sampled'] );
+	}
+
+	/**
+	 * Failed rules are sampled, not asked on every request (#41).
+	 *
+	 * Asking builds every rule, which undoes the library's lazy construction:
+	 * a visitor an early rule settled would pay for the whole ruleset.
+	 */
+	public function test_failed_rules_are_sampled_not_asked_every_request(): void {
+		$firewall = new class() {
+			/**
+			 * How many times the library was asked.
+			 *
+			 * @var int
+			 */
+			public int $asked = 0;
+
+			/**
+			 * Count the question.
+			 *
+			 * @return list<array{bucket: string, plugin: string, error: string}>
+			 */
+			public function getFailedRules(): array { // phpcs:ignore WordPress.NamingConventions.ValidFunctionName.MethodNameInvalid -- the library's method name.
+				++$this->asked;
+
+				return array();
+			}
+		};
+
+		// The throttle lets the first one through.
+		$this->assertSame( 'interval', Diagnostics::sample_failed_rules( $firewall, null )['sampled'] );
+		$this->assertSame( 1, $firewall->asked );
+
+		// An ordinary request within the interval never asks.
+		for ( $i = 0; $i < 5; $i++ ) {
+			$this->assertSame(
+				array(
+					'failed_rules' => null,
+					'sampled'      => null,
+				),
+				Diagnostics::sample_failed_rules( $firewall, null )
+			);
+		}
+
+		$this->assertSame( 1, $firewall->asked, 'An ordinary request built every rule to ask.' );
+
+		// BASIC_FIREWALL_DEBUG and a failure ask regardless.
+		$this->assertSame( 'debug', Diagnostics::sample_failed_rules( $firewall, 'debug' )['sampled'] );
+		$this->assertSame( 'failure', Diagnostics::sample_failed_rules( $firewall, 'failure' )['sampled'] );
+		$this->assertSame( 3, $firewall->asked );
+
+		// And once the interval has passed, the next ordinary request asks.
+		touch( Plugin::instance()->paths()->base() . '/.sampled-failed-rules-runner', time() - Diagnostics::SAMPLE_INTERVAL - 1 ); // phpcs:ignore WordPress.WP.AlternativeFunctions -- ageing the marker.
+		clearstatcache();
+
+		$this->assertSame( 'interval', Diagnostics::sample_failed_rules( $firewall, null )['sampled'] );
+		$this->assertSame( 4, $firewall->asked );
+	}
+
+	/**
+	 * A runner fail-open samples failed rules even when no sample is due (#41).
+	 */
+	public function test_a_runner_fail_open_samples_failed_rules(): void {
+		$this->given_exception_mode();
+
+		// Not due.
+		touch( Plugin::instance()->paths()->base() . '/.sampled-failed-rules-runner' ); // phpcs:ignore WordPress.WP.AlternativeFunctions -- the marker, as a recent sample leaves it.
+		clearstatcache();
+
+		$request = new class() extends Request {
+			/**
+			 * Fail partway through evaluating.
+			 *
+			 * @throws \LogicException Always.
+			 */
+			public function getPathInfo(): string {
+				throw new \LogicException( 'broke while sampling was not due' );
+			}
+		};
+
+		$this->assertTrue( $this->evaluate_compiled( Plugin::instance()->paths()->compiled_file(), $request ) );
+		$this->assertSame( 'failure', Runner::state()['failed_rules_sampled'] );
 		$this->assertSame( array(), Runner::state()['failed_rules'] );
 	}
 

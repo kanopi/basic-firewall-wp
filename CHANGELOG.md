@@ -41,7 +41,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   containers showed up nowhere. Both paths now record their firewall's
   `getFailedRules()` as `bucket/Class:index` names (`failed_rules`; no
   messages) in the saved report, `early-report`, the `status` summary and the
-  debug header. Any failed rule makes the request a new `failed-rules`
+  debug header. Sampled rather than asked on every request, because answering
+  builds every rule and so defeats the library's lazy construction: each path
+  asks with `BASIC_FIREWALL_DEBUG` on, on a request that failed open, or at
+  most once a minute per container (a marker file, one stat when not due).
+  The trade-off is that an intermittent failure can fall between samples.
+  `failed_rules_sampled` says why a request asked (`null` otherwise), and the
+  latest sample from each path is kept apart and shown by `early-report`
+  (`failed_rules_sample`) and `status` ("Failed rules (last sample)"). Any failed rule makes the request a new `failed-rules`
   anomaly, which Site Health raises as critical in `block` or `exception` mode
   and as recommended in `log` mode. Reports now also carry `anomalies`, every
   anomaly a request had, most serious first.

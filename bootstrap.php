@@ -308,11 +308,17 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 			 * on (#41). A rule that fails only on the web containers -- a
 			 * storage host only they cannot reach, an extension only the CLI
 			 * image has -- showed up nowhere a status screen could see.
-			 * Asked before evaluating, so a request the library then refuses
-			 * and exits on is still reported; building the rules here is
-			 * work evaluate() reuses rather than repeats.
+			 *
+			 * Sampled, not asked on every request: the library can only
+			 * answer by building every rule, which undoes its lazy
+			 * construction -- CRS, GeoIP readers and the rest built for a
+			 * visitor an earlier rule had already settled. So it is asked
+			 * with BASIC_FIREWALL_DEBUG on, at most once a minute per
+			 * container otherwise, and on a request that fails (below).
+			 * Asked before evaluating when it is asked, so a request the
+			 * library then refuses and exits on is still reported.
 			 */
-			$GLOBALS['basic_firewall_early']['failed_rules'] = basic_firewall_failed_rules( $firewall );
+			basic_firewall_sample_failed_rules( $firewall, $options, basic_firewall_debug_enabled() ? 'debug' : null );
 
 			/*
 			 * The request is built here rather than left to the library, so the
@@ -356,7 +362,15 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 			 * This used to allow all of it. The mu-plugin never evaluated again
 			 * because BASIC_FIREWALL_EVALUATED was already defined, so a site in
 			 * `exception` mode on this path refused nobody at all.
+			 *
+			 * A genuine failure also samples the rules that failed to
+			 * construct, whether or not a sample was due: the cost of asking
+			 * does not matter on this request, and the answer matters most.
 			 */
+			if ( isset( $firewall ) && null === basic_firewall_outcome_kind( $e ) ) {
+				basic_firewall_sample_failed_rules( $firewall, $options, 'failure' );
+			}
+
 			return basic_firewall_answer_outcome( $e, $request, $options );
 		}
 	}
@@ -669,6 +683,60 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 	}
 
 	/**
+	 * Ask a firewall for its failed rules, when this request is one that samples.
+	 *
+	 * Records `failed_rules` (the names, or null when not asked) and
+	 * `failed_rules_sampled` (why it was asked: `debug`, `interval` or
+	 * `failure`, or null) in the bootstrap's report. A request already
+	 * sampled is not asked again.
+	 *
+	 * `interval` is at most once every `failed_rules_interval` seconds (60)
+	 * per container, remembered in a marker file's modification time in the
+	 * private directory, or the system temporary directory without one.
+	 * Checking costs one stat. A marker that cannot be written means asking
+	 * every time: a slower request, never a missing report.
+	 *
+	 * @param object               $firewall The firewall.
+	 * @param array<string, mixed> $options  Bootstrap options.
+	 * @param string|null          $reason   `debug` or `failure` to ask regardless, or null to ask only when the interval is due.
+	 *
+	 * @return bool True when it asked.
+	 */
+	function basic_firewall_sample_failed_rules( $firewall, array $options, $reason = null ) {
+		if ( ! empty( $GLOBALS['basic_firewall_early']['failed_rules_sampled'] ) ) {
+			return false;
+		}
+
+		$GLOBALS['basic_firewall_early']['failed_rules']         = $GLOBALS['basic_firewall_early']['failed_rules'] ?? null;
+		$GLOBALS['basic_firewall_early']['failed_rules_sampled'] = null;
+
+		if ( null === $reason ) {
+			$interval = isset( $options['failed_rules_interval'] ) && is_numeric( $options['failed_rules_interval'] ) ? max( 0, (int) $options['failed_rules_interval'] ) : 60;
+			$private  = basic_firewall_private_path( $options );
+			$marker   = null !== $private
+				? $private . '/.sampled-failed-rules-early'
+				: rtrim( sys_get_temp_dir(), '/' ) . '/basic-firewall-sampled-failed-rules-' . md5( (string) $options['plugin_path'] );
+
+			// phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- no marker yet is the ordinary answer.
+			$sampled = @filemtime( $marker );
+
+			if ( false !== $sampled && time() - $sampled < $interval ) {
+				return false;
+			}
+
+			// phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, WordPress.WP.AlternativeFunctions -- best effort, and WP_Filesystem does not exist on this path.
+			@touch( $marker );
+
+			$reason = 'interval';
+		}
+
+		$GLOBALS['basic_firewall_early']['failed_rules']         = basic_firewall_failed_rules( $firewall );
+		$GLOBALS['basic_firewall_early']['failed_rules_sampled'] = (string) $reason;
+
+		return true;
+	}
+
+	/**
 	 * The rules a firewall could not construct, by name, or null when it cannot say.
 	 *
 	 * Each is `bucket/Class:index` -- the bucket it was configured in and the
@@ -736,19 +804,20 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 		$origin = isset( $early['failure_origin'] ) ? (string) $early['failure_origin'] : '';
 
 		return array(
-			'called'       => ! empty( $early['called'] ),
-			'evaluated'    => ! empty( $early['evaluated'] ),
-			'reason'       => $early['reason'] ?? null,
-			'autoloader'   => $early['autoloader']['source'] ?? null,
-			'library'      => $early['library'] ?? null,
-			'mode'         => $early['mode'] ?? null,
-			'outcome'      => $early['outcome'] ?? null,
-			'failure'      => isset( $early['failure'] ) ? strtok( (string) $early['failure'], ':' ) . ( '' !== $origin ? ' @ ' . basename( $origin ) : '' ) : null,
-			'refused'      => ! empty( $early['refused'] ),
-			'responder'    => ! empty( $early['responder'] ),
+			'called'               => ! empty( $early['called'] ),
+			'evaluated'            => ! empty( $early['evaluated'] ),
+			'reason'               => $early['reason'] ?? null,
+			'autoloader'           => $early['autoloader']['source'] ?? null,
+			'library'              => $early['library'] ?? null,
+			'mode'                 => $early['mode'] ?? null,
+			'outcome'              => $early['outcome'] ?? null,
+			'failure'              => isset( $early['failure'] ) ? strtok( (string) $early['failure'], ':' ) . ( '' !== $origin ? ' @ ' . basename( $origin ) : '' ) : null,
+			'refused'              => ! empty( $early['refused'] ),
+			'responder'            => ! empty( $early['responder'] ),
 
-			// Names only, and null when this path built no firewall.
-			'failed_rules' => isset( $early['failed_rules'] ) && is_array( $early['failed_rules'] ) ? array_values( array_map( 'strval', $early['failed_rules'] ) ) : null,
+			// Names only, and null when this request did not sample them.
+			'failed_rules'         => isset( $early['failed_rules'] ) && is_array( $early['failed_rules'] ) ? array_values( array_map( 'strval', $early['failed_rules'] ) ) : null,
+			'failed_rules_sampled' => isset( $early['failed_rules_sampled'] ) ? (string) $early['failed_rules_sampled'] : null,
 		);
 	}
 
@@ -1153,31 +1222,34 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 		$defaults = array(
 			// Absolute path to the private directory. The Site Health screen
 			// prints the right value; discovered by glob when absent.
-			'private_path'       => null,
+			'private_path'          => null,
 			// Absolute path to the plugin directory.
-			'plugin_path'        => __DIR__,
+			'plugin_path'           => __DIR__,
 			// Absolute path to the site's Composer autoloader, for a site
 			// whose vendor-dir is not beside the WordPress root. The plugin's
 			// own vendor/ still wins; see basic_firewall_resolve_autoloader().
 			// BASIC_FIREWALL_AUTOLOADER says the same once per environment.
-			'autoloader'         => null,
+			'autoloader'            => null,
 			// Whether to run at all.
-			'enabled'            => ! ( defined( 'BASIC_FIREWALL_ENABLED' ) && false === BASIC_FIREWALL_ENABLED ),
+			'enabled'               => ! ( defined( 'BASIC_FIREWALL_ENABLED' ) && false === BASIC_FIREWALL_ENABLED ),
 			// Addresses permitted to declare the client address.
-			'trusted_proxies'    => defined( 'BASIC_FIREWALL_TRUSTED_PROXIES' ) ? BASIC_FIREWALL_TRUSTED_PROXIES : array(),
+			'trusted_proxies'       => defined( 'BASIC_FIREWALL_TRUSTED_PROXIES' ) ? BASIC_FIREWALL_TRUSTED_PROXIES : array(),
 			// Directories a %file() token may read a secret from.
-			'secret_directories' => defined( 'BASIC_FIREWALL_SECRET_DIRECTORIES' ) ? BASIC_FIREWALL_SECRET_DIRECTORIES : array(),
+			'secret_directories'    => defined( 'BASIC_FIREWALL_SECRET_DIRECTORIES' ) ? BASIC_FIREWALL_SECRET_DIRECTORIES : array(),
 			// Runtime overrides, as Symfony property-access paths.
-			'overrides'          => array(),
+			'overrides'             => array(),
 			// True on a multisite network, where this path steps aside for
 			// the mu-plugin. MULTISITE and SUBDOMAIN_INSTALL say so as well.
-			'multisite'          => false,
+			'multisite'             => false,
 			// Seconds a "did not evaluate" warning stays quiet once logged.
 			// See basic_firewall_warn_once().
-			'warn_interval'      => 900,
+			'warn_interval'         => 900,
+			// Seconds between two requests that ask the firewall for the
+			// rules it could not construct. See basic_firewall_sample_failed_rules().
+			'failed_rules_interval' => 60,
 			// Seconds the same fail-open stays quiet once logged, counting
 			// the ones held back. See basic_firewall_warn_throttled().
-			'fail_open_interval' => 60,
+			'fail_open_interval'    => 60,
 		);
 
 		return array_merge( $defaults, $options );

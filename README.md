@@ -443,7 +443,8 @@ it did not, which autoloader and library copy it used, the verdict it reached,
 any failure (class, message and file:line), and whether it handed a verdict on;
 what the runner itself did; the mode each path's firewall was actually in; the
 rules each path's firewall could not construct (`failed_rules`, as
-`bucket/Class:index` — names only, `null` when that path built no firewall); the
+`bucket/Class:index` — names only — with `failed_rules_sampled` saying why this
+request asked; see below); the
 compiled file's path, modification time and a hash prefix, as each path saw it;
 and the cache backend on each path. Two are kept: the last request, and the last
 **anomalous** one, so ordinary traffic does not overwrite the one worth reading.
@@ -457,6 +458,19 @@ and the cache backend on each path. Two are kept: the last request, and the last
 | `failed-rules` | A firewall either path built could not construct one or more rules. The library skips such a rule and carries on, so part of the configuration was not enforced on that request — and a rule that fails only on the web containers (a storage or reputation host only they cannot reach, a missing extension) shows up nowhere else. |
 | `not-evaluated` | The early path was called and did not evaluate, for a reason other than `disabled`, `switched-off` or `deferred-login`. |
 | `mismatch` | A path ran in a mode other than the one last compiled, or the compiled file differed between the paths or from the last compile's hash — the signature of a stale copy of the file on a web container that did not do the compile. Listed under `mismatch`. |
+
+**Failed rules are sampled, not checked on every request.** The library can
+only say which rules failed to construct by constructing all of them, which
+undoes its lazy construction: every visitor would pay for CRS, GeoIP readers
+and the rest even when an earlier rule settled the request. So each path asks
+only with `BASIC_FIREWALL_DEBUG` on (`debug`), on a request that failed open
+(`failure`), or at most once a minute per web container otherwise
+(`interval`, kept in a `.sampled-failed-rules-*` marker file in the private
+directory — one stat when not due). The trade-off: a rule that fails
+intermittently can be missed between samples. On any other request
+`failed_rules` is `null`, meaning "not asked", not "none failed"; the latest
+sample from each path is kept on its own, and `early-report`
+(`failed_rules_sample`) and `status` ("Failed rules (last sample)") show it.
 
 For `mismatch`, the expected mode is the one the last compile wrote into the
 file (so the advanced YAML and `BASIC_FIREWALL_MODE` count), recorded with the
@@ -516,7 +530,7 @@ with the compact report as JSON:
 
 ```bash
 curl -sI "https://example.com/some-path/?nocache=$RANDOM" | grep -i x-basic-firewall-early
-# X-Basic-Firewall-Early: {"early":{"called":true,"evaluated":true,"reason":null,"autoloader":"option","library":"unscoped","mode":"exception","outcome":null,"failure":null,"refused":false,"responder":true,"failed_rules":[]},"runner":{...}}
+# X-Basic-Firewall-Early: {"early":{"called":true,"evaluated":true,"reason":null,"autoloader":"option","library":"unscoped","mode":"exception","outcome":null,"failure":null,"refused":false,"responder":true,"failed_rules":[],"failed_rules_sampled":"debug"},"runner":{...}}
 ```
 
 It carries no paths beyond a file name and no message text, but it does tell

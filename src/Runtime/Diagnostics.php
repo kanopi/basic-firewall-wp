@@ -74,6 +74,16 @@ final class Diagnostics {
 	public const RECENT = 6 * HOUR_IN_SECONDS;
 
 	/**
+	 * Transient holding the most recent failed-rules sample from each path.
+	 */
+	public const SAMPLE = 'basic_firewall_failed_rules_sample';
+
+	/**
+	 * The shortest gap between two requests that sample failed rules, per container, in seconds.
+	 */
+	public const SAMPLE_INTERVAL = 60;
+
+	/**
 	 * How long the same fail-open stays out of the log once written, in seconds.
 	 */
 	public const FAIL_OPEN_INTERVAL = 60;
@@ -150,6 +160,9 @@ final class Diagnostics {
 			if ( self::may_write( 'last' ) ) {
 				set_transient( self::LAST, $report, self::TTL );
 			}
+
+			// Unthrottled: sampling is throttled already.
+			self::save_sample( $report );
 		} catch ( \Throwable $e ) {
 			return;
 		}
@@ -196,7 +209,7 @@ final class Diagnostics {
 			wp_delete_file( self::marker( $slot ) );
 		}
 
-		foreach ( (array) glob( Plugin::instance()->paths()->base() . '/.warned-fail-open-*' ) as $marker ) {
+		foreach ( array_merge( (array) glob( Plugin::instance()->paths()->base() . '/.warned-fail-open-*' ), (array) glob( Plugin::instance()->paths()->base() . '/.sampled-failed-rules-*' ) ) as $marker ) {
 			if ( is_string( $marker ) ) {
 				wp_delete_file( $marker );
 			}
@@ -454,6 +467,121 @@ final class Diagnostics {
 	}
 
 	/**
+	 * Ask a firewall for its failed rules, when this request is one that samples.
+	 *
+	 * The library can only answer by constructing every rule, which undoes
+	 * its lazy construction: a visitor an early rule settled would pay for
+	 * CRS, GeoIP readers and every other rule being built. So the runner asks
+	 * with BASIC_FIREWALL_DEBUG on (`debug`), on a request that failed open
+	 * (`failure`), and otherwise at most once every SAMPLE_INTERVAL seconds
+	 * per container (`interval`) -- remembered in a marker file's
+	 * modification time in the private directory, one stat when not due.
+	 * basic_firewall_sample_failed_rules() does the same on the wp-config.php
+	 * path, with a marker of its own.
+	 *
+	 * @param object      $firewall The firewall.
+	 * @param string|null $reason   `debug` or `failure` to ask regardless, or null when the interval decides.
+	 *
+	 * @return array{failed_rules: list<string>|null, sampled: string|null}
+	 */
+	public static function sample_failed_rules( object $firewall, ?string $reason ): array {
+		if ( null === $reason ) {
+			$marker = Plugin::instance()->paths()->base() . '/.sampled-failed-rules-runner';
+
+			// phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- no marker yet is the ordinary answer.
+			$sampled = @filemtime( $marker );
+
+			if ( false !== $sampled && time() - $sampled < self::SAMPLE_INTERVAL ) {
+				return array(
+					'failed_rules' => null,
+					'sampled'      => null,
+				);
+			}
+
+			// phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, WordPress.WP.AlternativeFunctions.file_system_operations_touch -- best effort: an unwritable marker only means sampling every time.
+			@touch( $marker );
+
+			$reason = 'interval';
+		}
+
+		return array(
+			'failed_rules' => self::failed_rules( $firewall ),
+			'sampled'      => $reason,
+		);
+	}
+
+	/**
+	 * The most recent failed-rules sample from each path, or null for none.
+	 *
+	 * Kept apart from the two report slots, because most requests do not
+	 * sample: the last request's report usually says `failed_rules: null`,
+	 * and that means "not asked", not "none failed".
+	 *
+	 * @return array<string, array{time: int, method: string, path: string, sampled: string, failed_rules: list<string>|null}>|null
+	 */
+	public static function last_sample(): ?array {
+		$sample = get_transient( self::SAMPLE );
+
+		return is_array( $sample ) && array() !== $sample ? $sample : null;
+	}
+
+	/**
+	 * Save this request's samples, per path, over the ones before.
+	 *
+	 * @param array<string, mixed> $report A report from build().
+	 */
+	private static function save_sample( array $report ): void {
+		$sample = null;
+
+		foreach ( array( 'early', 'runner' ) as $where ) {
+			$half = (array) ( $report[ $where ] ?? array() );
+
+			if ( empty( $half['failed_rules_sampled'] ) ) {
+				continue;
+			}
+
+			$sample           = $sample ?? ( self::last_sample() ?? array() );
+			$sample[ $where ] = array(
+				'time'         => (int) $report['time'],
+				'method'       => (string) $report['method'],
+				'path'         => (string) $report['path'],
+				'sampled'      => (string) $half['failed_rules_sampled'],
+				'failed_rules' => self::names( $half['failed_rules'] ?? null ),
+			);
+		}
+
+		if ( null !== $sample ) {
+			set_transient( self::SAMPLE, $sample, self::TTL );
+		}
+	}
+
+	/**
+	 * One line about the last failed-rules samples, for `wp basic-firewall status`.
+	 *
+	 * @param array<string, mixed>|null $sample From last_sample().
+	 */
+	public static function sample_summary( ?array $sample ): string {
+		if ( null === $sample ) {
+			return 'not sampled yet';
+		}
+
+		$parts = array();
+
+		foreach ( $sample as $where => $taken ) {
+			$names   = self::names( ( (array) $taken )['failed_rules'] ?? null );
+			$parts[] = sprintf(
+				'%s: %s (%s ago, %s)',
+				(string) $where,
+				null === $names ? 'could not say' : ( array() === $names ? 'none failed' : count( $names ) . ' failed: ' . implode( ', ', $names ) ),
+				human_time_diff( (int) ( ( (array) $taken )['time'] ?? 0 ) ),
+				(string) ( ( (array) $taken )['sampled'] ?? '?' )
+			);
+		}
+
+		return implode( '; ', $parts );
+	}
+
+	/**
 	 * The rules a firewall could not construct, by name, or null when it cannot say.
 	 *
 	 * `bucket/Class:index`, the namespace dropped, exactly as
@@ -510,7 +638,7 @@ final class Diagnostics {
 	/**
 	 * The bootstrap's report on this request, normalised.
 	 *
-	 * @return array{called: bool, evaluated: bool, reason: string|null, credentials: bool, responder: bool, autoloader: array{source: string|null, file: string|null, named: string|null}, library: string|null, mode: string|null, compiled: array{path: string, mtime: int, hash: string|null}|null, panic: bool, cache_dir: string|null, outcome: string|null, deferred: bool, failure: string|null, failure_origin: string|null, refused: string|null, failed_rules: list<string>|null}
+	 * @return array{called: bool, evaluated: bool, reason: string|null, credentials: bool, responder: bool, autoloader: array{source: string|null, file: string|null, named: string|null}, library: string|null, mode: string|null, compiled: array{path: string, mtime: int, hash: string|null}|null, panic: bool, cache_dir: string|null, outcome: string|null, deferred: bool, failure: string|null, failure_origin: string|null, refused: string|null, failed_rules: list<string>|null, failed_rules_sampled: string|null}
 	 */
 	public static function early(): array {
 		$early = isset( $GLOBALS['basic_firewall_early'] ) && is_array( $GLOBALS['basic_firewall_early'] ) ? $GLOBALS['basic_firewall_early'] : array();
@@ -522,52 +650,54 @@ final class Diagnostics {
 		$failure    = $string( 'failure' );
 
 		return array(
-			'called'         => ! empty( $early['called'] ),
-			'evaluated'      => ! empty( $early['evaluated'] ),
-			'reason'         => $string( 'reason' ),
-			'credentials'    => ! empty( $early['credentials'] ),
-			'responder'      => ! isset( $early['responder'] ) || ! empty( $early['responder'] ),
-			'autoloader'     => array(
+			'called'               => ! empty( $early['called'] ),
+			'evaluated'            => ! empty( $early['evaluated'] ),
+			'reason'               => $string( 'reason' ),
+			'credentials'          => ! empty( $early['credentials'] ),
+			'responder'            => ! isset( $early['responder'] ) || ! empty( $early['responder'] ),
+			'autoloader'           => array(
 				'source' => isset( $autoloader['source'] ) ? (string) $autoloader['source'] : null,
 				'file'   => isset( $autoloader['file'] ) ? (string) $autoloader['file'] : null,
 				'named'  => isset( $autoloader['named'] ) ? (string) $autoloader['named'] : null,
 			),
-			'library'        => $string( 'library' ),
-			'mode'           => $string( 'mode' ),
-			'compiled'       => null === $compiled ? null : array(
+			'library'              => $string( 'library' ),
+			'mode'                 => $string( 'mode' ),
+			'compiled'             => null === $compiled ? null : array(
 				'path'  => (string) ( $compiled['path'] ?? '' ),
 				'mtime' => (int) ( $compiled['mtime'] ?? 0 ),
 				'hash'  => isset( $compiled['hash'] ) && is_string( $compiled['hash'] ) ? $compiled['hash'] : null,
 			),
-			'panic'          => ! empty( $early['panic'] ),
-			'cache_dir'      => $string( 'cache_dir' ),
-			'outcome'        => $string( 'outcome' ),
-			'deferred'       => null !== Runner::early_outcome() || null !== Runner::state()['early_verdict'],
-			'failure'        => null === $failure ? null : self::mask( $failure ),
-			'failure_origin' => $string( 'failure_origin' ),
-			'refused'        => $string( 'refused' ),
-			'failed_rules'   => self::names( $early['failed_rules'] ?? null ),
+			'panic'                => ! empty( $early['panic'] ),
+			'cache_dir'            => $string( 'cache_dir' ),
+			'outcome'              => $string( 'outcome' ),
+			'deferred'             => null !== Runner::early_outcome() || null !== Runner::state()['early_verdict'],
+			'failure'              => null === $failure ? null : self::mask( $failure ),
+			'failure_origin'       => $string( 'failure_origin' ),
+			'refused'              => $string( 'refused' ),
+			'failed_rules'         => self::names( $early['failed_rules'] ?? null ),
+			'failed_rules_sampled' => $string( 'failed_rules_sampled' ),
 		);
 	}
 
 	/**
 	 * The runner's own report on this request.
 	 *
-	 * @return array{evaluated: bool, outcome: string|null, mode: string|null, early_verdict: string|null, failure: string|null, failure_detail: string|null, exempt: bool, failed_rules: list<string>|null, panic: bool}
+	 * @return array{evaluated: bool, outcome: string|null, mode: string|null, early_verdict: string|null, failure: string|null, failure_detail: string|null, exempt: bool, failed_rules: list<string>|null, failed_rules_sampled: string|null, panic: bool}
 	 */
 	public static function runner(): array {
 		$state = Runner::state();
 
 		return array(
-			'evaluated'      => $state['evaluated'],
-			'outcome'        => $state['outcome'],
-			'mode'           => $state['mode'],
-			'early_verdict'  => $state['early_verdict'],
-			'failure'        => $state['failure'],
-			'failure_detail' => '' === $state['failure_detail'] ? null : self::mask( $state['failure_detail'] ),
-			'exempt'         => $state['exempt'],
-			'failed_rules'   => $state['failed_rules'],
-			'panic'          => $state['panic'],
+			'evaluated'            => $state['evaluated'],
+			'outcome'              => $state['outcome'],
+			'mode'                 => $state['mode'],
+			'early_verdict'        => $state['early_verdict'],
+			'failure'              => $state['failure'],
+			'failure_detail'       => '' === $state['failure_detail'] ? null : self::mask( $state['failure_detail'] ),
+			'exempt'               => $state['exempt'],
+			'failed_rules'         => $state['failed_rules'],
+			'failed_rules_sampled' => $state['failed_rules_sampled'],
+			'panic'                => $state['panic'],
 		);
 	}
 
@@ -612,25 +742,27 @@ final class Diagnostics {
 
 		return array(
 			'early'  => array(
-				'called'       => $early['called'],
-				'evaluated'    => $early['evaluated'],
-				'reason'       => $early['reason'],
-				'autoloader'   => $early['autoloader']['source'],
-				'library'      => $early['library'],
-				'mode'         => $early['mode'],
-				'outcome'      => $early['outcome'],
-				'failure'      => self::short_failure( $early['failure'], $early['failure_origin'] ),
-				'refused'      => null !== $early['refused'],
-				'responder'    => $early['responder'],
-				'failed_rules' => $early['failed_rules'],
+				'called'               => $early['called'],
+				'evaluated'            => $early['evaluated'],
+				'reason'               => $early['reason'],
+				'autoloader'           => $early['autoloader']['source'],
+				'library'              => $early['library'],
+				'mode'                 => $early['mode'],
+				'outcome'              => $early['outcome'],
+				'failure'              => self::short_failure( $early['failure'], $early['failure_origin'] ),
+				'refused'              => null !== $early['refused'],
+				'responder'            => $early['responder'],
+				'failed_rules'         => $early['failed_rules'],
+				'failed_rules_sampled' => $early['failed_rules_sampled'],
 			),
 			'runner' => array(
-				'evaluated'     => $runner['evaluated'],
-				'outcome'       => $runner['outcome'],
-				'mode'          => $runner['mode'],
-				'early_verdict' => $runner['early_verdict'],
-				'failure'       => $runner['failure'],
-				'failed_rules'  => $runner['failed_rules'],
+				'evaluated'            => $runner['evaluated'],
+				'outcome'              => $runner['outcome'],
+				'mode'                 => $runner['mode'],
+				'early_verdict'        => $runner['early_verdict'],
+				'failure'              => $runner['failure'],
+				'failed_rules'         => $runner['failed_rules'],
+				'failed_rules_sampled' => $runner['failed_rules_sampled'],
 			),
 		);
 	}
@@ -826,7 +958,7 @@ final class Diagnostics {
 			$failed = self::names( $half['failed_rules'] ?? null );
 
 			if ( null !== $failed && array() !== $failed ) {
-				$parts[] = sprintf( '%s failed rules: %d (%s)', $where, count( $failed ), implode( ', ', $failed ) );
+				$parts[] = sprintf( '%s failed rules: %d (%s; sampled: %s)', $where, count( $failed ), implode( ', ', $failed ), (string) ( $half['failed_rules_sampled'] ?? '?' ) );
 			}
 		}
 

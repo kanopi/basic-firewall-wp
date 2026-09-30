@@ -161,6 +161,7 @@ header( 'X-Early-Php-Self: ' . (string) ( $_SERVER['PHP_SELF'] ?? '' ) ); // php
 header( 'X-Early-Custom-Loaded: ' . ( empty( $GLOBALS['basic_firewall_test_custom_autoloader'] ) ? 'no' : 'yes' ) );
 $basic_firewall_failed = $GLOBALS['basic_firewall_early']['failed_rules'] ?? null;
 header( 'X-Early-Failed-Rules: ' . ( is_array( $basic_firewall_failed ) ? ( array() === $basic_firewall_failed ? 'none' : implode( ',', $basic_firewall_failed ) ) : 'unknown' ) );
+header( 'X-Early-Failed-Rules-Sampled: ' . (string) ( $GLOBALS['basic_firewall_early']['failed_rules_sampled'] ?? 'no' ) );
 header( 'X-Early-Mode: ' . (string) ( $GLOBALS['basic_firewall_early']['mode'] ?? 'none' ) );
 header( 'X-Early-Panic: ' . ( empty( $GLOBALS['basic_firewall_early']['panic'] ) ? 'no' : 'yes' ) );
 header( 'X-Early-Compiled-Hash: ' . (string) ( $GLOBALS['basic_firewall_early']['compiled']['hash'] ?? '' ) );
