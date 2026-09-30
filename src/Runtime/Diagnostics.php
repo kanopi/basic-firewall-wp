@@ -26,10 +26,12 @@ use Kanopi\BasicFirewall\Plugin;
  * reaches WordPress, saves a compact report for the others to read.
  *
  * **Two slots.** The last request, and the last *anomalous* one -- a
- * fail-open, an early path that did not evaluate for a reason that is not
- * the configuration working as meant, or a verdict the early path handed on
- * instead of answering -- kept apart so a stream of ordinary requests does
- * not overwrite the one somebody needs to see.
+ * fail-open, a verdict the early path handed on instead of answering, rules
+ * a firewall could not construct, an early path that did not evaluate for a
+ * reason that is not the configuration working as meant, or a mode or
+ * compiled file that disagrees with the last compile; see anomalies() --
+ * kept apart so a stream of ordinary requests does not overwrite the one
+ * somebody needs to see.
  *
  * **Cheap.** Transients, because the reader may be in another container and
  * the object cache or the database is what they share. Written at most once

@@ -364,8 +364,10 @@ final class Commands {
 	 * WP-CLI is not a web request: on a host that runs it in its own
 	 * container, it is not even the same machine. The runner saves a report
 	 * from each web request that reaches WordPress -- the last one, and the
-	 * last anomalous one (a fail-open, an early path that did not evaluate,
-	 * a verdict handed on instead of answered) -- and this prints both in
+	 * last anomalous one (a fail-open, a verdict handed on instead of
+	 * answered, rules a firewall could not construct, an early path that did
+	 * not evaluate, a mode or compiled file that does not match the last
+	 * compile) -- and this prints both in
 	 * full. Nothing in them is secret: no query strings, cookies or client
 	 * addresses.
 	 *
