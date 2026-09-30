@@ -36,6 +36,35 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   that reach WordPress. Troubleshooting only, and off by default: it tells
   anybody who can make a request how the firewall is deployed.
 
+- **Rules that failed to construct, per path** (#41). The library skips a rule
+  whose constructor throws and carries on, so a rule failing only on the web
+  containers showed up nowhere. Both paths now record their firewall's
+  `getFailedRules()` as `bucket/Class:index` names (`failed_rules`; no
+  messages) in the saved report, `early-report`, the `status` summary and the
+  debug header. Sampled rather than asked on every request, because answering
+  builds every rule and so defeats the library's lazy construction: each path
+  asks with `BASIC_FIREWALL_DEBUG` on, on a request that failed open, or at
+  most once a minute per container (a marker file, one stat when not due).
+  The trade-off is that an intermittent failure can fall between samples.
+  `failed_rules_sampled` says why a request asked (`null` otherwise), and the
+  latest sample from each path is kept apart and shown by `early-report`
+  (`failed_rules_sample`) and `status` ("Failed rules (last sample)"). Any failed rule makes the request a new `failed-rules`
+  anomaly, which Site Health raises as critical in `block` or `exception` mode
+  and as recommended in `log` mode. Reports now also carry `anomalies`, every
+  anomaly a request had, most serious first.
+
+- **A `mismatch` anomaly** (#41). The report recorded the configured mode, the
+  mode each path ran and each path's view of the compiled file, but a
+  disagreement was not an anomaly, so the next ordinary request overwrote it.
+  It is now flagged when a path's mode differs from the one the last compile
+  wrote, or the compiled file's hash differs between the paths or from the last
+  compile's — the signature of a stale copy on a container that did not do the
+  compile — and kept in the anomaly slot; Site Health recommends a rebuild. A
+  panic file, `BASIC_FIREWALL_MODE` and lockdown are reported under
+  `mode.overrides` rather than flagged. The compile now records the hash prefix
+  and mode of what it wrote in its meta, and the early path records the
+  compiled file's hash prefix alongside its modification time.
+
 - **`BASIC_FIREWALL_REDIS_PASSWORD`** (#48): the password for every Redis
   connection — block list storage and rate limit counters — supplied from
   wp-config.php and injected at request time on both evaluation paths, the way
@@ -51,10 +80,33 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   rebuild; *critical* when the file was built with the constant and it has
   since been removed.
 
+### Changed
+
+- **`fail-open (early|runner)` log lines are rate-limited** (#41). They were
+  written on every request, so a persistent failure on a busy site logged one
+  line per request. The first is still always written; after that, at most one
+  line a minute per exception class and file:line, and the next line written
+  says how many were held back (`… (N more since <time> UTC)`). The state is
+  kept in a marker file in the private directory, as the `not-evaluated`
+  warning's is, so the limit holds across workers and containers; a marker
+  that cannot be written means logging every time. The report still records
+  every failure.
+
 ### Fixed
 
 - **The block list screen and WP-CLI resolve a `%env()%` Redis password**
   rather than sending the token itself as the password (#48).
+
+- **The early path no longer requires a second Composer autoloader when the
+  library is already loaded** (#44). A site whose `wp-config.php` required one
+  autoloader above the snippet while a different `vendor/` sat beside the
+  WordPress root had that second one required too, so classes could resolve
+  from either tree. "Library already loaded" is now asked before the fixed
+  site locations: the order is the plugin's own `vendor/`, the `autoloader`
+  option, `BASIC_FIREWALL_AUTOLOADER`, a library already loaded (`loaded`),
+  then `dirname( ABSPATH ) . '/vendor'` (`site`). The plugin's scoped copy
+  still wins, and a named autoloader that cannot be read still stops the
+  search with `autoloader-unreadable`.
 - **A firewall failure that fails open is now logged.** Anything other than a
   verdict that made either evaluation path let a request through — the library
   failing to start, or throwing partway through evaluating — was recorded only

@@ -1279,9 +1279,10 @@ final class Site_Health {
 	 * path, and which on a host with several web servers may not even have
 	 * reached the one a visitor did. The runner saves the last anomalous web
 	 * request's report (see Diagnostics), and this raises it while it is
-	 * recent: critical for a request let through unfiltered or a verdict
-	 * the early path handed on in a mode that refuses, recommended for an
-	 * early path that did not evaluate.
+	 * recent: critical for a request let through unfiltered, a verdict the
+	 * early path handed on, or rules that could not be built, in a mode that
+	 * refuses; recommended for an early path that did not evaluate, or a
+	 * request that saw another configuration from the one last compiled.
 	 *
 	 * @return array{status: string, label: string, description: string, actions: string}|null
 	 */
@@ -1328,6 +1329,80 @@ final class Site_Health {
 					) . '</p>'
 					. ( null !== ( $early['refused'] ?? null ) ? '<p>' . esc_html( (string) $early['refused'] ) . '</p>' : '' )
 					. $capture
+				);
+
+			case 'failed-rules':
+				/*
+				 * A rule the library could not construct is skipped, so on
+				 * that request part of the configuration was not enforced --
+				 * for a block rule, a fail-open for exactly the traffic it
+				 * names. Critical where the mode refuses, as a fail-open is.
+				 * The compiled-configuration check reports rules the compiler
+				 * itself left out; these compiled and then failed to build on
+				 * a web request, which that check, run from this request,
+				 * cannot see.
+				 */
+				$lines = '';
+
+				foreach ( array(
+					'early'  => __( 'On the wp-config.php path', 'basic-firewall' ),
+					'runner' => __( 'On the mu-plugin path', 'basic-firewall' ),
+				) as $half => $where ) {
+					$names = array_map( 'strval', (array) ( ( 'early' === $half ? $early : $runner )['failed_rules'] ?? array() ) );
+
+					if ( array() !== $names ) {
+						$lines .= '<li>' . esc_html( $where ) . ': <code>' . implode( '</code>, <code>', array_map( 'esc_html', $names ) ) . '</code></li>';
+					}
+				}
+
+				/*
+				 * Said, because it is sampled: asking builds every rule, so it
+				 * is asked at most once a minute per server, with
+				 * BASIC_FIREWALL_DEBUG, or on a failure -- not on every
+				 * request, and a report without it is not a clean one.
+				 */
+				$sampled = (string) ( $early['failed_rules_sampled'] ?? $runner['failed_rules_sampled'] ?? '' );
+
+				if ( '' !== $sampled ) {
+					$lines .= '<li>' . esc_html(
+						sprintf(
+							/* translators: %s: why the request was sampled: interval, debug or failure. */
+							__( 'Found on a sampled request (%s). The rules are checked at most once a minute per web server, with BASIC_FIREWALL_DEBUG on, or when a request fails — not on every request.', 'basic-firewall' ),
+							$sampled
+						)
+					) . '</li>';
+				}
+
+				$body = '<p>' . $when . esc_html__( 'was evaluated by a firewall that could not construct some of its rules, so those rules did not run. The library skips a rule whose constructor fails rather than stopping, so everything else went on working — which is why nothing else looks wrong.', 'basic-firewall' ) . '</p>'
+					. '<ul>' . $lines . '</ul>'
+					. '<p>' . esc_html__( 'A rule that fails on web requests and not here usually depends on something only the web servers lack: a storage or reputation host they cannot reach, a PHP extension, a file. The library logs each one with its reason, as "Firewall rule could not be constructed and is NOT active".', 'basic-firewall' ) . '</p>'
+					. $capture;
+
+				return in_array( $mode, array( 'block', 'exception' ), true )
+					? self::critical( __( 'The firewall recently ran without some of its rules', 'basic-firewall' ), $body )
+					: self::recommended( __( 'The firewall recently ran without some of its rules', 'basic-firewall' ), $body );
+
+			case 'mismatch':
+				/*
+				 * Recommended rather than critical: the request was evaluated,
+				 * by a firewall built from a file, just not necessarily the
+				 * file the settings produced. Overrides -- a panic file,
+				 * BASIC_FIREWALL_MODE, lockdown -- never reach here; they are
+				 * in the report as what they are.
+				 */
+				$lines = '';
+
+				foreach ( (array) ( $report['mismatch'] ?? array() ) as $line ) {
+					$lines .= '<li><code>' . esc_html( (string) $line ) . '</code></li>';
+				}
+
+				return self::recommended(
+					__( 'A recent web request saw a different firewall configuration from the one last compiled', 'basic-firewall' ),
+					'<p>' . $when . esc_html__( 'was evaluated with a mode or a compiled file that does not match what the settings last compiled:', 'basic-firewall' ) . '</p>'
+					. '<ul>' . $lines . '</ul>'
+					. '<p>' . esc_html__( 'That is the signature of a stale copy of the compiled file on a web server that did not do the compile — the private directory not shared between servers, or storage that has not caught up — so that server enforces an older configuration than the one these screens describe.', 'basic-firewall' ) . '</p>'
+					. $capture,
+					self::rebuild_action()
 				);
 
 			case 'not-evaluated':
