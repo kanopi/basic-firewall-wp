@@ -344,41 +344,62 @@ final class Outcome_Responder {
 	/**
 	 * A challenge was solved: set the pass cookie and send the visitor on.
 	 *
-	 * Needs WordPress, for the cookie name in settings and for `is_ssl()`. The
-	 * wp-config.php bootstrap therefore never answers this outcome itself; it
-	 * leaves it for the runner, which is safe because a solution is a POST to
-	 * the challenge path and no page cache serves a POST.
+	 * Needs WordPress, for the compile record that names the cookie and for
+	 * `is_ssl()`. The wp-config.php bootstrap therefore never answers this
+	 * outcome itself; it leaves it for the runner, which is safe because a
+	 * solution is a POST to the challenge path and no page cache serves a POST.
 	 *
 	 * @param ChallengeSolvedException $outcome The solved challenge.
 	 * @param Request|null             $request The submission.
 	 */
 	private function send_solved( ChallengeSolvedException $outcome, ?Request $request ): void {
-		$settings = Plugin::instance()->settings();
-		$name     = (string) $settings->get( 'challenge.cookie_name', 'bfw_pass' );
+		$cookies = self::solved_cookies( $outcome->getToken(), Plugin::instance()->compiled()->pass_cookie(), is_ssl() );
 
-		$secure = is_ssl();
-
-		setcookie(
-			$name,
-			$outcome->getToken(),
-			array(
-				'expires'  => 0,
-				'path'     => '/',
-
-				/*
-				 * HttpOnly: the token is presented by the browser on the next
-				 * request and nothing on the page needs to read it, so there is
-				 * no reason for script to be able to. SameSite=Lax so an
-				 * ordinary top-level navigation back to the site still carries
-				 * it, while a cross-site POST does not.
-				 */
-				'httponly' => true,
-				'secure'   => $secure,
-				'samesite' => 'Lax',
-			)
-		);
+		foreach ( $cookies as $cookie ) {
+			setcookie( $cookie['name'], $cookie['value'], $cookie['options'] );
+		}
 
 		$this->emit( self::solved_http_response( $outcome, $request ) );
+	}
+
+	/**
+	 * The cookies a solved challenge sets.
+	 *
+	 * The name is the one the compiled file gives the library, read from the
+	 * compile record rather than from settings: the library looks for the pass
+	 * under the compiled name, and a cookie set under any other -- the stored
+	 * `bfw_pass` on Pantheon, say, where the compiled name is
+	 * `STYXKEY_bfw_pass` -- is a pass nobody ever reads (#35).
+	 *
+	 * @param string $token  The pass token.
+	 * @param string $name   The pass cookie's name.
+	 * @param bool   $secure Whether the request arrived over HTTPS.
+	 *
+	 * @return list<array{name: string, value: string, options: array<string, mixed>}>
+	 */
+	public static function solved_cookies( string $token, string $name, bool $secure ): array {
+		return array(
+			array(
+				'name'    => $name,
+				'value'   => $token,
+				'options' => array(
+					'expires'  => 0,
+					'path'     => '/',
+
+					/*
+					 * HttpOnly: the token is presented by the browser on the
+					 * next request and nothing on the page needs to read it,
+					 * so there is no reason for script to be able to.
+					 * SameSite=Lax so an ordinary top-level navigation back to
+					 * the site still carries it, while a cross-site POST does
+					 * not.
+					 */
+					'httponly' => true,
+					'secure'   => $secure,
+					'samesite' => 'Lax',
+				),
+			),
+		);
 	}
 
 	/**

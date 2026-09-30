@@ -9,6 +9,7 @@ declare( strict_types = 1 );
 
 namespace Kanopi\BasicFirewall\Compiler;
 
+use Kanopi\BasicFirewall\Challenge\Pass_Cookie;
 use Kanopi\BasicFirewall\Plugin;
 use Kanopi\BasicFirewall\Transfer\Secret_Paths;
 use Symfony\Component\Yaml\Yaml;
@@ -119,7 +120,7 @@ TXT;
 			);
 		}
 
-		$this->record_meta( $compiler, $problems );
+		$this->record_meta( $compiler, $problems, $compiled );
 		$this->write_runtime( $compiler->runtime() );
 
 		/**
@@ -214,10 +215,11 @@ TXT;
 	/**
 	 * Record a compile whose file was written.
 	 *
-	 * @param Config_Compiler $compiler The compile.
-	 * @param list<string>    $problems Problems encountered.
+	 * @param Config_Compiler      $compiler The compile.
+	 * @param list<string>         $problems Problems encountered.
+	 * @param array<string, mixed> $compiled What was written, advanced YAML included.
 	 */
-	private function record_meta( Config_Compiler $compiler, array $problems ): void {
+	private function record_meta( Config_Compiler $compiler, array $problems, array $compiled = array() ): void {
 		$connection_paths = $compiler->connection_paths();
 
 		$this->write_connection_paths( $connection_paths );
@@ -239,9 +241,30 @@ TXT;
 				'problems'           => $problems,
 				'compiled_at'        => time(),
 				'plugin_version'     => BASIC_FIREWALL_VERSION,
+
+				/*
+				 * The pass cookie the file names, read back after the advanced
+				 * YAML has had its say. The runner sets the cookie on a solved
+				 * challenge from this rather than working the name out again,
+				 * so the name it issues is the one the library then looks for
+				 * -- even if the environment it runs in differs from the one
+				 * that compiled (#35). Absent when no challenge is compiled.
+				 */
+				'pass_cookie'        => self::compiled_pass_cookie( $compiled ),
 			),
 			false
 		);
+	}
+
+	/**
+	 * The pass cookie name a compiled configuration names, if it has one.
+	 *
+	 * @param array<string, mixed> $compiled The compiled configuration.
+	 */
+	private static function compiled_pass_cookie( array $compiled ): ?string {
+		$name = is_array( $compiled['challenge'] ?? null ) ? ( $compiled['challenge']['cookie_name'] ?? null ) : null;
+
+		return is_string( $name ) && '' !== $name ? $name : null;
 	}
 
 	/**
@@ -318,6 +341,24 @@ TXT;
 		$meta = get_option( self::META_OPTION, array() );
 
 		return is_array( $meta ) ? $meta : array();
+	}
+
+	/**
+	 * The name of the cookie a solved challenge's pass is issued in.
+	 *
+	 * What the last compile wrote, so the runner issues exactly the cookie the
+	 * library reads. Worked out from settings only when the compiled file
+	 * predates the record -- the first request after an update, before the
+	 * rebuild that follows every upgrade -- or names no challenge at all.
+	 */
+	public function pass_cookie(): string {
+		$name = $this->meta()['pass_cookie'] ?? null;
+
+		if ( is_string( $name ) && '' !== $name ) {
+			return $name;
+		}
+
+		return Pass_Cookie::effective_name( (string) Plugin::instance()->settings()->get( 'challenge.cookie_name', '' ) );
 	}
 
 	/**

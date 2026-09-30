@@ -333,6 +333,20 @@ final class Upgrader {
 			10 => static function (): void {
 				// Deliberately empty: the rebuild that follows every upgrade is the point.
 			},
+
+			/*
+			 * 11: recompile, so the compiled file names the pass cookie the
+			 * site's host forwards.
+			 *
+			 * Nothing stored changes. On Pantheon a pass cookie nobody chose
+			 * now compiles as `STYXKEY_bfw_pass`, because the edge strips
+			 * `bfw_pass` before PHP sees it and every solved challenge was
+			 * challenged again (#35). Without a rebuild the old name stays in
+			 * force until the next settings save.
+			 */
+			11 => static function (): void {
+				// Deliberately empty: the rebuild that follows every upgrade is the point.
+			},
 		);
 	}
 

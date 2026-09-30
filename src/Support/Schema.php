@@ -53,7 +53,7 @@ final class Schema {
 	/**
 	 * Current schema version. Bumped whenever an upgrade routine is added.
 	 */
-	public const VERSION = 10;
+	public const VERSION = 11;
 
 	/**
 	 * Doctrine driver names a connection given as parameters may use.
