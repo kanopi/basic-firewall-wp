@@ -14,6 +14,7 @@ use Kanopi\BasicFirewall\Database_Credentials;
 use Kanopi\BasicFirewall\Library_Loader;
 use Kanopi\BasicFirewall\Logging\Redaction;
 use Kanopi\BasicFirewall\Plugin;
+use Kanopi\BasicFirewall\Redis_Password;
 use Kanopi\Firewall\Firewall;
 use Symfony\Component\HttpFoundation\Request;
 
@@ -583,6 +584,21 @@ final class Runner {
 				foreach ( $paths as $path ) {
 					$overrides[ $path ] = $credentials;
 				}
+			}
+		}
+
+		/*
+		 * The Redis password, when wp-config.php supplies it, injected at
+		 * every Redis connection the compiler recorded -- the block list and
+		 * each rate limit's counters. With the constant defined the compiled
+		 * file holds no password at all; see Redis_Password. The bootstrap does
+		 * the same on the other path, from the constant and a sidecar.
+		 */
+		$redis_password = Redis_Password::from_constant();
+
+		if ( null !== $redis_password ) {
+			foreach ( Plugin::instance()->compiled()->redis_auth_paths() as $path => $username ) {
+				$overrides[ $path ] = Redis_Password::auth( $username, $redis_password );
 			}
 		}
 

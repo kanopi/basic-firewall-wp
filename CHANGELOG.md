@@ -36,8 +36,25 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   that reach WordPress. Troubleshooting only, and off by default: it tells
   anybody who can make a request how the firewall is deployed.
 
+- **`BASIC_FIREWALL_REDIS_PASSWORD`** (#48): the password for every Redis
+  connection — block list storage and rate limit counters — supplied from
+  wp-config.php and injected at request time on both evaluation paths, the way
+  the `DB_*` credentials are. With it defined the compiled file holds no Redis
+  password; the compiler records only where each connection's `auth` belongs,
+  in the compile metadata and a `redis-auth-paths.json` sidecar (paths and ACL
+  usernames, never a password). The Storage screen shows the field as set in
+  wp-config.php while it is defined, and the rate limit editor says it is
+  overridden.
+- **Site Health: "Basic Firewall Redis password"** (#48). *Recommended* when a
+  Redis password is written into the compiled file in plain text (define the
+  constant or use `%env()%`), or when the constant was defined after the last
+  rebuild; *critical* when the file was built with the constant and it has
+  since been removed.
+
 ### Fixed
 
+- **The block list screen and WP-CLI resolve a `%env()%` Redis password**
+  rather than sending the token itself as the password (#48).
 - **A firewall failure that fails open is now logged.** Anything other than a
   verdict that made either evaluation path let a request through — the library
   failing to start, or throwing partway through evaluating — was recorded only
@@ -65,6 +82,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `advanced_yaml: <path>`; an import restores them from the receiving site's
   own block or drops and reports them, and names any credential an imported
   block carries in the clear. The Compiled screen hides them too.
+- **The Redis password can be kept out of the compiled file** (#48), which
+  lives under uploads and is web-readable on some servers: define
+  `BASIC_FIREWALL_REDIS_PASSWORD` (injected at runtime, never written) or use a
+  `%env()%` token (only the name is written). A password typed literally is
+  still written, because the wp-config.php path cannot read the settings, and
+  Site Health now recommends against it.
 
 ## [1.0.0-rc.4]
 

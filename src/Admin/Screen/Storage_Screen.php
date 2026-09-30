@@ -17,6 +17,7 @@ use Kanopi\BasicFirewall\Cache\Cache_Warmer;
 use Kanopi\BasicFirewall\Database_Credentials;
 use Kanopi\BasicFirewall\Library_Capabilities;
 use Kanopi\BasicFirewall\Plugin;
+use Kanopi\BasicFirewall\Redis_Password;
 use Kanopi\BasicFirewall\Settings;
 use Kanopi\BasicFirewall\Support\Paths;
 
@@ -622,16 +623,37 @@ final class Storage_Screen extends Screen {
 
 		$stored = (string) $settings->get( 'storage.redis.password', '' );
 
-		$this->row(
-			__( 'Password', 'basic-firewall' ),
-			self::text( 'redis_password', '', 'password', 'autocomplete="new-password"' )
-				. ( '' !== $stored ? '<br>' . self::checkbox( 'redis_password_clear', false, __( 'Remove the stored password', 'basic-firewall' ) ) : '' ),
-			wp_kses_post(
-				( '' !== $stored ? __( 'A password is stored. Leave blank to keep it. ', 'basic-firewall' ) : '' )
-				/* translators: the %env()% below is a literal token the firewall reads, not a placeholder. */
-				. __( 'Stored in the settings as typed and written into the compiled file, and stripped from an export. Type <code>%env(YOUR_VARIABLE)%</code> to read it from the environment instead: that is not a credential, survives an export, and never reaches the database.', 'basic-firewall' )
-			)
-		);
+		if ( Redis_Password::is_overridden() ) {
+			/*
+			 * Shown as disabled rather than hidden or blank, as the challenge
+			 * secret is: the screen must never show a value that is not the
+			 * one being used. Anything stored stays stored, and is used again
+			 * if the constant goes.
+			 */
+			$this->row(
+				__( 'Password', 'basic-firewall' ),
+				'<input type="text" class="regular-text" value="" placeholder="' . esc_attr__( 'set in wp-config.php', 'basic-firewall' ) . '" disabled />',
+				sprintf(
+					/* translators: %s: constant name. */
+					__( 'Supplied by the <code>%s</code> constant in wp-config.php, for this connection and every rate limit that keeps its counts in Redis. It is injected on each request and never written to the compiled file. This field is disabled so the screen cannot show a value that is not the one in force.', 'basic-firewall' ),
+					esc_html( Redis_Password::CONSTANT )
+				)
+			);
+		} else {
+			$this->row(
+				__( 'Password', 'basic-firewall' ),
+				self::text( 'redis_password', '', 'password', 'autocomplete="new-password"' )
+					. ( '' !== $stored ? '<br>' . self::checkbox( 'redis_password_clear', false, __( 'Remove the stored password', 'basic-firewall' ) ) : '' ),
+				wp_kses_post(
+					( '' !== $stored ? __( 'A password is stored. Leave blank to keep it. ', 'basic-firewall' ) : '' )
+					. sprintf(
+						/* translators: 1: constant name. The %env()% below is a literal token the firewall reads, not a placeholder. */
+						__( 'A password typed here is stored in the settings and written into the compiled file in plain text, because requests answered before WordPress loads can read nothing else; it is stripped from an export. Better: define <code>%1$s</code> in wp-config.php, above the firewall snippet, and it is injected on every request and never written to disk. Or type <code>%%env(YOUR_VARIABLE)%%</code> to read it from the environment: only the name reaches the database and the compiled file, and it survives an export.', 'basic-firewall' ),
+						esc_html( Redis_Password::CONSTANT )
+					)
+				)
+			);
+		}
 
 		echo '</tbody></table>';
 

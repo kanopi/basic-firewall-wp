@@ -1653,17 +1653,39 @@ so give each site its own.
 **Authentication.** A password alone is the ordinary `requirepass` case; fill in
 the username as well only for a server using ACLs. The password is kept as typed
 — not trimmed — and never echoed back into the page: leave the field blank to
-keep the stored one, or tick *Remove the stored password*. It is written into the
-compiled file and stripped from an export, so `%env(YOUR_VARIABLE)%` is the
-better answer: that token is not a credential, survives an export, and never
-reaches the database.
+keep the stored one, or tick *Remove the stored password*.
 
-It is not injected at request time the way WordPress's database credentials
-are. Those come from constants that exist on both evaluation paths; this password
-lives in the settings option, which the wp-config.php path cannot read without
-WordPress. Getting it there would mean writing it to a file beside the compiled
-one — the same plaintext on the same disk, with one more file to protect. The
-token is the way to keep it off disk.
+Where the password comes from decides where it ends up. Best first:
+
+1. **`BASIC_FIREWALL_REDIS_PASSWORD` in wp-config.php**, above the firewall
+   snippet. It is handed to the library at request time on **both** evaluation
+   paths, the way WordPress's database credentials are, and written to no file
+   at all: the compiler leaves `auth` out of the compiled file and records only
+   *where* it belongs — in an option for the runner, and in
+   `redis-auth-paths.json` beside the compiled file for the wp-config.php path
+   (paths and the ACL username; never the password). It applies to every Redis
+   connection — the block list and every rate limit counting in Redis — and
+   while it is defined the Storage screen shows the field as set in
+   wp-config.php. Defining it takes effect on the next request; rebuild to take
+   an older password out of the file, which Site Health prompts for.
+2. **`%env(YOUR_VARIABLE)%` in the field.** Only the name reaches the database
+   and the compiled file, and the library resolves it each time it loads the
+   file (its parse cache, a PHP file readable only by its owner, holds the
+   resolved value). It survives an export. The block list screen and WP-CLI
+   resolve it the same way.
+3. **The password typed as is.** It still works, and it is still written into
+   the compiled file, because the wp-config.php path cannot read the settings and
+   putting it in a sidecar would be the same plaintext on the same disk. Site
+   Health marks this *recommended*: define the constant or use `%env()%`.
+
+```php
+// wp-config.php, above the Basic Firewall snippet.
+define( 'BASIC_FIREWALL_REDIS_PASSWORD', getenv( 'REDIS_PASSWORD' ) );
+```
+
+An empty constant counts as not defined. Removing the constant without
+rebuilding leaves a compiled file with no password in it, and every Redis
+connection fails to authenticate; Site Health reports that as critical.
 
 Redis needs no WordPress credentials, so it works on the wp-config.php
 evaluation path exactly as it does on the mu-plugin path. If the server cannot be
@@ -2156,6 +2178,11 @@ define( 'BASIC_FIREWALL_AUTOLOADER', __DIR__ . '/wp-content/mu-plugins/vendor/au
 // Supply the challenge signing secret without storing it in the database.
 define( 'BASIC_FIREWALL_CHALLENGE_SECRET', getenv( 'FIREWALL_CHALLENGE_SECRET' ) );
 
+// The password for every Redis connection -- the block list and rate limit
+// counters -- injected on each request and never written to the compiled
+// file. Read on both paths. See "Redis, and why expiry is the interesting part".
+define( 'BASIC_FIREWALL_REDIS_PASSWORD', getenv( 'REDIS_PASSWORD' ) );
+
 // Addresses permitted to declare the client address.
 define( 'BASIC_FIREWALL_TRUSTED_PROXIES', array( '10.0.0.0/8' ) );
 
@@ -2210,6 +2237,10 @@ secret:   %file(/etc/firewall/hmac.key)%
 ```
 
 `${VAR}` does **not** work — only the `%env(...)%` form is substituted.
+
+The Redis password has a constant as well, `BASIC_FIREWALL_REDIS_PASSWORD`,
+which keeps it out of the compiled file entirely rather than putting a token
+there; see *Redis, and why expiry is the interesting part*.
 
 One token naming a variable that does not exist means **the entire configuration
 fails to load** — every rule, not just the setting the token appeared in — and

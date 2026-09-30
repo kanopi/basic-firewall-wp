@@ -720,6 +720,18 @@ final class Paths {
 	}
 
 	/**
+	 * Path of the Redis-auth sidecar.
+	 *
+	 * A JSON map of property-access paths to ACL usernames, naming where the
+	 * BASIC_FIREWALL_REDIS_PASSWORD constant belongs in the compiled tree, for
+	 * the wp-config.php path to inject it. Paths and usernames only: the
+	 * password is read from the constant at request time. See Redis_Password.
+	 */
+	public function redis_auth_paths_file(): string {
+		return $this->base() . '/redis-auth-paths.json';
+	}
+
+	/**
 	 * Path of the runtime sidecar.
 	 *
 	 * A small JSON document carrying what the wp-config.php path has to know
