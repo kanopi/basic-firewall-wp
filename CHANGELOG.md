@@ -7,6 +7,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.0.0-rc.4]
+
+**Fourth release candidate for 1.0.0.** Published as a GitHub pre-release, so
+the `releases/latest/download` URL does not serve it; install it by its own URL.
+It hardens `exception` mode on the wp-config.php path so a verdict can never
+serve the page (#34), makes the pass cookie name a setting both evaluation
+paths honour (#35), and bundles kanopi/firewall 2.34.1, which keeps every
+response the library writes out of caches. What changed since 1.0.0-rc.3 is
+below.
+
 ### Changed
 
 - **Requires and bundles `kanopi/firewall` 2.34.1** (was ^2.34). The release
