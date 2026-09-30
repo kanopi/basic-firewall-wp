@@ -7,6 +7,49 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- **Diagnostics for the early path, readable from anywhere** (#34). Every
+  status screen described its own request, and WP-CLI's is not a web request:
+  on a host that runs WP-CLI in its own container, `status` could report the
+  early path evaluating while the web containers were not. The runner now
+  saves a compact report of the last web request that reached WordPress, and
+  separately of the last anomalous one (a fail-open, an early path that did not
+  evaluate for a reason other than `disabled`, `switched-off` or
+  `deferred-login`, or a refusal the early path handed on instead of
+  answering), in transients kept for a day and written at most once every five
+  seconds; WP-CLI and cron are never recorded. Each report carries both paths'
+  view of the request (called, evaluated, reason, autoloader, verdict,
+  failure with file:line), the mode each path's firewall was actually in, the
+  library copy and version, the compiled file's path, modification time and
+  hash prefix, and the cache backend on each path. No query string, cookies,
+  headers or client address.
+- **`wp basic-firewall early-report`** dumps both reports (JSON, or
+  `--format=yaml`), and `wp basic-firewall status` gains **Last web request**
+  and **Last anomaly** rows.
+- **Site Health raises a recent anomaly** (under six hours old) on the
+  evaluation check: critical for a request let through unfiltered in `block` or
+  `exception` mode, or an unanswered early verdict; recommended for an early
+  path that did not evaluate, with the fix for the reason.
+- **`BASIC_FIREWALL_DEBUG`** adds an `X-Basic-Firewall-Early` response header
+  with the compact report, on responses the early path writes and on requests
+  that reach WordPress. Troubleshooting only, and off by default: it tells
+  anybody who can make a request how the firewall is deployed.
+
+### Fixed
+
+- **A firewall failure that fails open is now logged.** Anything other than a
+  verdict that made either evaluation path let a request through — the library
+  failing to start, or throwing partway through evaluating — was recorded only
+  for Site Health on the request it happened on, which is a visitor's, so it
+  left no trace (#34). Each now writes `Basic Firewall [warning]: fail-open
+  (early)` or `(runner)` to the PHP error log, with the exception class, its
+  message (credentials in a URL masked) and where it was thrown. The request
+  still goes through: failing open is the design, failing silently was not.
+- **An early path that is called and does not evaluate is logged**, at most
+  once every 15 minutes per reason across every web container (a marker file in
+  the private directory): `Basic Firewall [warning]: not-evaluated (early)`.
+
 ## [1.0.0-rc.4]
 
 **Fourth release candidate for 1.0.0.** Published as a GitHub pre-release, so

@@ -77,6 +77,24 @@ final class Runner {
 	private static bool $exempt = false;
 
 	/**
+	 * What this runner did with the request, for Diagnostics.
+	 *
+	 * `evaluated` is whether it built a firewall and evaluated the request
+	 * itself; `outcome` the verdict it reached (`allowed`, `challenge`,
+	 * `redirect`, `blocked`, `solved`) or null; `mode` the mode the firewall
+	 * it built was actually in; `early_verdict` a verdict the wp-config.php
+	 * path handed on to it rather than answering.
+	 *
+	 * @var array{evaluated: bool, outcome: string|null, mode: string|null, early_verdict: string|null}
+	 */
+	private static array $state = array(
+		'evaluated'     => false,
+		'outcome'       => null,
+		'mode'          => null,
+		'early_verdict' => null,
+	);
+
+	/**
 	 * Evaluate the current request.
 	 *
 	 * Never throws. Returns true when the request may continue -- which includes
@@ -107,6 +125,13 @@ final class Runner {
 			 */
 			$this->adopt_early_marks();
 			$this->adopt_early_failure();
+
+			$handed_on = self::early_outcome();
+
+			if ( null !== $handed_on ) {
+				self::$state['early_verdict'] = Outcome_Responder::verdict_kind( $handed_on['outcome'] );
+			}
+
 			$this->refuse_unanswered_early_verdict();
 
 			return $this->answer_early_outcome();
@@ -155,6 +180,20 @@ final class Runner {
 			return true;
 		}
 
+		return $this->evaluate_compiled( $compiled, $request );
+	}
+
+	/**
+	 * Build the firewall from the compiled file and evaluate the request.
+	 *
+	 * Split from evaluate() so the failure handling can be driven directly:
+	 * the test suite's own process is marked as evaluated before WordPress
+	 * loads, so evaluate() always takes the wp-config.php branch there.
+	 *
+	 * @param string       $compiled The compiled configuration file.
+	 * @param Request|null $request  Request to evaluate, or null for the current one.
+	 */
+	private function evaluate_compiled( string $compiled, ?Request $request ): bool {
 		$this->define_cache_constants();
 
 		/*
@@ -186,8 +225,13 @@ final class Runner {
 			self::$failure        = 'could-not-start';
 			self::$failure_detail = $e->getMessage();
 
+			Diagnostics::warn_fail_open( 'runner', $e, 'the firewall could not start' );
+
 			return true;
 		}
+
+		self::$state['evaluated'] = true;
+		self::$state['mode']      = $firewall->getMode()->value;
 
 		/*
 		 * The request is built here rather than left to the library, so that
@@ -210,10 +254,17 @@ final class Runner {
 		try {
 			$allowed = $firewall->evaluate( $request );
 
+			self::$state['outcome'] = 'allowed';
+
 			$this->publish_marks( $request );
 
 			return $allowed;
 		} catch ( \Throwable $e ) {
+			self::$state['outcome'] = Outcome_Responder::verdict_kind( $e );
+
+			// Before the responder writes anything, because it ends the request.
+			Diagnostics::send_header();
+
 			// A blocking exception is the library's way of saying "rejected" in
 			// exception mode. The responder decides what the visitor sees.
 			$allowed = ( new Outcome_Responder() )->respond( $e, $request );
@@ -228,6 +279,13 @@ final class Runner {
 			 */
 			if ( $allowed ) {
 				self::record_evaluation_failure( $e );
+
+				/*
+				 * Logged as well, every time: the failure recorded above
+				 * reaches Site Health only on the request it happened on,
+				 * which is a visitor's and never the administrator's.
+				 */
+				Diagnostics::warn_fail_open( 'runner', $e, 'the firewall failed while evaluating the request' );
 			}
 
 			return $allowed;
@@ -267,6 +325,8 @@ final class Runner {
 
 		unset( $GLOBALS['basic_firewall_outcome'] );
 
+		Diagnostics::send_header();
+
 		return ( new Outcome_Responder() )->respond( $early['outcome'], $early['request'] );
 	}
 
@@ -292,6 +352,19 @@ final class Runner {
 
 		self::$failure        = 'evaluation-failed';
 		self::$failure_detail = sprintf( 'the wp-config.php path reached a %s verdict and let the request continue', $kind );
+
+		self::$state['early_verdict'] = $kind;
+
+		/*
+		 * Saved now, because the refusal below ends the request: this is the
+		 * report somebody investigating most needs, and a shutdown function
+		 * is not a promise.
+		 */
+		if ( Diagnostics::is_web_request() ) {
+			Diagnostics::persist();
+		}
+
+		Diagnostics::send_header();
 
 		( new Outcome_Responder() )->refuse( $kind, self::$failure_detail );
 	}
@@ -742,5 +815,28 @@ final class Runner {
 		self::$failure_detail = '';
 		self::$marks          = array();
 		self::$exempt         = false;
+		self::$state          = array(
+			'evaluated'     => false,
+			'outcome'       => null,
+			'mode'          => null,
+			'early_verdict' => null,
+		);
+	}
+
+	/**
+	 * What this runner did with the current request, for Diagnostics.
+	 *
+	 * `failure` is the machine key of why evaluation did not happen or did
+	 * not finish, and `failure_detail` what it was about; `exempt` whether an
+	 * exempt role skipped evaluation.
+	 *
+	 * @return array{evaluated: bool, outcome: string|null, mode: string|null, early_verdict: string|null, failure: string|null, failure_detail: string, exempt: bool}
+	 */
+	public static function state(): array {
+		return self::$state + array(
+			'failure'        => self::$failure,
+			'failure_detail' => self::$failure_detail,
+			'exempt'         => self::$exempt,
+		);
 	}
 }

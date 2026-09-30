@@ -396,9 +396,11 @@ browser makes of it before the `//` check. Browsers strip tabs and read `\` as
 `/`, so `/<tab>/evil.example` and `/\evil.example` would otherwise leave the
 site.
 
-If the bootstrap cannot find the plugin's responder it hands refusals to the
-runner the same way, so they are still answered, but after a page cache has had
-its chance. Site Health reports that as **critical** while the mode is
+If the bootstrap cannot find the plugin's responder — or the responder throws,
+or returns instead of answering — it refuses the request with a plain 503
+"Verification required" rather than hand the verdict to the runner, which runs
+after a page cache has had its chance; the reason goes to the PHP error log.
+Site Health reports a missing responder as **critical** while the mode is
 `exception`.
 
 **Deactivating the plugin switches this path off in every mode.** Whether the
@@ -420,6 +422,77 @@ before it builds a firewall at all. So a mode pinned with `BASIC_FIREWALL_MODE`
 chooses how a running firewall answers, and never switches back on one that was
 switched off. `runtime.json` is written only when something in it differs from
 the defaults, so most sites never have one.
+
+### Is the early path evaluating on the web server?
+
+Every status screen describes **its own** request. Site Health is an
+administrator's request, which a login cookie may have sent down another path;
+`wp basic-firewall status` is WP-CLI, which loads `wp-config.php` like a request
+but is not one, and on a host that runs WP-CLI in its own container (Pantheon's
+Terminus, for one) is not even on a web server. So "Evaluation point:
+wp-config.php, before WordPress" in `status` says what happened in WP-CLI's
+process, not on the web containers visitors reach. Three things answer the
+question for real.
+
+**The last web request's report.** The runner runs on every request that reaches
+WordPress, and saves a compact report of it in a transient, so it can be read
+from any container: whether the early path was called and evaluated, why not if
+it did not, which autoloader and library copy it used, the verdict it reached,
+any failure (class, message and file:line), and whether it handed a verdict on;
+what the runner itself did; the mode each path's firewall was actually in; the
+compiled file's path, modification time and a hash prefix, as each path saw it;
+and the cache backend on each path. Two are kept: the last request, and the last
+**anomalous** one — a fail-open, an early path that did not evaluate for a
+reason other than `disabled`, `switched-off` or `deferred-login`, or a refusal
+the early path handed on instead of answering — so ordinary traffic does not
+overwrite the one worth reading. Each is kept for a day and written at most once
+every five seconds; WP-CLI and cron are never recorded. Nothing sensitive is
+kept: the URL path without its query string, the request method, and facts about
+the firewall — no cookies, headers or client address, and credentials in a URL
+in an exception message are masked.
+
+```bash
+wp basic-firewall status          # "Last web request" and "Last anomaly" rows
+wp basic-firewall early-report    # both reports in full, as JSON (--format=yaml)
+```
+
+Site Health's evaluation check raises the last anomaly while it is less than
+six hours old: **critical** for a request let through unfiltered in `block` or
+`exception` mode, or a refusal the early path did not answer; **recommended**
+for an early path that did not evaluate, with the fix for the reason.
+
+**The PHP error log.** Anything that makes either path let a request through
+unfiltered is logged, every time, and so is an early path that is called and
+does not evaluate — that one at most once every 15 minutes per reason, however
+many containers serve the site (the interval is kept in a marker file in the
+private directory). Search for `Basic Firewall [warning]:`:
+
+```
+Basic Firewall [warning]: fail-open (early): the firewall threw RuntimeException "…" at /path/to/File.php:123 on the wp-config.php path, so the request was let through unfiltered.
+Basic Firewall [warning]: fail-open (runner): the firewall failed while evaluating the request -- LogicException "…" at /path/to/File.php:45 -- so the request was let through unfiltered.
+Basic Firewall [warning]: fail-open (runner): the firewall could not start -- ConfigurationException "…" at … -- so the request was let through unfiltered.
+Basic Firewall [warning]: not-evaluated (early): the wp-config.php path did not evaluate this request (no-autoloader), so the mu-plugin evaluates it instead, after any page cache. …
+Basic Firewall [warning]: a challenge verdict on the wp-config.php path could not be answered (…), so the request was refused.
+```
+
+The firewall still fails open on a failure — a firewall that cannot run must not
+be the reason a site is down — but never silently.
+
+**The debug header.** With `define( 'BASIC_FIREWALL_DEBUG', true );` in
+`wp-config.php`, above the snippet, every response the early path writes and
+every request that reaches WordPress carries an `X-Basic-Firewall-Early` header
+with the compact report as JSON:
+
+```bash
+curl -sI "https://example.com/some-path/?nocache=$RANDOM" | grep -i x-basic-firewall-early
+# X-Basic-Firewall-Early: {"early":{"called":true,"evaluated":true,"reason":null,"autoloader":"option","library":"unscoped","mode":"exception","outcome":null,"failure":null,"refused":false,"responder":true},"runner":{...}}
+```
+
+It carries no paths beyond a file name and no message text, but it does tell
+anybody who can make a request how the firewall is deployed and whether it
+evaluated them. **Troubleshooting only**: off unless the constant is defined,
+and remove it when you are done. A page served from an edge cache carries
+whatever header it was cached with, so bust the cache with a fresh query string.
 
 ## The private directory, and why WordPress makes this hard
 
@@ -2107,13 +2180,19 @@ define( 'BASIC_FIREWALL_TRUSTED_HEADERS', Request::HEADER_X_FORWARDED_FOR );
 // uploads -- local disk, where uploads is a network mount. Read on both paths.
 define( 'BASIC_FIREWALL_CACHE_DIR', '/tmp/basic-firewall' );
 
+// Add an X-Basic-Firewall-Early response header describing how the request
+// was evaluated. Troubleshooting only: it tells anybody who can make a request
+// how the firewall is deployed. See "Is the early path evaluating on the web
+// server?".
+define( 'BASIC_FIREWALL_DEBUG', true );
+
 // Let rule sources fetch over the network during a request. Off unless
 // explicitly false: a firewall that makes an outbound HTTP call while a
 // visitor waits is a firewall that fails when the network does.
 define( 'BASIC_FIREWALL_SOURCES_OFFLINE', false );
 ```
 
-The last three are read on **both** evaluation paths, so they belong above the
+The last four are read on **both** evaluation paths, so they belong above the
 bootstrap snippet like the rest.
 
 The interface reports when any of these is in effect, so nobody wonders why the
@@ -2146,6 +2225,7 @@ would turn any environment-variable injection into remote code execution.
 
 ```bash
 wp basic-firewall status            # what the firewall is doing right now
+wp basic-firewall early-report      # the last web request's evaluation report, and the last anomaly
 wp basic-firewall rules             # rules in evaluation order: response, then weight
 wp basic-firewall rebuild           # recompile the configuration
 wp basic-firewall sources           # available presets

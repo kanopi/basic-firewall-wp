@@ -118,6 +118,7 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 				'BFW_EARLY_BARE_PLUGIN_PATH'         => self::$scratch . '/plugin',
 				'BFW_EARLY_CUSTOM_AUTOLOADER'        => self::$scratch . '/mu-plugins/vendor/autoload.php',
 				'BFW_EARLY_NO_RESPONDER_PLUGIN_PATH' => self::$scratch . '/plugin-no-responder',
+				'BFW_EARLY_ERROR_LOG'                => self::$scratch . '/php-error.log',
 			)
 		);
 
@@ -170,6 +171,7 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 		if ( '' !== self::$scratch ) {
 			// phpcs:disable WordPress.WP.AlternativeFunctions -- a test's own scratch files.
 			@unlink( self::$scratch . '/plugin/src' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- a symlink, or nothing if it was never made.
+			@unlink( self::$scratch . '/php-error.log' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- the fixture's log, or nothing if nothing was logged.
 			@unlink( self::$scratch . '/plugin-no-responder/vendor' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- as above.
 			@rmdir( self::$scratch . '/plugin-no-responder' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- as above.
 			@unlink( self::$scratch . '/mu-plugins/vendor/autoload.php' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- as above.
@@ -676,10 +678,25 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 			'evaluated' => true,
 		);
 
-		$this->assertTrue(
-			basic_firewall_answer_outcome( new \RuntimeException( 'the evaluator broke' ), null, basic_firewall_options( array( 'plugin_path' => dirname( __DIR__, 2 ) ) ) ),
-			'A failure of the firewall refused the request instead of failing open.'
-		);
+		$log      = (string) tempnam( sys_get_temp_dir(), 'bfw-log' );
+		$previous = ini_set( 'error_log', $log ); // phpcs:ignore WordPress.PHP.IniSet.Risky -- captured for the assertion below, and put back.
+
+		try {
+			$this->assertTrue(
+				basic_firewall_answer_outcome( new \RuntimeException( 'the evaluator broke' ), null, basic_firewall_options( array( 'plugin_path' => dirname( __DIR__, 2 ) ) ) ),
+				'A failure of the firewall refused the request instead of failing open.'
+			);
+		} finally {
+			ini_set( 'error_log', (string) $previous ); // phpcs:ignore WordPress.PHP.IniSet.Risky -- put back.
+		}
+
+		$logged = (string) file_get_contents( $log ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- the log captured above.
+
+		wp_delete_file( $log );
+
+		$this->assertStringContainsString( 'Basic Firewall [warning]: fail-open (early)', $logged, 'The fail-open was not logged.' );
+		$this->assertStringContainsString( 'EarlyPathExceptionModeTest.php:', $logged, 'The log line does not say where the failure was thrown.' );
+		$this->assertStringContainsString( 'EarlyPathExceptionModeTest.php:', (string) ( $GLOBALS['basic_firewall_early']['failure_origin'] ?? '' ) );
 
 		$this->assertStringContainsString( 'the evaluator broke', (string) ( $GLOBALS['basic_firewall_early']['failure'] ?? '' ), 'The bootstrap did not record the failure.' );
 
@@ -929,6 +946,179 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 	}
 
 	/**
+	 * A failure on the early path fails open, and is logged -- every time.
+	 *
+	 * The report it leaves reaches Site Health only on the request it
+	 * happened on, which is a visitor's. #34 was a firewall failing on
+	 * visitors' requests with nothing in the PHP error log.
+	 */
+	public function test_a_failure_on_the_early_path_is_logged(): void {
+		$this->given_rule( 'challenge', 'exception' );
+
+		$log = $this->error_log();
+
+		$response = $this->request( '/bfw-early-match', array( 'X-Bfw-Test-Throw' => 'evaluate' ) );
+
+		$this->assertSame( 200, $response['status'], 'A failure of the firewall refused the request instead of failing open.' );
+		$this->assertStringContainsString( self::SERVED, $response['body'] );
+
+		$lines = $this->logged_since( $log, 'fail-open (early)' );
+
+		$this->assertCount( 1, $lines, 'The fail-open was not logged exactly once.' );
+		$this->assertStringContainsString( 'Basic Firewall [warning]: fail-open (early)', $lines[0] );
+		$this->assertStringContainsString( 'RuntimeException', $lines[0], 'The log line does not name the exception class.' );
+		$this->assertStringContainsString( 'the fixture broke evaluation', $lines[0], 'The log line does not carry the message.' );
+		$this->assertMatchesRegularExpression( '/fake-request-factory\.php:\d+/', $lines[0], 'The log line does not say where it was thrown.' );
+		$this->assertStringNotContainsString( 'hunter2', $lines[0], 'A password in a DSN reached the log.' );
+		$this->assertStringNotContainsString( '#0 ', $lines[0], 'A trace was logged rather than the origin.' );
+
+		// And again on the next request: a failure is logged every time.
+		$this->request( '/bfw-early-match', array( 'X-Bfw-Test-Throw' => 'evaluate' ) );
+
+		$this->assertCount( 2, $this->logged_since( $log, 'fail-open (early)' ) );
+	}
+
+	/**
+	 * An early path that does not evaluate says so, at most once per interval.
+	 *
+	 * A misconfiguration is the same on every request, so it is logged once
+	 * and then left quiet, across requests and processes. The reasons that
+	 * are the configuration working as meant are not logged at all.
+	 */
+	public function test_a_not_evaluated_warning_is_logged_once_per_interval(): void {
+		$this->given_rule( 'block', 'block' );
+
+		$marker = Plugin::instance()->paths()->base() . '/.warned-no-autoloader';
+
+		wp_delete_file( $marker );
+
+		try {
+			$log = $this->error_log();
+
+			$this->assertSame( 'no-autoloader', $this->request( '/bfw-early-other', array( 'X-Bfw-Test-Plugin' => 'bare' ) )['reason'] );
+			$this->assertSame( 'no-autoloader', $this->request( '/bfw-early-other', array( 'X-Bfw-Test-Plugin' => 'bare' ) )['reason'] );
+
+			$lines = $this->logged_since( $log, 'not-evaluated (early)' );
+
+			$this->assertCount( 1, $lines, 'The warning was not logged exactly once for two requests.' );
+			$this->assertStringContainsString( 'Basic Firewall [warning]: not-evaluated (early)', $lines[0] );
+			$this->assertStringContainsString( '(no-autoloader)', $lines[0] );
+			$this->assertFileExists( $marker, 'The interval is not remembered anywhere another process can see.' );
+
+			// Once the interval has passed, it is logged again.
+			touch( $marker, time() - 3600 ); // phpcs:ignore WordPress.WP.AlternativeFunctions -- ageing the bootstrap's own marker file.
+			clearstatcache();
+
+			$this->request( '/bfw-early-other', array( 'X-Bfw-Test-Plugin' => 'bare' ) );
+
+			$this->assertCount( 2, $this->logged_since( $log, 'not-evaluated (early)' ) );
+
+			// A request handed to the runner on purpose is not a warning.
+			$this->given_rule( 'block', 'block', array( 'bypass_roles' => array( 'editor' ) ) );
+
+			$deferred = $this->request( '/bfw-early-other', array( 'Cookie' => 'wordpress_logged_in_0123abcd=someone%7C1%7Cforged' ) );
+
+			$this->assertSame( 'deferred-login', $deferred['reason'] );
+			$this->assertCount( 2, $this->logged_since( $log, 'not-evaluated (early)' ), 'A deferred login was logged as a problem.' );
+		} finally {
+			wp_delete_file( $marker );
+		}
+	}
+
+	/**
+	 * BASIC_FIREWALL_DEBUG adds the report header; without it there is none.
+	 */
+	public function test_the_debug_header_is_only_sent_when_asked_for(): void {
+		$this->given_rule( 'challenge', 'exception' );
+
+		$this->assertSame( '', $this->request( '/bfw-early-match' )['debug'], 'The debug header was sent without BASIC_FIREWALL_DEBUG.' );
+		$this->assertSame( '', $this->request( '/bfw-early-other' )['debug'], 'The debug header was sent without BASIC_FIREWALL_DEBUG.' );
+
+		// On a response the bootstrap writes itself.
+		$challenged = $this->request( '/bfw-early-match', array( 'X-Bfw-Test-Debug' => '1' ) );
+
+		$this->assertSame( 503, $challenged['status'] );
+
+		$report = json_decode( $challenged['debug'], true );
+
+		$this->assertIsArray( $report, 'The debug header is not JSON: ' . $challenged['debug'] );
+		$this->assertTrue( $report['early']['called'] );
+		$this->assertTrue( $report['early']['evaluated'] );
+		$this->assertSame( 'challenge', $report['early']['outcome'] );
+		$this->assertSame( 'exception', $report['early']['mode'], 'The header does not say which mode the web request was evaluated in.' );
+		$this->assertSame( 'plugin', $report['early']['autoloader'] );
+		$this->assertStringNotContainsString( Plugin::instance()->paths()->base(), $challenged['debug'], 'The header gives away the private directory.' );
+
+		// On a request that goes on to WordPress.
+		$allowed = json_decode( $this->request( '/bfw-early-other', array( 'X-Bfw-Test-Debug' => '1' ) )['debug'], true );
+
+		$this->assertTrue( $allowed['early']['evaluated'] );
+		$this->assertNull( $allowed['early']['outcome'] );
+
+		// On one the early path did not evaluate, with the reason.
+		$skipped = json_decode(
+			$this->request(
+				'/bfw-early-other',
+				array(
+					'X-Bfw-Test-Debug'  => '1',
+					'X-Bfw-Test-Plugin' => 'bare',
+				)
+			)['debug'],
+			true
+		);
+
+		$this->assertFalse( $skipped['early']['evaluated'] );
+		$this->assertSame( 'no-autoloader', $skipped['early']['reason'] );
+
+		// And on a failure, by class and file name only.
+		$failed = json_decode(
+			$this->request(
+				'/bfw-early-match',
+				array(
+					'X-Bfw-Test-Debug' => '1',
+					'X-Bfw-Test-Throw' => 'evaluate',
+				)
+			)['debug'],
+			true
+		);
+
+		$this->assertStringStartsWith( 'RuntimeException @ fake-request-factory.php:', (string) $failed['early']['failure'] );
+	}
+
+	/**
+	 * Where the fixture's PHP error log ends now, to read what follows.
+	 */
+	private function error_log(): int {
+		clearstatcache();
+
+		$file = self::$scratch . '/php-error.log';
+
+		return is_readable( $file ) ? (int) filesize( $file ) : 0;
+	}
+
+	/**
+	 * Lines logged since an offset that contain a string.
+	 *
+	 * @param int    $offset Where to start reading.
+	 * @param string $needle What the lines must contain.
+	 *
+	 * @return list<string>
+	 */
+	private function logged_since( int $offset, string $needle ): array {
+		clearstatcache();
+
+		$file = self::$scratch . '/php-error.log';
+
+		if ( ! is_readable( $file ) ) {
+			return array();
+		}
+
+		$logged = (string) file_get_contents( $file, false, null, $offset ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- the fixture's log file.
+
+		return array_values( array_filter( explode( "\n", $logged ), static fn ( string $line ): bool => str_contains( $line, $needle ) ) );
+	}
+
+	/**
 	 * Assert a response carries the whole no-store set, from kanopi/firewall#418.
 	 *
 	 * @param array<string, mixed> $response A response from request().
@@ -1038,7 +1228,7 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 	 * @param string $plugin     `bare` for the copy with no vendor/, or empty for this one.
 	 * @param string $autoloader The fixture's autoloader scenario.
 	 *
-	 * @return array{status: int, body: string, type: string, cache: string, location: string, retry: string, stashed: string, outcome: string, reason: string, evaluated: string, autoloader: string, autoloader_file: string, autoloader_named: string, custom: string, pragma: string, expires: string, surrogate: string, cdn: string}
+	 * @return array{status: int, body: string, type: string, cache: string, location: string, retry: string, stashed: string, outcome: string, reason: string, evaluated: string, autoloader: string, autoloader_file: string, autoloader_named: string, custom: string, pragma: string, expires: string, surrogate: string, cdn: string, debug: string}
 	 */
 	private function request_with_autoloader( string $plugin, string $autoloader ): array {
 		$response = $this->request(
@@ -1060,7 +1250,7 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 	 * @param string                $path    Path to request.
 	 * @param array<string, string> $headers Request headers.
 	 *
-	 * @return array{status: int, body: string, type: string, cache: string, location: string, retry: string, stashed: string, outcome: string, reason: string, evaluated: string, autoloader: string, autoloader_file: string, autoloader_named: string, custom: string, pragma: string, expires: string, surrogate: string, cdn: string}
+	 * @return array{status: int, body: string, type: string, cache: string, location: string, retry: string, stashed: string, outcome: string, reason: string, evaluated: string, autoloader: string, autoloader_file: string, autoloader_named: string, custom: string, pragma: string, expires: string, surrogate: string, cdn: string, debug: string}
 	 */
 	private function request( string $path, array $headers = array() ): array {
 		$response = wp_remote_get(
@@ -1095,6 +1285,7 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 			'expires'          => (string) wp_remote_retrieve_header( $response, 'expires' ),
 			'surrogate'        => (string) wp_remote_retrieve_header( $response, 'surrogate-control' ),
 			'cdn'              => (string) wp_remote_retrieve_header( $response, 'cdn-cache-control' ),
+			'debug'            => (string) wp_remote_retrieve_header( $response, 'x-basic-firewall-early' ),
 		);
 	}
 }

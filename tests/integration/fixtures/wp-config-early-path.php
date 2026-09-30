@@ -78,6 +78,27 @@ switch ( $_SERVER['HTTP_X_BFW_TEST_AUTOLOADER'] ?? '' ) {
 }
 
 /*
+ * The PHP error log, somewhere a test can read it: the built-in server's own
+ * stderr goes nowhere.
+ */
+if ( '' !== (string) getenv( 'BFW_EARLY_ERROR_LOG' ) ) {
+	ini_set( 'error_log', (string) getenv( 'BFW_EARLY_ERROR_LOG' ) ); // phpcs:ignore WordPress.PHP.IniSet.Risky -- a test fixture pointing the log at a file the test reads.
+}
+
+// BASIC_FIREWALL_DEBUG, as a site would define it above the snippet.
+if ( isset( $_SERVER['HTTP_X_BFW_TEST_DEBUG'] ) ) {
+	define( 'BASIC_FIREWALL_DEBUG', true );
+}
+
+/*
+ * A firewall that fails partway through evaluating, with something that is
+ * not a verdict: see fake-request-factory.php.
+ */
+if ( isset( $_SERVER['HTTP_X_BFW_TEST_THROW'] ) ) {
+	require_once __DIR__ . '/fake-request-factory.php';
+}
+
+/*
  * A responder that fails to answer, standing in for the real one: see
  * fake-responder.php. And a plugin copy with no responder at all.
  */

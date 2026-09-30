@@ -20,6 +20,7 @@ use Kanopi\BasicFirewall\Plugin;
 use Kanopi\BasicFirewall\Request_Tester;
 use Kanopi\BasicFirewall\RuleType\Types\Rate_Limit;
 use Kanopi\BasicFirewall\RuleType\Types\User_Agent;
+use Kanopi\BasicFirewall\Runtime\Diagnostics;
 use Kanopi\BasicFirewall\Runtime\Runner;
 use Kanopi\BasicFirewall\Runtime\Trusted_Proxies;
 use Kanopi\BasicFirewall\Support\Autoloader_Locator;
@@ -1164,6 +1165,12 @@ final class Site_Health {
 			);
 		}
 
+		$anomaly = self::web_request_anomaly();
+
+		if ( null !== $anomaly ) {
+			return $anomaly;
+		}
+
 		if ( $early ) {
 			$where = '<p>' . esc_html__( 'wp-config.php calls the firewall bootstrap, which is the earliest any PHP on this site can act. A page cache cannot serve a request without it being evaluated first.', 'basic-firewall' )
 				. ' ' . (
@@ -1259,6 +1266,80 @@ final class Site_Health {
 			esc_html__( 'The mu-plugin loader is installed, so requests are evaluated as early as a plugin can act. No page cache was detected in front of it.', 'basic-firewall' )
 			. ' ' . esc_html__( 'If you later add one, this test will tell you to move the firewall earlier still.', 'basic-firewall' )
 		);
+	}
+
+	/**
+	 * A result for a recent web request that went wrong, or null.
+	 *
+	 * Everything else this check says is about the request rendering it --
+	 * an administrator's, which a login cookie may have sent down another
+	 * path, and which on a host with several web servers may not even have
+	 * reached the one a visitor did. The runner saves the last anomalous web
+	 * request's report (see Diagnostics), and this raises it while it is
+	 * recent: critical for a request let through unfiltered or a verdict
+	 * the early path handed on in a mode that refuses, recommended for an
+	 * early path that did not evaluate.
+	 *
+	 * @return array{status: string, label: string, description: string, actions: string}|null
+	 */
+	private static function web_request_anomaly(): ?array {
+		$report = Diagnostics::recent_anomaly();
+
+		if ( null === $report ) {
+			return null;
+		}
+
+		$early  = (array) ( $report['early'] ?? array() );
+		$runner = (array) ( $report['runner'] ?? array() );
+		$mode   = (string) ( $report['mode']['runner'] ?? $report['mode']['early'] ?? self::effective_mode() );
+		$when   = sprintf(
+			/* translators: 1: how long ago, 2: request method, 3: URL path. */
+			esc_html__( '%1$s ago, a web request (%2$s %3$s) ', 'basic-firewall' ),
+			esc_html( human_time_diff( (int) ( $report['time'] ?? 0 ) ) ),
+			esc_html( (string) ( $report['method'] ?? '' ) ),
+			'<code>' . esc_html( (string) ( $report['path'] ?? '' ) ) . '</code>'
+		);
+		$capture = '<p>' . esc_html__( 'Run `wp basic-firewall early-report` for the full report, and look for lines starting "Basic Firewall [warning]:" in the PHP error log.', 'basic-firewall' ) . '</p>';
+
+		switch ( $report['anomaly'] ?? null ) {
+			case 'fail-open':
+				$failure = null !== ( $early['failure'] ?? null )
+					/* translators: 1: exception class and message, 2: file and line. */
+					? sprintf( __( 'On the wp-config.php path: %1$s, thrown at %2$s.', 'basic-firewall' ), (string) $early['failure'], (string) ( $early['failure_origin'] ?? '?' ) )
+					/* translators: 1: failure code, 2: what it was about. */
+					: sprintf( __( 'On the mu-plugin path: %1$s (%2$s).', 'basic-firewall' ), (string) ( $runner['failure'] ?? '' ), (string) ( $runner['failure_detail'] ?? '' ) );
+				$body = '<p>' . $when . esc_html__( 'went through unfiltered, because the firewall failed while evaluating it. The firewall fails open by design, so the site stays up, but no rule protected that request.', 'basic-firewall' ) . '</p>'
+					. '<p>' . esc_html( $failure ) . '</p>' . $capture;
+
+				return in_array( $mode, array( 'block', 'exception' ), true )
+					? self::critical( __( 'The firewall recently let a request through because it failed', 'basic-firewall' ), $body )
+					: self::recommended( __( 'The firewall recently let a request through because it failed', 'basic-firewall' ), $body );
+
+			case 'early-verdict-deferred':
+				return self::critical(
+					__( 'The wp-config.php path recently reached a verdict it did not answer', 'basic-firewall' ),
+					'<p>' . $when . sprintf(
+						/* translators: %s: the verdict, e.g. challenge. */
+						esc_html__( 'was given a %s verdict on the wp-config.php path, which was not answered there. It was refused with a plain page instead of what the rule asked for, and on a site with a page cache it may have been served the page first.', 'basic-firewall' ),
+						esc_html( (string) ( $runner['early_verdict'] ?? $early['outcome'] ?? '?' ) )
+					) . '</p>'
+					. ( null !== ( $early['refused'] ?? null ) ? '<p>' . esc_html( (string) $early['refused'] ) . '</p>' : '' )
+					. $capture
+				);
+
+			case 'not-evaluated':
+				$reason = isset( $early['reason'] ) ? (string) $early['reason'] : null;
+
+				return self::recommended(
+					__( 'The wp-config.php snippet recently did not evaluate a web request', 'basic-firewall' ),
+					'<p>' . $when . esc_html__( 'was not evaluated by the wp-config.php snippet, so the mu-plugin evaluated it instead — after advanced-cache.php, where a page cache serves pages without evaluating them.', 'basic-firewall' ) . '</p>'
+					. '<p>' . esc_html( self::early_reason_text( $reason ) ) . '</p>'
+					. $capture,
+					self::early_reason_action( $reason )
+				);
+		}
+
+		return null;
 	}
 
 	/**
