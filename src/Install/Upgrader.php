@@ -154,7 +154,7 @@ final class Upgrader {
 			 * It re-grants capabilities and re-asserts the invariants that later
 			 * releases may add to, all of which are idempotent by construction.
 			 */
-			1 => static function (): void {
+			1  => static function (): void {
 				Capabilities::grant();
 				Plugin::instance()->paths()->ensure();
 				Challenge_Secret::ensure();
@@ -173,7 +173,7 @@ final class Upgrader {
 			 * skipped this routine keeps working. This is what stops the old
 			 * spelling being shown back to somebody on the storage screen.
 			 */
-			2 => static function (): void {
+			2  => static function (): void {
 				$settings = Plugin::instance()->settings();
 				$values   = $settings->all();
 
@@ -220,7 +220,7 @@ final class Upgrader {
 			 * old spelling being shown back to somebody on the rule screen, and
 			 * what reads a slash-delimited pattern the way it was meant.
 			 */
-			3 => static function (): void {
+			3  => static function (): void {
 				$settings = Plugin::instance()->settings();
 				$values   = $settings->all();
 
@@ -239,7 +239,7 @@ final class Upgrader {
 			 * whose fields are blank while the compiled file has the defaults is
 			 * a screen that lies.
 			 */
-			6 => static function (): void {
+			6  => static function (): void {
 				$settings = Plugin::instance()->settings();
 
 				$settings->replace( $settings->all() );
@@ -261,7 +261,7 @@ final class Upgrader {
 			 * an old name wherever it finds one. This is what stops the old name
 			 * being shown back on the rule screen.
 			 */
-			7 => static function (): void {
+			7  => static function (): void {
 				$settings = Plugin::instance()->settings();
 				$values   = $settings->all();
 
@@ -282,7 +282,7 @@ final class Upgrader {
 			 * Read from the option itself, because all() has already dropped
 			 * them from what it returns.
 			 */
-			8 => static function (): void {
+			8  => static function (): void {
 				$stored = get_option( Schema::OPTION, array() );
 
 				if ( ! is_array( $stored ) || Settings::drop_retired( $stored ) === $stored ) {
@@ -308,13 +308,30 @@ final class Upgrader {
 			 * an "all" rule, dropping a negated condition would widen what the
 			 * rule matches.
 			 */
-			9 => static function (): void {
+			9  => static function (): void {
 				$settings = Plugin::instance()->settings();
 				$values   = $settings->all();
 
 				self::rename_condition_variables( $values );
 
 				$settings->replace( $values );
+			},
+
+			/*
+			 * 10: recompile, so the compiled file carries `path_source`.
+			 *
+			 * Nothing stored changes. The compiled file now says
+			 * `global.path_source: script_name`, and `base_path` on a
+			 * subdirectory install, and until it is rebuilt a direct request
+			 * for wp-login.php or an admin screen is matched as `/` again --
+			 * the request rewrite that used to paper over that is gone. Every
+			 * upgrade is followed by a rebuild, so an empty routine is what
+			 * makes one happen on the first request after the update rather
+			 * than on the next settings save. Site Health's request path check
+			 * is critical on a compiled file that is missing the key.
+			 */
+			10 => static function (): void {
+				// Deliberately empty: the rebuild that follows every upgrade is the point.
 			},
 		);
 	}

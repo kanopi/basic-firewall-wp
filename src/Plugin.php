@@ -158,6 +158,16 @@ final class Plugin {
 		add_action( 'basic_firewall_settings_saved', array( $this, 'rebuild' ) );
 		add_action( 'basic_firewall_activated', array( $this, 'rebuild' ) );
 		add_action( 'basic_firewall_upgraded', array( $this, 'rebuild' ) );
+
+		/*
+		 * The compiled `global.base_path` and the challenge's submit URL come
+		 * from the site's addresses (see Site_Layout), so moving the site is a
+		 * change to the compiled file too. Without this, a site moved into or
+		 * out of a subdirectory would match every front-end request as
+		 * `/index.php` until somebody happened to save a setting.
+		 */
+		add_action( 'update_option_home', array( $this, 'rebuild' ), 10, 0 );
+		add_action( 'update_option_siteurl', array( $this, 'rebuild' ), 10, 0 );
 	}
 
 	/**
