@@ -299,9 +299,10 @@ final class Runner {
 				self::record_evaluation_failure( $e );
 
 				/*
-				 * Logged as well, every time: the failure recorded above
-				 * reaches Site Health only on the request it happened on,
-				 * which is a visitor's and never the administrator's.
+				 * Logged as well: the failure recorded above reaches Site
+				 * Health only on the request it happened on, which is a
+				 * visitor's and never the administrator's. Rate-limited per
+				 * exception and place, with a count; see warn_fail_open().
 				 */
 				Diagnostics::warn_fail_open( 'runner', $e, 'the firewall failed while evaluating the request' );
 			}

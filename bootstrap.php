@@ -525,6 +525,88 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 	}
 
 	/**
+	 * Write a warning at most once per interval per key, counting the ones held back.
+	 *
+	 * For a warning that can happen on every request -- a fail-open -- where
+	 * the first matters, a line per request buries the log, and how many
+	 * were held back is itself the thing somebody investigating wants. The
+	 * next line written says how many there were since the last:
+	 * `... (12 more since 2026-01-01 12:00:00 UTC)`.
+	 *
+	 * The marker-file approach of basic_firewall_warn_once(), with the state
+	 * in the file rather than its modification time, because a count has to
+	 * be kept somewhere: when the key was last logged, and how many have been
+	 * held back since. Locked while it is read and rewritten, so two workers
+	 * failing at once neither both log nor lose a count. In the private
+	 * directory when there is one, shared across web containers on a host
+	 * that shares it; the system temporary directory otherwise. A marker
+	 * that cannot be opened means the warning is logged every time -- noisy,
+	 * never silent. Diagnostics::warn_throttled() writes the same file on the
+	 * runner path.
+	 *
+	 * @param string               $key     What the warning is about, e.g. where, class and origin.
+	 * @param string               $message The warning.
+	 * @param array<string, mixed> $options Bootstrap options.
+	 *
+	 * @return bool True when it was logged.
+	 */
+	function basic_firewall_warn_throttled( $key, $message, array $options ) {
+		$interval = isset( $options['fail_open_interval'] ) && is_numeric( $options['fail_open_interval'] ) ? max( 0, (int) $options['fail_open_interval'] ) : 60;
+		$private  = basic_firewall_private_path( $options );
+		$name     = 'fail-open-' . substr( md5( (string) $key ), 0, 16 );
+		$marker   = null !== $private
+			? $private . '/.warned-' . $name
+			: rtrim( sys_get_temp_dir(), '/' ) . '/basic-firewall-warned-' . md5( (string) $options['plugin_path'] ) . '-' . $name;
+
+		// phpcs:disable WordPress.WP.AlternativeFunctions, WordPress.PHP.NoSilencedErrors.Discouraged -- no WP_Filesystem on this path, and a marker that cannot be opened is not an error.
+		$handle = @fopen( $marker, 'c+' );
+
+		if ( false === $handle ) {
+			basic_firewall_warn( $message );
+
+			return true;
+		}
+
+		@flock( $handle, LOCK_EX );
+
+		$state      = json_decode( (string) stream_get_contents( $handle ), true );
+		$logged_at  = is_array( $state ) ? (int) ( $state['logged'] ?? 0 ) : 0;
+		$suppressed = is_array( $state ) ? (int) ( $state['suppressed'] ?? 0 ) : 0;
+		$now        = time();
+		$write      = $logged_at <= 0 || $now - $logged_at >= $interval;
+
+		if ( $write ) {
+			if ( $suppressed > 0 ) {
+				$message .= sprintf( ' (%d more since %s UTC)', $suppressed, gmdate( 'Y-m-d H:i:s', $logged_at ) );
+			}
+
+			basic_firewall_warn( $message );
+
+			$logged_at  = $now;
+			$suppressed = 0;
+		} else {
+			++$suppressed;
+		}
+
+		ftruncate( $handle, 0 );
+		rewind( $handle );
+		fwrite(
+			$handle,
+			(string) json_encode(
+				array(
+					'logged'     => $logged_at,
+					'suppressed' => $suppressed,
+				)
+			)
+		); // phpcs:ignore WordPress.WP.AlternativeFunctions.json_encode_json_encode -- no WordPress yet.
+		@flock( $handle, LOCK_UN );
+		fclose( $handle );
+		// phpcs:enable WordPress.WP.AlternativeFunctions, WordPress.PHP.NoSilencedErrors.Discouraged
+
+		return $write;
+	}
+
+	/**
 	 * What a throwable was, for a log line or a report.
 	 *
 	 * Class, message and where it was thrown -- not a trace, which is long,
@@ -741,26 +823,34 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 			 * WordPress loads, so Site Health reports the failure rather
 			 * than a firewall that evaluated this request and allowed it.
 			 *
-			 * And logged, every time. The report above only lives as long
+			 * And logged. The report above only lives as long
 			 * as this request, and reaches Site Health only when this
 			 * request is the one Site Health is rendering -- so a firewall
 			 * that failed on every visitor's request and never on an
 			 * administrator's left no trace anywhere (#34). The PHP error
 			 * log is the one place this path can write to that somebody
 			 * investigating later will read.
+			 *
+			 * At most once a minute for the same exception from the same
+			 * place (#41), with a count of the ones held back: a failure that
+			 * persists -- a storage outage on a busy site -- would otherwise
+			 * write a line per request and bury everything else in the log.
+			 * The first is always written.
 			 */
 			$failure = basic_firewall_describe_throwable( $outcome );
 
 			$GLOBALS['basic_firewall_early']['failure']        = $failure['class'] . ': ' . $failure['message'];
 			$GLOBALS['basic_firewall_early']['failure_origin'] = $failure['origin'];
 
-			basic_firewall_warn(
+			basic_firewall_warn_throttled(
+				'early|' . $failure['class'] . '|' . $failure['origin'],
 				sprintf(
 					'fail-open (early): the firewall threw %s "%s" at %s on the wp-config.php path, so the request was let through unfiltered.',
 					$failure['class'],
 					$failure['message'],
 					$failure['origin']
-				)
+				),
+				$options
 			);
 
 			basic_firewall_send_debug_header();
@@ -1085,6 +1175,9 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 			// Seconds a "did not evaluate" warning stays quiet once logged.
 			// See basic_firewall_warn_once().
 			'warn_interval'      => 900,
+			// Seconds the same fail-open stays quiet once logged, counting
+			// the ones held back. See basic_firewall_warn_throttled().
+			'fail_open_interval' => 60,
 		);
 
 		return array_merge( $defaults, $options );

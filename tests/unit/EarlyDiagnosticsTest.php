@@ -138,9 +138,9 @@ final class EarlyDiagnosticsTest extends TestCase {
 	}
 
 	/**
-	 * A failure the early path fails open on is logged every time, with its origin.
+	 * A fail-open is logged at once, then at most once a minute, with a count (#41).
 	 */
-	public function test_a_fail_open_is_logged_every_time(): void {
+	public function test_a_fail_open_is_logged_once_a_minute_with_a_count(): void {
 		$options = basic_firewall_options( array( 'private_path' => $this->private ) );
 
 		$GLOBALS['basic_firewall_early'] = array(
@@ -148,15 +148,53 @@ final class EarlyDiagnosticsTest extends TestCase {
 			'evaluated' => true,
 		);
 
-		$this->assertTrue( basic_firewall_answer_outcome( new \LogicException( 'broke once' ), null, $options ) );
-		$this->assertTrue( basic_firewall_answer_outcome( new \LogicException( 'broke twice' ), null, $options ) );
+		// Thrown from one place, as a persistent failure is.
+		$broke = static fn ( string $message ): \LogicException => new \LogicException( $message );
+
+		$this->assertTrue( basic_firewall_answer_outcome( $broke( 'broke once' ), null, $options ) );
+		$this->assertTrue( basic_firewall_answer_outcome( $broke( 'broke twice' ), null, $options ), 'A held-back line refused the request.' );
+		$this->assertTrue( basic_firewall_answer_outcome( $broke( 'broke thrice' ), null, $options ) );
 
 		$logged = $this->logged();
 
-		$this->assertSame( 2, substr_count( $logged, 'Basic Firewall [warning]: fail-open (early): the firewall threw LogicException' ) );
-		$this->assertStringContainsString( '"broke twice" at ' . __FILE__ . ':', $logged );
-		$this->assertStringContainsString( 'EarlyDiagnosticsTest.php:', (string) $GLOBALS['basic_firewall_early']['failure_origin'] );
-		$this->assertSame( 'LogicException: broke twice', $GLOBALS['basic_firewall_early']['failure'] );
+		$this->assertSame( 1, substr_count( $logged, 'Basic Firewall [warning]: fail-open (early): the firewall threw LogicException' ), 'Three requests within a minute logged more than one line.' );
+		$this->assertStringContainsString( '"broke once" at ' . __FILE__ . ':', $logged, 'The first occurrence was not the one logged.' );
+		$this->assertSame( 'LogicException: broke thrice', $GLOBALS['basic_firewall_early']['failure'], 'A held-back line was not still recorded in the report.' );
+
+		$markers = (array) glob( $this->private . '/.warned-fail-open-*' );
+
+		$this->assertCount( 1, $markers, 'The interval is not remembered anywhere another process can see.' );
+
+		$state = json_decode( (string) file_get_contents( (string) $markers[0] ), true ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- the bootstrap's marker.
+
+		$this->assertSame( 2, $state['suppressed'] ?? null );
+
+		// A minute on, the next is logged, with how many were held back.
+		$aged = array(
+			'logged'     => time() - 61,
+			'suppressed' => 2,
+		);
+		$aged = (string) json_encode( $aged ); // phpcs:ignore WordPress.WP.AlternativeFunctions.json_encode_json_encode -- no WordPress in the unit suite.
+
+		file_put_contents( (string) $markers[0], $aged ); // phpcs:ignore WordPress.WP.AlternativeFunctions -- ageing the bootstrap's marker.
+
+		basic_firewall_answer_outcome( $broke( 'broke again' ), null, $options );
+
+		$lines = array_values( array_filter( explode( "\n", $this->logged() ), static fn ( string $line ): bool => str_contains( $line, 'fail-open (early)' ) ) );
+
+		$this->assertCount( 2, $lines );
+		$this->assertStringContainsString( '"broke again"', $lines[1] );
+		$this->assertMatchesRegularExpression( '/\(2 more since \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC\)$/', $lines[1], 'The line does not say how many were held back.' );
+
+		// Another exception, or the same one from elsewhere, is its own line.
+		basic_firewall_answer_outcome( new \RuntimeException( 'something else' ), null, $options );
+
+		$this->assertSame( 3, substr_count( $this->logged(), 'fail-open (early)' ) );
+
+		// And with no interval, every time.
+		basic_firewall_answer_outcome( $broke( 'unthrottled' ), null, array( 'fail_open_interval' => 0 ) + $options );
+
+		$this->assertSame( 4, substr_count( $this->logged(), 'fail-open (early)' ) );
 	}
 
 	/**

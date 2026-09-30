@@ -122,6 +122,59 @@ final class DiagnosticsTest extends Settings_Snapshot {
 	}
 
 	/**
+	 * The same runner fail-open is logged at most once a minute, with a count (#41).
+	 */
+	public function test_a_runner_fail_open_is_logged_once_a_minute(): void {
+		$this->given_exception_mode();
+
+		// One class, cloned per request, so each failure has one origin.
+		$broken = new class() extends Request {
+			/**
+			 * Fail the same way, from the same place, every time.
+			 *
+			 * @throws \LogicException Always.
+			 */
+			public function getPathInfo(): string {
+				throw new \LogicException( 'the runner keeps breaking' );
+			}
+		};
+
+		for ( $i = 0; $i < 3; $i++ ) {
+			Runner::reset();
+
+			$this->assertTrue( $this->evaluate_compiled( Plugin::instance()->paths()->compiled_file(), clone $broken ), 'A held-back line refused the request.' );
+			$this->assertSame( 'evaluation-failed', Runner::state()['failure'], 'A held-back line was not still recorded for the report.' );
+		}
+
+		$this->assertSame( 1, substr_count( $this->logged(), 'fail-open (runner)' ), 'Three failures within a minute logged more than one line.' );
+
+		$markers = (array) glob( Plugin::instance()->paths()->base() . '/.warned-fail-open-*' );
+
+		$this->assertCount( 1, $markers );
+		$this->assertSame( 2, json_decode( (string) file_get_contents( (string) $markers[0] ), true )['suppressed'] ?? null ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- the marker.
+
+		// A minute on, logged again, saying how many were held back.
+		$aged = (string) wp_json_encode(
+			array(
+				'logged'     => time() - 61,
+				'suppressed' => 2,
+			)
+		);
+
+		file_put_contents( (string) $markers[0], $aged ); // phpcs:ignore WordPress.WP.AlternativeFunctions -- ageing the marker.
+
+		Runner::reset();
+		$this->evaluate_compiled( Plugin::instance()->paths()->compiled_file(), clone $broken );
+
+		$this->assertSame( 2, substr_count( $this->logged(), 'fail-open (runner)' ) );
+		$this->assertMatchesRegularExpression( '/fail-open \(runner\).*\(2 more since \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC\)/', $this->logged() );
+
+		// The early path's marker for the same failure is its own.
+		$this->assertSame( Diagnostics::fail_open_marker( 'runner|LogicException|x' ), Diagnostics::fail_open_marker( 'runner|LogicException|x' ) );
+		$this->assertNotSame( Diagnostics::fail_open_marker( 'early|LogicException|x' ), Diagnostics::fail_open_marker( 'runner|LogicException|x' ) );
+	}
+
+	/**
 	 * A firewall that cannot start fails open on the runner path, and is logged.
 	 */
 	public function test_a_runner_that_cannot_start_is_logged(): void {

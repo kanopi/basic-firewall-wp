@@ -488,10 +488,15 @@ logs each rule it could not construct, with the reason, as `Firewall rule could
 not be constructed and is NOT active`.
 
 **The PHP error log.** Anything that makes either path let a request through
-unfiltered is logged, every time, and so is an early path that is called and
-does not evaluate — that one at most once every 15 minutes per reason, however
-many containers serve the site (the interval is kept in a marker file in the
-private directory). Search for `Basic Firewall [warning]:`:
+unfiltered is logged: the first time always, then at most once a minute for the
+same exception class from the same file and line, with the next line saying how
+many were held back — `… (12 more since 2026-01-01 12:00:00 UTC)` — so a
+persistent failure on a busy site (a storage outage, say) does not write a line
+per request. An early path that is called and does not evaluate is logged at
+most once every 15 minutes per reason. Both intervals hold however many
+containers serve the site: they are kept in marker files in the private
+directory (`.warned-*`), shared wherever that directory is. Search for
+`Basic Firewall [warning]:`:
 
 ```
 Basic Firewall [warning]: fail-open (early): the firewall threw RuntimeException "…" at /path/to/File.php:123 on the wp-config.php path, so the request was let through unfiltered.

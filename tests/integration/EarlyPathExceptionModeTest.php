@@ -10,6 +10,7 @@ declare( strict_types = 1 );
 namespace Kanopi\BasicFirewall\Tests\integration;
 
 use Kanopi\BasicFirewall\Health\Site_Health;
+use Kanopi\BasicFirewall\Runtime\Diagnostics;
 use Kanopi\BasicFirewall\Runtime\Outcome_Responder;
 use Kanopi\BasicFirewall\Plugin;
 use Kanopi\BasicFirewall\Runtime\Runner;
@@ -689,6 +690,8 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 	 * firewall on the very request it had just waved through.
 	 */
 	public function test_a_failure_fails_open_and_is_reported(): void {
+		Diagnostics::reset_throttle();
+
 		$GLOBALS['basic_firewall_early'] = array(
 			'called'    => true,
 			'evaluated' => true,
@@ -997,14 +1000,18 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 	}
 
 	/**
-	 * A failure on the early path fails open, and is logged -- every time.
+	 * A failure on the early path fails open, and is logged -- then at most once a minute.
 	 *
 	 * The report it leaves reaches Site Health only on the request it
 	 * happened on, which is a visitor's. #34 was a firewall failing on
-	 * visitors' requests with nothing in the PHP error log.
+	 * visitors' requests with nothing in the PHP error log. The first is
+	 * always logged; the same failure again within the minute is counted,
+	 * and the count goes on the next line written (#41).
 	 */
 	public function test_a_failure_on_the_early_path_is_logged(): void {
 		$this->given_rule( 'challenge', 'exception' );
+
+		Diagnostics::reset_throttle();
 
 		$log = $this->error_log();
 
@@ -1023,10 +1030,34 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 		$this->assertStringNotContainsString( 'hunter2', $lines[0], 'A password in a DSN reached the log.' );
 		$this->assertStringNotContainsString( '#0 ', $lines[0], 'A trace was logged rather than the origin.' );
 
-		// And again on the next request: a failure is logged every time.
+		// Not again on the next request, within the minute: counted instead.
+		$again = $this->request( '/bfw-early-match', array( 'X-Bfw-Test-Throw' => 'evaluate' ) );
+
+		$this->assertStringContainsString( self::SERVED, $again['body'], 'A held-back log line changed what the visitor got.' );
+		$this->assertCount( 1, $this->logged_since( $log, 'fail-open (early)' ), 'The same failure was logged twice within a minute.' );
+
+		$markers = (array) glob( Plugin::instance()->paths()->base() . '/.warned-fail-open-*' );
+
+		$this->assertCount( 1, $markers, 'The interval is not remembered where every web container can see it.' );
+
+		// A minute on, logged again, with the count.
+		$aged = (string) wp_json_encode(
+			array(
+				'logged'     => time() - 61,
+				'suppressed' => 1,
+			)
+		);
+
+		file_put_contents( (string) $markers[0], $aged ); // phpcs:ignore WordPress.WP.AlternativeFunctions -- ageing the bootstrap's marker.
+
 		$this->request( '/bfw-early-match', array( 'X-Bfw-Test-Throw' => 'evaluate' ) );
 
-		$this->assertCount( 2, $this->logged_since( $log, 'fail-open (early)' ) );
+		$lines = $this->logged_since( $log, 'fail-open (early)' );
+
+		$this->assertCount( 2, $lines );
+		$this->assertStringContainsString( '(1 more since ', $lines[1], 'The line does not say how many were held back.' );
+
+		Diagnostics::reset_throttle();
 	}
 
 	/**

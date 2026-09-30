@@ -58,6 +58,18 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   and mode of what it wrote in its meta, and the early path records the
   compiled file's hash prefix alongside its modification time.
 
+### Changed
+
+- **`fail-open (early|runner)` log lines are rate-limited** (#41). They were
+  written on every request, so a persistent failure on a busy site logged one
+  line per request. The first is still always written; after that, at most one
+  line a minute per exception class and file:line, and the next line written
+  says how many were held back (`… (N more since <time> UTC)`). The state is
+  kept in a marker file in the private directory, as the `not-evaluated`
+  warning's is, so the limit holds across workers and containers; a marker
+  that cannot be written means logging every time. The report still records
+  every failure.
+
 ### Fixed
 
 - **The early path no longer requires a second Composer autoloader when the

@@ -72,6 +72,11 @@ final class Diagnostics {
 	public const RECENT = 6 * HOUR_IN_SECONDS;
 
 	/**
+	 * How long the same fail-open stays out of the log once written, in seconds.
+	 */
+	public const FAIL_OPEN_INTERVAL = 60;
+
+	/**
 	 * How long after a compile its files are not compared, in seconds.
 	 *
 	 * A request that starts before a compile and ends after it sees two
@@ -187,6 +192,12 @@ final class Diagnostics {
 		foreach ( array( 'last', 'anomaly' ) as $slot ) {
 			clearstatcache( true, self::marker( $slot ) );
 			wp_delete_file( self::marker( $slot ) );
+		}
+
+		foreach ( (array) glob( Plugin::instance()->paths()->base() . '/.warned-fail-open-*' ) as $marker ) {
+			if ( is_string( $marker ) ) {
+				wp_delete_file( $marker );
+			}
 		}
 
 		self::$watching = false;
@@ -626,7 +637,11 @@ final class Diagnostics {
 	 * Write a fail-open to the PHP error log.
 	 *
 	 * The same shape as the bootstrap's line, so one search finds both:
-	 * `Basic Firewall [warning]: fail-open (<where>)`.
+	 * `Basic Firewall [warning]: fail-open (<where>)`. At most once every
+	 * FAIL_OPEN_INTERVAL seconds for the same exception class from the same
+	 * file and line, and the next line written says how many were held back
+	 * (#41): a persistent failure on a busy site otherwise logs a line per
+	 * request. The first is always written.
 	 *
 	 * @param string     $where `early` or `runner`.
 	 * @param \Throwable $e     What was thrown.
@@ -635,7 +650,8 @@ final class Diagnostics {
 	public static function warn_fail_open( string $where, \Throwable $e, string $what ): void {
 		$described = self::describe( $e );
 
-		self::warn(
+		self::warn_throttled(
+			$where . '|' . $described['class'] . '|' . $described['origin'],
 			sprintf(
 				'fail-open (%s): %s -- %s "%s" at %s -- so the request was let through unfiltered.',
 				$where,
@@ -645,6 +661,80 @@ final class Diagnostics {
 				$described['origin']
 			)
 		);
+	}
+
+	/**
+	 * Write a warning at most once per FAIL_OPEN_INTERVAL per key, counting the rest.
+	 *
+	 * Mirrors basic_firewall_warn_throttled() in bootstrap.php, which this
+	 * class cannot rely on being loaded, and writes the same marker file in
+	 * the same format, so the interval and the count are shared by every
+	 * worker and -- where the private directory is shared storage -- every
+	 * container. A marker that cannot be opened means logging every time.
+	 *
+	 * @param string $key     What the warning is about: where, class and origin.
+	 * @param string $message The warning.
+	 *
+	 * @return bool True when it was logged.
+	 */
+	public static function warn_throttled( string $key, string $message ): bool {
+		$marker = self::fail_open_marker( $key );
+
+		// phpcs:disable WordPress.WP.AlternativeFunctions, WordPress.PHP.NoSilencedErrors.Discouraged -- a lock around a read and a rewrite, which WP_Filesystem cannot do; a marker that cannot be opened is not an error.
+		$handle = @fopen( $marker, 'c+' );
+
+		if ( false === $handle ) {
+			self::warn( $message );
+
+			return true;
+		}
+
+		@flock( $handle, LOCK_EX );
+
+		$state      = json_decode( (string) stream_get_contents( $handle ), true );
+		$logged_at  = is_array( $state ) ? (int) ( $state['logged'] ?? 0 ) : 0;
+		$suppressed = is_array( $state ) ? (int) ( $state['suppressed'] ?? 0 ) : 0;
+		$now        = time();
+		$write      = $logged_at <= 0 || $now - $logged_at >= self::FAIL_OPEN_INTERVAL;
+
+		if ( $write ) {
+			if ( $suppressed > 0 ) {
+				$message .= sprintf( ' (%d more since %s UTC)', $suppressed, gmdate( 'Y-m-d H:i:s', $logged_at ) );
+			}
+
+			self::warn( $message );
+
+			$logged_at  = $now;
+			$suppressed = 0;
+		} else {
+			++$suppressed;
+		}
+
+		ftruncate( $handle, 0 );
+		rewind( $handle );
+		fwrite(
+			$handle,
+			(string) wp_json_encode(
+				array(
+					'logged'     => $logged_at,
+					'suppressed' => $suppressed,
+				)
+			)
+		);
+		@flock( $handle, LOCK_UN );
+		fclose( $handle );
+		// phpcs:enable WordPress.WP.AlternativeFunctions, WordPress.PHP.NoSilencedErrors.Discouraged
+
+		return $write;
+	}
+
+	/**
+	 * The marker file a throttled warning's state is kept in.
+	 *
+	 * @param string $key What the warning is about.
+	 */
+	public static function fail_open_marker( string $key ): string {
+		return Plugin::instance()->paths()->base() . '/.warned-fail-open-' . substr( md5( $key ), 0, 16 );
 	}
 
 	/**
