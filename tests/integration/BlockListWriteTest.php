@@ -121,15 +121,15 @@ final class BlockListWriteTest extends TestCase {
 			 * third backend the expiry has to survive on.
 			 */
 			if ( 'redis' === $backend ) {
-				list( $host, $port ) = $this->redis_server();
-
+				$server                     = $this->redis_server();
 				$prefix                     = 'bfwtest-blocklist:' . bin2hex( random_bytes( 4 ) ) . ':';
 				$values['storage']['redis'] = array_merge(
 					(array) ( $values['storage']['redis'] ?? array() ),
 					array(
-						'host'   => $host,
-						'port'   => $port,
-						'prefix' => $prefix,
+						'host'     => $server[0],
+						'port'     => $server[1],
+						'password' => $server[2],
+						'prefix'   => $prefix,
 					)
 				);
 			}
@@ -163,8 +163,8 @@ final class BlockListWriteTest extends TestCase {
 			$settings->replace( $snapshot );
 			$this->fresh_block_list();
 
-			if ( isset( $prefix, $host, $port ) ) {
-				$this->delete_redis_keys( $host, $port, $prefix );
+			if ( isset( $prefix, $server ) ) {
+				$this->delete_redis_keys( $server, $prefix );
 			}
 		}
 	}
@@ -177,14 +177,11 @@ final class BlockListWriteTest extends TestCase {
 	 * backend that quietly fell back to file storage.
 	 */
 	public function test_a_redis_block_is_stored_on_the_server_under_its_prefix(): void {
-		list( $host, $port ) = $this->redis_server();
-
+		$server   = $this->redis_server();
 		$settings = Plugin::instance()->settings();
 		$snapshot = $settings->all();
 		$prefix   = 'bfwtest-blocklist:' . bin2hex( random_bytes( 4 ) ) . ':';
-		$redis    = new \Redis();
-
-		$redis->connect( $host, $port, 1.0 );
+		$redis    = $this->redis_client( $server );
 
 		try {
 			$values                       = $settings->all();
@@ -192,9 +189,10 @@ final class BlockListWriteTest extends TestCase {
 			$values['storage']['redis']   = array_merge(
 				(array) ( $values['storage']['redis'] ?? array() ),
 				array(
-					'host'   => $host,
-					'port'   => $port,
-					'prefix' => $prefix,
+					'host'     => $server[0],
+					'port'     => $server[1],
+					'password' => $server[2],
+					'prefix'   => $prefix,
 				)
 			);
 			$settings->replace( $values );
@@ -214,7 +212,7 @@ final class BlockListWriteTest extends TestCase {
 			Plugin::instance()->blocked()->unblock( self::ADDRESS );
 			$settings->replace( $snapshot );
 			$this->fresh_block_list();
-			$this->delete_redis_keys( $host, $port, $prefix );
+			$this->delete_redis_keys( $server, $prefix );
 			$redis->close();
 		}
 	}
@@ -263,14 +261,12 @@ final class BlockListWriteTest extends TestCase {
 	/**
 	 * Remove what a test left under its prefix.
 	 *
-	 * @param string $host   Server.
-	 * @param int    $port   Port.
-	 * @param string $prefix Key prefix.
+	 * @param array{0: string, 1: int, 2: string} $server From redis_server().
+	 * @param string                              $prefix Key prefix.
 	 */
-	private function delete_redis_keys( string $host, int $port, string $prefix ): void {
+	private function delete_redis_keys( array $server, string $prefix ): void {
 		try {
-			$redis = new \Redis();
-			$redis->connect( $host, $port, 1.0 );
+			$redis = $this->redis_client( $server );
 
 			$keys = $this->redis_keys( $redis, $prefix );
 

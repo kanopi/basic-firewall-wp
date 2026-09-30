@@ -19,7 +19,10 @@ namespace Kanopi\BasicFirewall\Tests\integration;
  * present, and a declared service that is missing fails the test instead:
  *
  * - `BASIC_FIREWALL_TEST_REDIS=host:port` -- a Redis server. Without it the
- *   tests try 127.0.0.1:6379 and skip when nothing answers.
+ *   tests try 127.0.0.1:6379 and skip when nothing answers. With
+ *   `BASIC_FIREWALL_TEST_REDIS_PASSWORD` it requires that password, and the
+ *   tests hand it to the plugin the way a site would, so authentication is
+ *   exercised too. RedisPasswordTest reads the same two.
  * - `BASIC_FIREWALL_TEST_APCU=1` -- APCu enabled for the CLI
  *   (`apc.enable_cli=1`).
  * - `BASIC_FIREWALL_MULTISITE=1` -- the site is a multisite network. Tests of a
@@ -33,7 +36,7 @@ trait Test_Services {
 	 * Every key a test writes should carry a random prefix, so a shared server
 	 * is safe to use.
 	 *
-	 * @return array{0: string, 1: int}
+	 * @return array{0: string, 1: int, 2: string} Host, port and password ('' for none).
 	 */
 	private function redis_server(): array {
 		$spec     = getenv( 'BASIC_FIREWALL_TEST_REDIS' );
@@ -43,6 +46,7 @@ trait Test_Services {
 		$parts = explode( ':', $spec, 2 );
 		$host  = $parts[0];
 		$port  = isset( $parts[1] ) && (int) $parts[1] > 0 ? (int) $parts[1] : 6379;
+		$auth  = (string) getenv( 'BASIC_FIREWALL_TEST_REDIS_PASSWORD' );
 
 		if ( ! class_exists( 'Redis' ) ) {
 			$this->service_missing( $promised, 'ext-redis is not loaded.' );
@@ -51,7 +55,7 @@ trait Test_Services {
 		try {
 			$probe = new \Redis();
 
-			if ( ! $probe->connect( $host, $port, 0.5 ) || ! $probe->ping() ) {
+			if ( ! $probe->connect( $host, $port, 0.5 ) || ( '' !== $auth && ! $probe->auth( $auth ) ) || ! $probe->ping() ) {
 				$this->service_missing( $promised, sprintf( 'No Redis server answered at %s:%d. Set BASIC_FIREWALL_TEST_REDIS to host:port to run this.', $host, $port ) );
 			}
 
@@ -60,7 +64,23 @@ trait Test_Services {
 			$this->service_missing( $promised, sprintf( 'No Redis server answered at %s:%d (%s). Set BASIC_FIREWALL_TEST_REDIS to host:port to run this.', $host, $port, $e->getMessage() ) );
 		}
 
-		return array( $host, $port );
+		return array( $host, $port, $auth );
+	}
+
+	/**
+	 * A client connected to the test server, authenticated when it needs it.
+	 *
+	 * @param array{0: string, 1: int, 2: string} $server From redis_server().
+	 */
+	private function redis_client( array $server ): \Redis {
+		$redis = new \Redis();
+		$redis->connect( $server[0], $server[1], 1.0 );
+
+		if ( '' !== $server[2] ) {
+			$redis->auth( $server[2] );
+		}
+
+		return $redis;
 	}
 
 	/**

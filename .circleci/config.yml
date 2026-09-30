@@ -14,10 +14,12 @@ PHP_TOOLS: &PHP_TOOLS "8.3"
 
 MYSQL_IMAGE: &MYSQL_IMAGE "cimg/mysql:8.0"
 
-# A live Redis for the Redis block list, the rate-limit counters and
-# uninstall's SCAN/DEL, which otherwise only ever ran against nothing and
-# skipped. Unauthenticated: nothing but the job can reach it.
-REDIS_IMAGE: &REDIS_IMAGE "cimg/redis:7.2"
+# A live Redis for the Redis block list, the rate-limit counters, uninstall's
+# SCAN/DEL and the injected Redis password, which otherwise only ever ran
+# against nothing and skipped. It requires a password, so every one of those
+# authenticates the way a production server makes it. The official image,
+# whose entrypoint passes the arguments below to redis-server.
+REDIS_IMAGE: &REDIS_IMAGE "redis:7.2-alpine"
 
 # Release tags: 1.0.0, v1.0.0, and pre-releases such as 1.1.0-rc.1.
 #
@@ -139,6 +141,8 @@ jobs:
           MYSQL_ROOT_PASSWORD: << pipeline.parameters.db_password >>
           MYSQL_DATABASE: wordpress_test
       - image: *REDIS_IMAGE
+        # Not a secret, like db_password: a server that lives for one job.
+        command: ["redis-server", "--requirepass", "circleci-redis-password-not-a-secret"]
     parameters:
       php:
         type: string
@@ -184,6 +188,7 @@ jobs:
                   php -m | grep -qx redis
                   php -r 'exit( function_exists( "apcu_enabled" ) && apcu_enabled() ? 0 : 1 );'
                   echo 'export BASIC_FIREWALL_TEST_REDIS=127.0.0.1:6379' >> "$BASH_ENV"
+                  echo 'export BASIC_FIREWALL_TEST_REDIS_PASSWORD=circleci-redis-password-not-a-secret' >> "$BASH_ENV"
                   echo 'export BASIC_FIREWALL_TEST_APCU=1' >> "$BASH_ENV"
             - run:
                 name: Wait for Redis

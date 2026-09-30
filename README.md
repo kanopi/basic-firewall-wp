@@ -2545,7 +2545,7 @@ on a release tag, and none of them advisory:
 |---|---|
 | `static` | `check-platform-reqs --no-dev`, PHPCS, PHPStan — on 8.1, the declared floor |
 | `unit-php-*` | The unit suite on 8.1, 8.2, 8.3, 8.4 and 8.5 |
-| `integration-*` | Integration, end-to-end over real HTTP, and the WP-CLI suite, against WP 6.4/PHP 8.1, WP latest/PHP 8.3, and WP nightly on both PHP 8.4 and 8.5. Every cell has a Redis service container; WP latest/PHP 8.3 and nightly/PHP 8.4 also install ext-redis and ext-apcu (with `apc.enable_cli=1`), so the live Redis block list, uninstall's Redis SCAN/DEL and the APCu cache tests run there, while the other two keep running the tests that need those extensions absent |
+| `integration-*` | Integration, end-to-end over real HTTP, and the WP-CLI suite, against WP 6.4/PHP 8.1, WP latest/PHP 8.3, and WP nightly on both PHP 8.4 and 8.5. Every cell has a password-protected Redis service container; WP latest/PHP 8.3 and nightly/PHP 8.4 also install ext-redis and ext-apcu (with `apc.enable_cli=1`), so the live Redis block list, uninstall's Redis SCAN/DEL and the APCu cache tests run there, while the other two keep running the tests that need those extensions absent |
 | `integration-multisite-wplatest-php8.3` | The same three suites on a subdirectory network with a second site and the plugin network-activated: the early path stepping aside, the network-wide mu-loader surviving a site's deactivation, Site Health on a network, and uninstall visiting every site |
 | `versions` | `build/check-versions.sh`: the plugin header, `BASIC_FIREWALL_VERSION` and `readme.txt`'s `Stable tag` agree. On a tag, the tag and the newest CHANGELOG heading must agree too |
 | `package` | Builds the zip, then `tests/package/smoke.sh` on a clean WordPress with the Composer binary removed from `PATH`: installs and activates the zip, checks it loaded scoped, imports a block rule, asserts over HTTP that an unmatched request gets 200 and the matched one a 403 with the configured message, then deactivates and uninstalls and checks both exit 0 and leave nothing behind |
@@ -2557,7 +2557,8 @@ that passes on 8.4 says "PHP 8.5" rather than "WordPress trunk moved".
 A test that needs Redis, APCu or a network skips where they are absent, which
 is right on a laptop and would be wrong in CI: a Redis container that failed to
 start would go green with the Redis tests skipped. So the jobs declare what they
-provide -- `BASIC_FIREWALL_TEST_REDIS=host:port`, `BASIC_FIREWALL_TEST_APCU=1`,
+provide -- `BASIC_FIREWALL_TEST_REDIS=host:port` (with
+`BASIC_FIREWALL_TEST_REDIS_PASSWORD` when it needs one), `BASIC_FIREWALL_TEST_APCU=1`,
 `BASIC_FIREWALL_MULTISITE=1` -- and a declared service that is missing fails the
 test instead. Set the same variables to run those tests locally, for instance
 against a throwaway `redis-server`.

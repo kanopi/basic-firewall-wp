@@ -352,15 +352,15 @@ final class UninstallLeftoversTest extends TestCase {
 	 * it writes carries a random prefix, so a shared server is safe to use.
 	 */
 	public function test_redis_keys_under_the_plugins_prefixes_are_deleted(): void {
-		list( $host, $port ) = $this->redis_server();
+		$server                         = $this->redis_server();
+		list( $host, $port, $password ) = $server;
 
-		$redis  = new \Redis();
+		$redis  = $this->redis_client( $server );
 		$run    = bin2hex( random_bytes( 4 ) );
 		$block  = 'bfwtest:' . $run . ':';
 		$counts = 'bfwtest-rl:' . $run . ':';
 		$other  = 'bfwtest-foreign:' . $run;
 
-		$redis->connect( $host, $port, 1.0 );
 		$redis->set( $block . 'block:203.0.113.9', '{}' );
 		$redis->zAdd( $block . 'offense:203.0.113.9', time(), 'x' );
 		$redis->set( $counts . '203.0.113.9', '3' );
@@ -374,18 +374,20 @@ final class UninstallLeftoversTest extends TestCase {
 				'storage' => array(
 					'backend' => 'redis',
 					'redis'   => array(
-						'host'   => $host,
-						'port'   => $port,
-						'prefix' => $block,
+						'host'     => $host,
+						'port'     => $port,
+						'password' => $password,
+						'prefix'   => $block,
 					),
 				),
 				'rules'   => array(
 					$this->rate_limit_rule(
 						array(
-							'backend'    => 'redis',
-							'redis_host' => $host,
-							'redis_port' => $port,
-							'key_prefix' => $counts,
+							'backend'        => 'redis',
+							'redis_host'     => $host,
+							'redis_port'     => $port,
+							'redis_password' => $password,
+							'key_prefix'     => $counts,
 						)
 					),
 				),
