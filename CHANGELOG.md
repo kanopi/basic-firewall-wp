@@ -98,6 +98,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **Paths routed through `index.php` can no longer be spelled around a rule**
+  (#51). The library normalises the path every rule sees, on both path
+  sources, so `//wp-json/…`, `/./wp-json/…`, `/%2e/wp-json/…`,
+  `/%77p-json/…` and `/wp-json;x/…` match a rule or rate limit on
+  `/wp-json/`, as the direct-file spellings of #32 already did. `..` is kept
+  as written. Covered in `PathSpellingTest`, over HTTP on the early path and
+  end to end.
 - **ASN rules are compared by the library as numbers, and the plugin's
   workarounds are gone** (refs #49). The type no longer casts a typed number
   to an integer or strips `AS` at compile time, and a list of numbers compared

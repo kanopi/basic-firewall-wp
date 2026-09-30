@@ -868,6 +868,48 @@ final class HttpEvaluationTest extends TestCase {
 	}
 
 	/**
+	 * Every spelling of a REST API route the web server routes to index.php is refused (#51).
+	 *
+	 * The server normalises the URL before routing it, and WordPress trims
+	 * every leading slash, so each of these is the REST API to WordPress. The
+	 * library read a routed request's path from the raw request URI until
+	 * kanopi/firewall 2.35.0, which normalises it: each spelling reached the
+	 * rules as itself and got past `path starts with /wp-json/`. Sent over a
+	 * raw socket, because an HTTP client may tidy the path first.
+	 */
+	public function test_routed_spellings_of_a_rest_route_are_caught(): void {
+		$this->given_rules(
+			array(
+				array(
+					'id'       => 'e2e_routed_spelling_block',
+					'type'     => 'url',
+					'label'    => 'End-to-end routed spelling block',
+					'enabled'  => true,
+					'response' => 'block',
+					'weight'   => 0,
+					'record'   => 'no',
+					'settings' => array(
+						'match_type' => 'any',
+						'conditions' => array(
+							array(
+								'variable' => 'path',
+								'operator' => 'starts_with',
+								'value'    => '/wp-json/',
+							),
+						),
+					),
+				),
+			)
+		);
+
+		foreach ( array( '/wp-json/wp/v2/users', '//wp-json/wp/v2/users', '/./wp-json/wp/v2/users', '/%77p-json/wp/v2/users', '/wp-json;x/wp/v2/users' ) as $spelling ) {
+			$this->assertSame( 403, $this->raw_request( $spelling ), $spelling . ' reached the REST API and got past a block on /wp-json/.' );
+		}
+
+		$this->assertNotSame( 403, $this->raw_request( '/' ), 'The rule refuses everything, so this test proves nothing.' );
+	}
+
+	/**
 	 * Decisions are announced as `basic_firewall_decision`, over real HTTP (#3).
 	 *
 	 * DecisionEventsTest drives the dispatcher in-process; this is the path a

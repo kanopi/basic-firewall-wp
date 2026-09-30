@@ -570,6 +570,82 @@ final class DirectFileRequestTest extends Settings_Snapshot {
 	}
 
 	/**
+	 * Spellings of a REST API route that PHP's built-in server routes to index.php as sent.
+	 *
+	 * None of these is a file, so the server falls back to index.php, as
+	 * WordPress's rewrite does, and hands the request URI over as the client
+	 * spelled it.
+	 */
+	private const ROUTED_SPELLINGS = array( '/wp-json/wp/v2/users', '//wp-json/wp/v2/users', '/./wp-json/wp/v2/users', '/%77p-json/wp/v2/users', '/wp-json;x/wp/v2/users' );
+
+	/**
+	 * Routed spellings of a REST API route are refused by a block on it (#51).
+	 *
+	 * Before kanopi/firewall 2.35.0 the path of a routed request came from the
+	 * raw request URI, so each of these reached the rules as itself and got
+	 * past `path starts with /wp-json/`, while WordPress, which trims every
+	 * leading slash, served the REST API.
+	 */
+	public function test_routed_spellings_are_refused_by_a_rest_block(): void {
+		$this->given_rules( array( self::url_rule( 'routed_spelling_block', array( self::condition( 'path', 'starts_with', '/wp-json/' ) ) ) ) );
+
+		foreach ( self::ROUTED_SPELLINGS as $spelling ) {
+			$this->forget_stores();
+
+			$this->assertSame( 403, $this->raw_request( $spelling )['status'], $spelling . ' was routed to index.php and got past a block on /wp-json/.' );
+		}
+
+		$this->forget_stores();
+
+		$this->assertSame( 200, $this->raw_request( '/bfw-direct-page' )['status'], 'The rule refuses everything, so this test proves nothing.' );
+	}
+
+	/**
+	 * Routed spellings of a REST API route count against one rate limit (#51).
+	 */
+	public function test_routed_spellings_count_against_a_rest_rate_limit(): void {
+		$budget = count( self::ROUTED_SPELLINGS );
+
+		$this->given_rules(
+			array(
+				array(
+					'id'       => 'routed_spelling_rate',
+					'type'     => 'rate_limit',
+					'label'    => 'Routed spelling rate limit',
+					'response' => 'block',
+					'record'   => 'no',
+					'settings' => array(
+						'paths'                => array(
+							array(
+								'pattern' => '/wp-json/wp/v2/users',
+								'limit'   => $budget,
+								'window'  => 60,
+							),
+						),
+						'default_limit'        => 60,
+						'default_window'       => 60,
+						'limit_unlisted_paths' => false,
+						'status_code'          => 429,
+						'storage'              => array(
+							'backend' => 'file',
+							'file'    => 'private://' . self::STORE . 'ratelimit.data',
+						),
+					),
+				),
+			)
+		);
+
+		$statuses = array();
+
+		foreach ( array_merge( self::ROUTED_SPELLINGS, array( '//wp-json/wp/v2/users' ) ) as $spelling ) {
+			$statuses[ $spelling . ' #' . count( $statuses ) ] = $this->raw_request( $spelling )['status'];
+		}
+
+		$this->assertSame( array_fill( 0, $budget, 200 ), array_slice( array_values( $statuses ), 0, $budget ), 'A request within the allowance was refused: ' . wp_json_encode( $statuses ) );
+		$this->assertSame( 429, array_values( $statuses )[ $budget ], 'The request after the allowance was not refused, so the spellings were not counted: ' . wp_json_encode( $statuses ) );
+	}
+
+	/**
 	 * Site Health's regression check passes on a working build.
 	 */
 	public function test_site_health_confirms_the_path_of_a_direct_request(): void {

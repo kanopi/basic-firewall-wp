@@ -35,6 +35,15 @@ use Symfony\Component\HttpFoundation\Request;
  * `/wp-login.php;x` to index.php. DirectFileRequestTest covers the four over
  * real HTTP.
  *
+ * Requests routed through index.php are the other half (#51). For those the
+ * library reads the path from the request URI, as the client spelled it, while
+ * the server has already normalised the URL and WordPress trims every leading
+ * slash, so `//wp-json/…`, `/./wp-json/…`, `/%77p-json/…` and `/wp-json;x/…`
+ * were the REST API to WordPress and missed a rule on `/wp-json/`. Since
+ * kanopi/firewall 2.35.0 both path sources normalise: repeated slashes
+ * collapse, `.` segments go, unreserved characters are decoded and `;params`
+ * are dropped. `..` is kept as written, on purpose, so it is not among them.
+ *
  * @covers \Kanopi\BasicFirewall\Compiler\Config_Compiler
  * @covers \Kanopi\BasicFirewall\Runtime\Request_Factory
  */
@@ -44,6 +53,11 @@ final class PathSpellingTest extends Honoured_Settings {
 	 * Every spelling, the plain one first.
 	 */
 	private const SPELLINGS = array( '/wp-login.php', '/./wp-login.php', '/%77p-login.php', '//wp-login.php', '/x/../wp-login.php', '/wp-login.php;x' );
+
+	/**
+	 * Spellings of a REST API route that the server routes to index.php, the plain one first.
+	 */
+	private const ROUTED_SPELLINGS = array( '/wp-json/wp/v2/users', '//wp-json/wp/v2/users', '/./wp-json/wp/v2/users', '/%77p-json/wp/v2/users', '/wp-json;x/wp/v2/users', '/%2e/wp-json/wp/v2/users' );
 
 	/**
 	 * The real `$_SERVER`, put back after each test.
@@ -125,6 +139,85 @@ final class PathSpellingTest extends Honoured_Settings {
 
 		$this->assertSame( array( 'allow', 'allow', 'allow', 'allow', 'allow' ), array_slice( array_values( $verdicts ), 0, 5 ), 'A request within the allowance was refused: ' . wp_json_encode( $verdicts ) );
 		$this->assertSame( 'block', $verdicts['/wp-login.php;x'], 'The sixth request for wp-login.php, in six spellings, was not refused, so some spellings are not counted: ' . wp_json_encode( $verdicts ) );
+	}
+
+	/**
+	 * A block on `path starts with /wp-json/` refuses every routed spelling (#51).
+	 */
+	public function test_a_routed_block_refuses_every_spelling(): void {
+		$firewall = $this->build(
+			array(
+				'rules' => array(
+					$this->rule( 'rest-block', 'url', array( 'conditions' => array( self::condition( 'path', 'starts_with', '/wp-json/' ) ) ), array( 'expiration' => 1 ) ),
+				),
+			)
+		);
+
+		foreach ( self::ROUTED_SPELLINGS as $index => $spelling ) {
+			$outcome = $this->outcome( $firewall, $this->direct( $spelling, '203.0.113.' . ( 90 + $index ), '/index.php' ) );
+
+			$this->assertSame( 'block', $outcome['verdict'], $spelling . ' reached the REST API and was let past a block on /wp-json/.' );
+		}
+
+		$this->assertSame( 'allow', $this->outcome( $firewall, $this->direct( '/sample-page/', '203.0.113.99', '/index.php' ) )['verdict'], 'The rule refuses everything, so this test proves nothing.' );
+	}
+
+	/**
+	 * A rate limit on a REST route counts every routed spelling against one budget (#51).
+	 */
+	public function test_a_routed_rate_limit_counts_every_spelling(): void {
+		$budget   = count( self::ROUTED_SPELLINGS ) - 1;
+		$firewall = $this->build(
+			array(
+				'rules' => array(
+					$this->rule(
+						'rest-limit',
+						'rate_limit',
+						array(
+							'paths'                => array( '/wp-json/wp/v2/users ' . $budget . ' 60' ),
+							'default_limit'        => 60,
+							'default_window'       => 60,
+							'limit_unlisted_paths' => false,
+							'storage'              => array(
+								'backend' => 'file',
+								'file'    => $this->scratch . '/ratelimit.data',
+							),
+						),
+						array( 'record' => 'no' )
+					),
+				),
+			)
+		);
+
+		$verdicts = array();
+
+		foreach ( self::ROUTED_SPELLINGS as $spelling ) {
+			$verdicts[ $spelling ] = $this->outcome( $firewall, $this->direct( $spelling, '203.0.113.100', '/index.php' ) )['verdict'];
+		}
+
+		$last = (string) array_key_last( $verdicts );
+
+		$this->assertSame( array_fill( 0, $budget, 'allow' ), array_slice( array_values( $verdicts ), 0, $budget ), 'A request within the allowance was refused: ' . wp_json_encode( $verdicts ) );
+		$this->assertSame( 'block', $verdicts[ $last ], 'The last request for the route, after the budget was spent across its spellings, was not refused, so some spellings are not counted: ' . wp_json_encode( $verdicts ) );
+	}
+
+	/**
+	 * `..` is kept as written, so it cannot turn a REST API request into something else (#51).
+	 *
+	 * Resolving it would remove the segment before it: `/wp-json/wp/v2/x/../../../y`
+	 * would be `/y` to the rules and still the REST API to WordPress, which is
+	 * exactly the bypass this closes.
+	 */
+	public function test_a_dot_dot_segment_is_not_resolved_away_from_a_routed_rule(): void {
+		$firewall = $this->build(
+			array(
+				'rules' => array(
+					$this->rule( 'rest-block', 'url', array( 'conditions' => array( self::condition( 'path', 'starts_with', '/wp-json/' ) ) ), array( 'expiration' => 1 ) ),
+				),
+			)
+		);
+
+		$this->assertSame( 'block', $this->outcome( $firewall, $this->direct( '/wp-json/wp/v2/x/../../../sample-page', '203.0.113.110', '/index.php' ) )['verdict'] );
 	}
 
 	/**

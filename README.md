@@ -736,6 +736,19 @@ rewrote the request so the raw URL was matched. That's gone, and the request the
 plugin hands the library is exactly what the server sent. WordPress's own view
 of the request is untouched either way.
 
+A request routed through `index.php` has no file of its own to match, so its
+`path` comes from the request URI. From `kanopi/firewall` 2.35.0 that path is
+normalised too, on both path sources
+([kanopi/firewall#425](https://github.com/kanopi/firewall/issues/425)):
+repeated slashes collapse, `.` segments (raw or `%2e`) go, percent-encoded
+unreserved characters are decoded (`%2F` stays encoded), and `;params` are
+dropped. So `//wp-json/…`, `/./wp-json/…`, `/%77p-json/…` and `/wp-json;x/…`,
+which the server routes and WordPress serves as the REST API, all match a rule
+or rate limit on `/wp-json/` (#51). `..` is kept as written, on purpose:
+resolving it would turn `/wp-json/wp/v2/x/../../../y` into `/y` for the rules
+while WordPress still served the REST API. The log's `path` and block records
+show the normalised path.
+
 `path` follows where the site's `index.php`, the front controller, is served:
 
 | Layout | Site Address / WordPress Address | Compiled `base_path` | The login page matches as |
