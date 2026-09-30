@@ -141,6 +141,8 @@ if ( ! is_readable( $autoload ) ) {
 		'Kanopi\\Firewall\\Logging\\Handler\\DatabaseHandler',
 		'Kanopi\\Firewall\\Logging\\Handler\\DeferredHandler',
 		'Kanopi\\Firewall\\Storage\\RecordedRequest',
+		// Named by the compiler and the request path Site Health check.
+		'Kanopi\\Firewall\\Utility\\RequestPath',
 		'Monolog\\Handler\\RotatingFileHandler',
 		'Monolog\\Level',
 		'Symfony\\Component\\Yaml\\Yaml',
