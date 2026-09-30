@@ -22,29 +22,28 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   same client twice stays at info. No configuration changes.
 - **The mu-plugin loader is 1.2.0**; the plugin replaces the installed copy
   on the next admin, cron or WP-CLI request. See Fixed.
-- **On Pantheon the challenge pass cookie defaults to `STYXKEY_bfw_pass`**
-  (#35) when `PANTHEON_ENVIRONMENT` is set and the name was never chosen
-  (empty, or the old default `bfw_pass`). A name you typed is kept. The
-  compiled file now always names the cookie, and the runner sets the pass
-  under the compiled name. Upgrade routine 11 recompiles on the first
-  request after updating. **Changing the name invalidates passes already
-  issued**, so each visitor holding one is challenged once more. The
-  Challenge screen shows the cookie in use and why; leave the field empty
-  to keep the default.
+- **The pass cookie name set on the Challenge screen is now what both
+  evaluation paths issue and check** (#35). The compiled file always names
+  the cookie explicitly (the field's value, trimmed; `bfw_pass` by default)
+  rather than leaving it to the library's default, and in `exception` mode
+  the runner sets the pass under the compiled name instead of re-reading
+  settings. The field is required: an empty or malformed name is refused
+  with a notice and nothing is saved. Upgrade routine 11 recompiles on the
+  first request after updating. **Changing the name invalidates passes
+  already issued**, so each visitor holding one is challenged once more.
 
 ### Fixed
 
-- **A solved challenge is no longer challenged again forever on Pantheon**
-  (#35). Pantheon's CDN strips request cookies matching none of its
-  pass-through patterns, and `bfw_pass` matches none, so the pass never
-  reached PHP. See Changed for the new default. Site Health gains a pass
-  cookie check: critical on Pantheon when the name would be stripped and a
-  rule or preset can challenge, recommended when nothing challenges yet. In
-  `exception` mode a visitor challenged within two minutes of solving one,
-  without the pass, is now told the verification cookie did not come back
-  (a short-lived `wp-bfw-solved` marker set beside the pass), and a warning
-  is logged; `block` mode is unchanged, because the library renders that
-  page itself. The README notes how other managed hosts differ.
+- **A solved challenge that keeps being challenged is now explained in
+  `exception` mode** (#35). Some hosts or edge caches only forward cookies
+  whose names match their own rules, so the pass never comes back; the fix
+  is to set a name the host forwards (see Changed, and the README). A
+  visitor challenged within two minutes of solving one, without the pass, is
+  now told the verification cookie did not come back, and a warning is
+  logged. It uses a short-lived, unsigned marker cookie named after the pass
+  cookie (`<name>_solved`), so a prefix chosen for the host applies to it
+  too; the interstitial stays no-store. `block` mode is unchanged, because
+  the library renders that page itself.
 - **An `exception` mode verdict on the wp-config.php path can no longer
   serve the page** (#34). Every route by which the early path could fail
   open on a challenge, redirect or block now ends in a plain 503

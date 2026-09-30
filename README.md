@@ -762,41 +762,26 @@ no log line, and every rate limit — a preset's as well as your own — counts 
 memory for the run, so testing a limited path as often as you like never spends
 a real client's allowance.
 
-### The pass cookie, and hosts with an edge cache
+### The pass cookie's name
 
-A solved challenge is remembered in a cookie, `bfw_pass` by default (the
-Challenge screen shows the one in use). It only works if the cookie comes back
-to PHP on the next request, and a host whose edge cache sits in front of the
-site decides that, not the browser. When it does not come back, every visitor
-who solves a challenge is challenged again, forever.
+A solved challenge is remembered in a cookie, `bfw_pass` by default. Its name
+is the **Pass token cookie** field on the Challenge screen, and the name set
+there is the one both evaluation paths issue and check. The field is required:
+an empty name, or one containing spaces, commas, semicolons or other characters
+not allowed in a cookie name, is refused and nothing is saved.
 
-**Pantheon** strips every request cookie that matches none of its pass-through
-patterns before WordPress sees it: `STYXKEY*`, `SESS*`/`SSESS*`, `wordpress*`,
-`wp-*`, `comment_author*`, `woocommerce*` and `NO_CACHE` (Pantheon's
-[Working with Cookies](https://docs.pantheon.io/cookies) and
-[Caching: Advanced Topics](https://docs.pantheon.io/caching-advanced-topics)).
-`bfw_pass` matches none of them. So when `PANTHEON_ENVIRONMENT` is set and
-the name has not been chosen — the field is empty, or still `bfw_pass`, the old
-default — the firewall uses **`STYXKEY_bfw_pass`**. The `STYXKEY_` prefix is
-forwarded, and it makes the edge keep a separate cache variant per value, so a
-visitor holding a pass is never handed a cached copy of somebody else's
-interstitial. A name you type is used as typed; Site Health reports it as
-critical on Pantheon if the edge would strip it while a rule can challenge.
+Some hosts or edge caches only forward cookies whose names match their own
+rules, and drop the rest before the request reaches WordPress. The pass then
+never comes back, and a visitor who solved a challenge keeps being challenged.
+If that happens, set the name to one your host forwards (check your host's
+documentation). In `exception` mode the interstitial says so: a visitor
+challenged within two minutes of solving one, without the pass, is told the
+verification cookie did not come back. That uses a short-lived marker cookie
+named after the pass cookie (`<name>_solved`), so a prefix chosen for your
+host applies to it too.
 
-**Other managed hosts** — WP Engine, Kinsta, Flywheel and similar — vary or
-bypass their page cache on particular cookies rather than stripping everything
-else, so the same name does not fail the same way, and the plugin does not
-guess at them. If visitors report being challenged again straight after
-solving one, check whether the cookie reaches PHP: solve a challenge, then look
-for the cookie in the next request (your browser's developer tools show what is
-sent; a `var_dump( $_COOKIE )` in a throwaway mu-plugin shows what arrives). In
-`exception` mode the interstitial itself says so: a visitor challenged within
-two minutes of solving one, without the pass, is told the verification cookie
-did not come back. In `block` mode the library renders the page and there is no
-hook to add that line to.
-
-Changing the name, or moving a site onto Pantheon, invalidates passes already
-issued: each visitor holding one is challenged once more.
+Changing the name invalidates passes already issued: each visitor holding one
+is challenged once more.
 
 ### Giving a rule opening hours
 
