@@ -7,6 +7,24 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.0.0-rc.5]
+
+**Fifth release candidate for 1.0.0.** Published as a GitHub pre-release, so
+the `releases/latest/download` URL does not serve it; install it by its own URL.
+It adds diagnostics for the wp-config.php early path, readable from WP-CLI and
+Site Health, so a host where the web containers behave differently from WP-CLI
+(#34) can be diagnosed: the last web request's report and the last anomaly,
+failed rules and mode/compiled-file mismatches, and every fail-open logged
+(rate-limited) to the PHP error log. It keeps credentials out of the Advanced
+YAML box and exports, and lets the Redis password stay out of the compiled
+file through `BASIC_FIREWALL_REDIS_PASSWORD` (#47, #48). The early path no
+longer loads a second Composer autoloader when the library is already loaded
+(#44). It bundles kanopi/firewall 2.35.1, which **changes what some existing
+rules do** (ASN equality, path normalisation, presets at any depth, rate-limit
+case): read *What changes on upgrade* first. The "verification cookie did not
+come back" notice now shows in `block` mode too (#46). What changed since
+1.0.0-rc.4 is below.
+
 ### What changes on upgrade
 
 This release bundles kanopi/firewall 2.35.1. Several of its fixes change what
