@@ -202,6 +202,223 @@ final class RateLimitKeyTest extends TestCase {
 	}
 
 	/**
+	 * A line an earlier line covers is named with the line that takes its requests.
+	 *
+	 * @dataProvider shadows
+	 *
+	 * @param list<string> $patterns The rule's patterns, in order.
+	 * @param string|null  $shadow   What covers the last one, or null.
+	 */
+	public function test_an_earlier_line_that_covers_a_later_one( array $patterns, ?string $shadow ): void {
+		$last = (string) array_pop( $patterns );
+
+		$this->assertSame( $shadow, Rate_Limit::shadowed_by( $last, $patterns ) );
+	}
+
+	/**
+	 * Patterns in order, and what covers the last one.
+	 *
+	 * @return array<string, array{0: list<string>, 1: string|null}>
+	 */
+	public static function shadows(): array {
+		return array(
+			'a wildcard before an exact path' => array( array( '/log*', '/login' ), '/log*' ),
+			'the same path in capitals'       => array( array( '/login', '/LOGIN' ), '/login' ),
+			'the same path'                   => array( array( '/login', '/login' ), '/login' ),
+			'a prefix before a longer prefix' => array( array( '/api*', '/api/v1/*' ), '/api*' ),
+			'a catch-all'                     => array( array( '*', '/api/v1/*' ), '*' ),
+			'the same wildcard, other case'   => array( array( '/API/*', '/api/*' ), '/API/*' ),
+			'a later exact path it misses'    => array( array( '/login', '/login2' ), null ),
+			'a narrower pattern first'        => array( array( '/api/v1/*', '/api*' ), null ),
+			'a wildcard in the middle'        => array( array( '/a*b*', '/a/x/*' ), null ),
+			'a regex earlier is left alone'   => array( array( '#^/log#', '/login' ), null ),
+			'a regex later is left alone'     => array( array( '/log*', '#^/login$#' ), null ),
+			'nothing before it'               => array( array( '/login' ), null ),
+		);
+	}
+
+	/**
+	 * Unreachable lines are listed in order, each with what takes its requests.
+	 */
+	public function test_unreachable_lines_are_listed(): void {
+		$this->assertSame(
+			array(
+				array(
+					'pattern' => '/login',
+					'shadow'  => '/log*',
+				),
+				array(
+					'pattern' => '/LOG-OUT',
+					'shadow'  => '/log*',
+				),
+			),
+			Rate_Limit::unreachable_limits( array( 'paths' => array( '/log* 50 300', '/login 5 300 post.log', '/contact 5 60', '/LOG-OUT 5 60' ) ) )
+		);
+	}
+
+	/**
+	 * A line that never runs needs no companion; the reverse warning 2.35.0 gave is gone.
+	 */
+	public function test_an_unreachable_identity_line_is_not_unpaired(): void {
+		$this->assertSame(
+			array(),
+			Rate_Limit::unpaired_identity_limits( array( $this->rule( 'shadowed', array( '/log* 50 300', '/login 5 300 post.log' ) ) ) )
+		);
+	}
+
+	/**
+	 * Across rules, a companion is the same path in any case.
+	 */
+	public function test_a_companion_in_another_case_pairs_it(): void {
+		$this->assertSame(
+			array(),
+			Rate_Limit::unpaired_identity_limits(
+				array(
+					$this->rule( 'accounts', array( '/login 5 300 post.log' ) ),
+					$this->rule( 'addresses', array( '/LOGIN 50 300' ) ),
+				)
+			)
+		);
+	}
+
+	/**
+	 * A companion is the line of the other rule that actually takes the request.
+	 */
+	public function test_a_companion_is_the_line_that_runs(): void {
+		$this->assertSame(
+			array(),
+			Rate_Limit::unpaired_identity_limits(
+				array(
+					$this->rule( 'accounts', array( '/wp-login.php 5 300 post.log' ) ),
+					$this->rule( 'addresses', array( '/wp-* 100 300' ) ),
+				)
+			),
+			'An address-keyed wildcard in another rule takes the login requests, and was not counted.'
+		);
+
+		$this->assertArrayHasKey(
+			'accounts',
+			Rate_Limit::unpaired_identity_limits(
+				array(
+					$this->rule( 'accounts', array( '/wp-login.php 5 300 post.log' ) ),
+					$this->rule( 'others', array( '/wp-* 100 300 header.x-api-key', '/wp-login.php 50 300' ) ),
+				)
+			),
+			'The address line in the other rule never runs, behind a wildcard that counts something else, and was counted.'
+		);
+	}
+
+	/**
+	 * Where the library's lint and this check can both answer, they give the same answer.
+	 *
+	 * Each scenario is compiled to the library's shape and run through
+	 * `ConfigLinter`, and the paths it calls "rate limited by identity, but not
+	 * by address", and the entries it says never run, are compared with this
+	 * check's. The one place this check is deliberately kinder -- a companion
+	 * that covers the path with a wildcard, which the lint does not look for --
+	 * is left out here and pinned above.
+	 *
+	 * @dataProvider lint_scenarios
+	 *
+	 * @param list<array{0: string, 1: list<string>, 2?: bool}> $rules Rule id, lines, enabled.
+	 */
+	public function test_the_check_agrees_with_the_library_lint( array $rules ): void {
+		$stored  = array();
+		$plugins = array();
+
+		foreach ( $rules as $rule ) {
+			$entry            = $this->rule( $rule[0], $rule[1] );
+			$entry['enabled'] = $rule[2] ?? true;
+			$stored[]         = $entry;
+
+			$config = array();
+
+			foreach ( Rate_Limit::limits( $entry['settings'] ) as $limit ) {
+				$config[] = array(
+					'path'   => $limit['pattern'],
+					'rate'   => $limit['limit'],
+					'sample' => $limit['window'],
+				) + ( array() === $limit['key'] ? array() : array( 'key' => $limit['key'] ) );
+			}
+
+			$plugins[] = array(
+				'plugin'   => \Kanopi\Firewall\Plugins\RateLimit::class,
+				'name'     => $rule[0],
+				'enable'   => $entry['enabled'],
+				'response' => 'block',
+				'config'   => $config,
+			);
+		}
+
+		$library_unpaired    = array();
+		$library_unreachable = array();
+
+		foreach ( ( new \Kanopi\Firewall\Diagnostics\ConfigLinter( array( array( 'plugins' => $plugins ) ) ) )->run() as $finding ) {
+			$title = (string) $finding->toArray()['title'];
+
+			if ( 1 === preg_match( '/^(.+) is rate limited by identity, but not by address$/', $title, $match ) ) {
+				$library_unpaired[] = strtolower( $match[1] );
+			}
+
+			if ( 1 === preg_match( '/the entry for (.+) never runs|more than one entry for (.+); only the first/', $title, $match ) ) {
+				$library_unreachable[] = strtolower( '' !== $match[1] ? $match[1] : $match[2] );
+			}
+		}
+
+		$unpaired = array_map( 'strtolower', array_merge( array(), ...array_values( Rate_Limit::unpaired_identity_limits( $stored ) ) ) );
+
+		$unreachable = array();
+
+		foreach ( $stored as $entry ) {
+			if ( $entry['enabled'] ) {
+				$unreachable = array_merge( $unreachable, array_map( 'strtolower', array_column( Rate_Limit::unreachable_limits( $entry['settings'] ), 'pattern' ) ) );
+			}
+		}
+
+		sort( $library_unpaired );
+		sort( $unpaired );
+		sort( $library_unreachable );
+		sort( $unreachable );
+
+		$this->assertSame( array_values( array_unique( $library_unpaired ) ), array_values( array_unique( $unpaired ) ), 'Unpaired limits differ from the library lint.' );
+		$this->assertSame( $library_unreachable, $unreachable, 'Unreachable lines differ from the library lint.' );
+	}
+
+	/**
+	 * Configurations both can judge.
+	 *
+	 * @return array<string, array{0: list<array{0: string, 1: list<string>, 2?: bool}>}>
+	 */
+	public static function lint_scenarios(): array {
+		return array(
+			'alone'                        => array( array( array( 'accounts', array( '/login 5 300 post.log' ) ) ) ),
+			'paired in two rules'          => array(
+				array(
+					array( 'accounts', array( '/login 5 300 post.log' ) ),
+					array( 'addresses', array( '/login 50 300' ) ),
+				),
+			),
+			'paired in one rule'           => array( array( array( 'both', array( '/login 5 300 post.log', '/login 50 300' ) ) ) ),
+			'a wildcard takes the account' => array( array( array( 'shadowed', array( '/log* 50 300', '/login 5 300 post.log' ) ) ) ),
+			'case across rules'            => array(
+				array(
+					array( 'accounts', array( '/login 5 300 post.log' ) ),
+					array( 'addresses', array( '/LOGIN 50 300' ) ),
+				),
+			),
+			'case within a rule'           => array( array( array( 'both', array( '/login 5 300 post.log', '/LOGIN 50 300' ) ) ) ),
+			'a disabled companion'         => array(
+				array(
+					array( 'accounts', array( '/login 5 300 post.log' ) ),
+					array( 'addresses', array( '/login 50 300' ), false ),
+				),
+			),
+			'a combined key'               => array( array( array( 'combined', array( '/login 5 300 client_ip,post.log' ) ) ) ),
+			'a prefix before a longer one' => array( array( array( 'api', array( '/api* 100 60', '/api/v1/* 10 60 header.x-api-key' ) ) ) ),
+		);
+	}
+
+	/**
 	 * A rate limit rule.
 	 *
 	 * @param string       $id    Identifier.

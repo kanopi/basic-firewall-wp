@@ -7,7 +7,59 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### What changes on upgrade
+
+This release bundles kanopi/firewall 2.35.1. Several of its fixes change what
+an existing configuration does:
+
+- **ASN equality rules start matching.** An ASN rule with *is equal to* or
+  *is one of* (`16509`, `AS16509`) never matched before; a block rule on a
+  network now blocks it. **An ASN *is not equal to* X rule stops matching
+  network X** — it used to match every visitor, X included. Check your ASN
+  rules, especially negated ones.
+- **The path every rule sees is normalised.** Doubled slashes, `.` segments
+  (raw or `%2e`), percent-encoded unreserved characters and `;params` no
+  longer change what a rule or rate limit matches; `..` is kept as written.
+  The log and block records show the normalised path.
+- **The WordPress presets are at Preset-Version 2.** `search-bots.yml` (and
+  `wordpress.yml`, which this plugin does not offer on a WordPress site)
+  match WordPress's paths at any depth: **wider** (a subdirectory install,
+  core in its own directory, `readme.html` anywhere) and slightly
+  **narrower** (a slug that merely starts with `wp-login` or `wp-admin`, such
+  as `/wp-login-help/`, is no longer treated as the login or the admin).
+- **Rate-limit paths ignore case**, as URL rules already did: a
+  `/wp-login.php` limit also counts `/WP-LOGIN.PHP`. A pattern written as a
+  regular expression keeps its own flags.
+- **Redirect targets with a raw control character or whitespace go to `/`**
+  after a solved challenge, as does anything a browser would read as `//`.
+- **`firewall-check --lint` may warn about a rate-limit entry that never
+  runs** because an earlier entry in the same rule covers it. The rule screen
+  now says the same.
+- **The logged URL of a directly requested file loses its stray trailing
+  `/`** (`/wp-login.php`, not `/wp-login.php/`), matching the block record.
+
 ### Added
+
+- **The rule screen warns about a rate-limit line that can never run**
+  because an earlier line in the same rule covers it (`/log*` before
+  `/login`, `/login` before `/LOGIN`), naming the line that takes its
+  requests: the cases `firewall-check --lint` reports from 2.35.1. The rule
+  still saves.
+
+- **The "verification cookie did not come back" notice in `block` mode**
+  (#46). A visitor challenged within two minutes of solving a challenge,
+  carrying the `<cookie_name>_solved` marker but not the pass, is told why, as
+  #37 did for `exception` mode. Decision_Dispatcher adds the line to the
+  library's `RequestChallenged` event (kanopi/firewall 2.35.0), which the
+  library renders above the form on its own page in `block` mode and puts in
+  the render context's `notices` in `exception` mode, so both modes now share
+  one implementation and the plugin no longer splices its own paragraph into
+  the page. In `block` mode the library issues the pass itself, so the
+  dispatcher also sets the marker when the library announces the solve. Both
+  evaluation paths: the wp-config.php path reads the pass cookie's name from
+  the runtime sidecar (a new `pass_cookie` key, written when the name is not
+  the default). The library's `challenge.notice` has no Challenge-screen field
+  yet; the Advanced YAML can set it.
 
 - **Diagnostics for the early path, readable from anywhere** (#34). Every
   status screen described its own request, and WP-CLI's is not a web request:
@@ -82,6 +134,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- **Requires and bundles kanopi/firewall 2.35.1** (from 2.34.1). Several of
+  its fixes change what an existing configuration does; see *What changes on
+  upgrade* above.
+
 - **`fail-open (early|runner)` log lines are rate-limited** (#41). They were
   written on every request, so a persistent failure on a busy site logged one
   line per request. The first is still always written; after that, at most one
@@ -93,6 +149,46 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   every failure.
 
 ### Fixed
+
+- **The rate-limit pairing check judges coverage by the line that runs**, as
+  `firewall-check --lint` does from kanopi/firewall 2.35.1. On save and in
+  Site Health, an identity-keyed line that an earlier line in its rule covers
+  is no longer reported as unpaired (it never runs); a companion is the line
+  of another enabled rule that actually takes the request, found with the
+  library's `RateLimit::patternToRegex()`; paths are compared without regard
+  to case; and a disabled rule never counts as coverage.
+- **WordPress in its own directory: presets fire, and Site Health flags only
+  the site's own rules** (#45). kanopi/firewall 2.35.0 made `wordpress.yml`
+  and `search-bots.yml` match WordPress's paths at any depth, so the crawler
+  allow no longer covers `/wp/wp-login.php`. Site Health's *request path*
+  check no longer flags every enabled preset: it asks each of the site's own
+  enabled rules whether it matches `/wp-login.php`, `/xmlrpc.php`,
+  `/wp-cron.php` or `/wp-admin` at the root and misses it under the prefix
+  (`equals`, `is one of`, `starts with`, a regular expression, a rate limit
+  pattern; `ends with` and `contains` pass), and lists each by name. An
+  enabled preset's rate limit on a bare core path, such as
+  `rate-limiting.yml`'s `/wp-login.php`, is still named, since that preset
+  is unchanged and rate limit patterns are anchored.
+- **A `/wp-login.php` rate limit counts `/WP-LOGIN.PHP` too** (#50). On a
+  case-insensitive filesystem the server runs `wp-login.php` for any casing,
+  and `path` keeps the client's; rate-limit patterns now ignore case, as URL
+  rules already did. Tests cover both, with the server values such a server
+  sends.
+- **Paths routed through `index.php` can no longer be spelled around a rule**
+  (#51). The library normalises the path every rule sees, on both path
+  sources, so `//wp-json/…`, `/./wp-json/…`, `/%2e/wp-json/…`,
+  `/%77p-json/…` and `/wp-json;x/…` match a rule or rate limit on
+  `/wp-json/`, as the direct-file spellings of #32 already did. `..` is kept
+  as written. Covered in `PathSpellingTest`, over HTTP on the early path and
+  end to end.
+- **ASN rules are compared by the library as numbers, and the plugin's
+  workarounds are gone** (refs #49). The type no longer casts a typed number
+  to an integer or strips `AS` at compile time, and a list of numbers compared
+  with *is equal to*, *is one of* or *is not equal to* is no longer compiled
+  into a digits-only `#^16509$#` pattern: the library reads both sides as a
+  number now. A list entry written `AS16509` is matched instead of skipped.
+  Stored rules need no change. (Latitude/longitude *equals* is not part of
+  this release.)
 
 - **The block list screen and WP-CLI resolve a `%env()%` Redis password**
   rather than sending the token itself as the password (#48).

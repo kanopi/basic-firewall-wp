@@ -9,6 +9,7 @@ declare( strict_types = 1 );
 
 namespace Kanopi\BasicFirewall\Runtime;
 
+use Kanopi\BasicFirewall\Challenge\Pass_Cookie;
 use Psr\EventDispatcher\EventDispatcherInterface;
 
 /**
@@ -46,6 +47,16 @@ use Psr\EventDispatcher\EventDispatcherInterface;
  * and the return value of an action is discarded. By the time anything is
  * announced the decision is made, and in the terminating modes the response is
  * already on its way.
+ *
+ * **The one thing done synchronously: a notice on the challenge page** (#46).
+ * The library dispatches `RequestChallenged` before it writes the interstitial
+ * and reads the event's notices back into the page, in `block` mode on its
+ * own page and in `exception` mode through the render context the plugin
+ * renders from (kanopi/firewall 2.35.0). A visitor who solved a challenge a
+ * moment ago and came back without the pass cookie is told so here, at
+ * dispatch, because by the time the event is announced to WordPress the page
+ * has been written. The condition is Pass_Cookie::went_missing(), so both
+ * modes and both evaluation paths show the same line from the same code.
  */
 final class Decision_Dispatcher implements EventDispatcherInterface {
 
@@ -89,11 +100,32 @@ final class Decision_Dispatcher implements EventDispatcherInterface {
 	private static bool $shutdown = false;
 
 	/**
+	 * The pass cookie's name, as the compiled file gives it to the library.
+	 *
+	 * @var string
+	 */
+	private string $pass_cookie;
+
+	/**
+	 * Set up the dispatcher for one firewall.
+	 *
+	 * @param string $pass_cookie The pass cookie's name: the runner's compiled
+	 *                            record, or the runtime sidecar's on the
+	 *                            wp-config.php path. Empty adds no notice.
+	 */
+	public function __construct( string $pass_cookie = '' ) {
+		$this->pass_cookie = $pass_cookie;
+	}
+
+	/**
 	 * Hold a decision until it can be announced.
 	 *
 	 * @param object $event The library's decision event.
 	 */
 	public function dispatch( object $event ): object {
+		$this->add_notices( $event );
+		$this->set_marker( $event );
+
 		self::$pending[] = $event;
 
 		/*
@@ -119,6 +151,100 @@ final class Decision_Dispatcher implements EventDispatcherInterface {
 		}
 
 		return $event;
+	}
+
+	/**
+	 * Put the missing-pass line on the page a challenged visitor is about to see.
+	 *
+	 * Only a `RequestChallenged` from a library that takes notices (2.35.0),
+	 * and only when the solved marker is there without the pass. Never lets a
+	 * failure out: a notice that could not be added leaves the page as it was,
+	 * and the challenge is served either way.
+	 *
+	 * @param object $event The library's decision event.
+	 */
+	private function add_notices( object $event ): void {
+		if ( '' === $this->pass_cookie || 'challenged' !== self::type( $event ) || ! method_exists( $event, 'addNotice' ) || ! method_exists( $event, 'getRequest' ) ) {
+			return;
+		}
+
+		try {
+			$request = $event->getRequest();
+
+			if ( ! is_object( $request ) || ! isset( $request->cookies ) || ! is_object( $request->cookies ) || ! method_exists( $request->cookies, 'all' ) ) {
+				return;
+			}
+
+			if ( ! self::load_pass_cookie() ) {
+				return;
+			}
+
+			if ( Pass_Cookie::went_missing( $this->pass_cookie, (array) $request->cookies->all() ) ) {
+				$event->addNotice( Pass_Cookie::missing_notice() );
+			}
+		} catch ( \Throwable $e ) {
+			return;
+		}
+	}
+
+	/**
+	 * Set the solved marker beside a pass the library is about to issue.
+	 *
+	 * In `block` mode the library answers a solution itself: it sets the pass
+	 * cookie and ends the request, and nothing of this plugin runs after. The
+	 * marker that lets the next challenge say the pass went missing (#37) was
+	 * set only by the runner, which answers solutions in `exception` mode, so
+	 * `block` mode never had one to see (#46). The library announces the solve
+	 * just before it sets the pass, while headers can still be sent, so the
+	 * marker goes out here, on whichever path evaluated the solution. The
+	 * runner leaves out a marker already queued.
+	 *
+	 * @param object $event The library's decision event.
+	 */
+	private function set_marker( object $event ): void {
+		if ( '' === $this->pass_cookie || 'challenge_solved' !== self::type( $event ) || ! method_exists( $event, 'getRequest' ) || headers_sent() ) {
+			return;
+		}
+
+		try {
+			$request = $event->getRequest();
+
+			if ( ! self::load_pass_cookie() ) {
+				return;
+			}
+
+			$secure = is_object( $request ) && method_exists( $request, 'isSecure' ) && (bool) $request->isSecure();
+			$marker = Pass_Cookie::marker_cookie( $this->pass_cookie, $secure );
+
+			// Once per response, if a second firewall on this request announces the same solve.
+			if ( false !== stripos( implode( "\n", headers_list() ), 'Set-Cookie: ' . $marker['name'] . '=' ) ) {
+				return;
+			}
+
+			setcookie( $marker['name'], $marker['value'], $marker['options'] );
+		} catch ( \Throwable $e ) {
+			return;
+		}
+	}
+
+	/**
+	 * Make Pass_Cookie available, loading it by hand if the autoloader cannot.
+	 *
+	 * The wp-config.php path loads this class by hand, and Pass_Cookie beside
+	 * it the same way, for the same reason: it depends on nothing.
+	 */
+	private static function load_pass_cookie(): bool {
+		if ( class_exists( Pass_Cookie::class ) ) {
+			return true;
+		}
+
+		$file = dirname( __DIR__ ) . '/Challenge/Pass_Cookie.php';
+
+		if ( is_readable( $file ) ) {
+			require_once $file;
+		}
+
+		return class_exists( Pass_Cookie::class, false );
 	}
 
 	/**

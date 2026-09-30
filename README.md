@@ -736,6 +736,29 @@ rewrote the request so the raw URL was matched. That's gone, and the request the
 plugin hands the library is exactly what the server sent. WordPress's own view
 of the request is untouched either way.
 
+A request routed through `index.php` has no file of its own to match, so its
+`path` comes from the request URI. From `kanopi/firewall` 2.35.0 that path is
+normalised too, on both path sources
+([kanopi/firewall#425](https://github.com/kanopi/firewall/issues/425)):
+repeated slashes collapse, `.` segments (raw or `%2e`) go, percent-encoded
+unreserved characters are decoded (`%2F` stays encoded), and `;params` are
+dropped. So `//wp-json/…`, `/./wp-json/…`, `/%77p-json/…` and `/wp-json;x/…`,
+which the server routes and WordPress serves as the REST API, all match a rule
+or rate limit on `/wp-json/` (#51). `..` is kept as written, on purpose:
+resolving it would turn `/wp-json/wp/v2/x/../../../y` into `/y` for the rules
+while WordPress still served the REST API. The log's `path` and block records
+show the normalised path.
+
+**Case.** On a case-insensitive filesystem (macOS, Windows, some mounted
+volumes) the server runs `wp-login.php` for `/WP-LOGIN.PHP`, and `path` keeps
+the client's case, because it is the name the server was asked for. URL rules
+compare paths without regard to case unless you tick *Case sensitive*, and
+from `kanopi/firewall` 2.35.0 rate-limit patterns do too
+([kanopi/firewall#426](https://github.com/kanopi/firewall/issues/426)), so a
+`/wp-login.php` limit counts `/WP-LOGIN.PHP` against the same budget (#50). A
+pattern written as a regular expression keeps its own flags, and the `path`
+key component is lower-cased, so a lower-case path keys exactly as before.
+
 `path` follows where the site's `index.php`, the front controller, is served:
 
 | Layout | Site Address / WordPress Address | Compiled `base_path` | The login page matches as |
@@ -755,14 +778,27 @@ of the request is untouched either way.
   `/wp/index.php` the front controller, and then every front-end request would
   match as `/index.php`. So on this layout WordPress's own files match with
   their directory: **write rules as `/wp/wp-login.php`, `/wp/xmlrpc.php` and
-  `/wp/wp-admin`**, or use *ends with* or *contains*. A rule on `/wp-login.php`
-  matches only the bare address, which the server routes through `index.php` and
-  WordPress then redirects. The library's presets name the root paths, so their
-  rules on WordPress's own files don't fire on this layout. Site Health says so,
-  and the Test screen's default path is `/wp/wp-login.php` on this layout. This
-  is a trade-off, and the plugin makes it on purpose. The only way to strip the
-  directory without a library change is to read the path back out of the raw
-  URL, and that brings the spelling bypass back.
+  `/wp/wp-admin`**, or use *ends with* or *contains*. A condition that has to
+  *equal* or *start with* `/wp-login.php`, and a rate limit on it (a rate limit
+  pattern is always anchored), matches only the bare address, which the server
+  routes through `index.php` and WordPress then redirects. The Test screen's
+  default path is `/wp/wp-login.php` on this layout. This is a trade-off, and
+  the plugin makes it on purpose: the only way to strip the directory is to read
+  the path back out of the raw URL, and that brings the spelling bypass back.
+
+  The library's WordPress presets need no change. From `kanopi/firewall` 2.35.0
+  (Preset-Version 2 of `wordpress.yml` and `search-bots.yml`,
+  [kanopi/firewall#420](https://github.com/kanopi/firewall/issues/420)) they
+  match WordPress's files at any depth, on a segment boundary, so
+  `search-bots.yml`'s crawler allow no longer covers `/wp/wp-login.php` (#45).
+  Site Health's *request path* check recommends a fix only for **this site's own
+  enabled rules** that would match a core file at the root and miss it under
+  the prefix — `equals`, `is one of`, `starts with`, a regular expression, or a
+  rate limit pattern — and lists each one; *ends with* and *contains* are fine
+  as they are. The one preset it still names is an enabled preset's rate limit
+  on a bare core path, such as `rate-limiting.yml`'s `/wp-login.php`, which the
+  library has not changed. Referenced lists and the Advanced YAML are not
+  examined.
 - **Multisite.** On a subdirectory network, the server rewrites
   `/site2/wp-login.php` to the network's own `wp-login.php`, so the base path is
   the network's path and not each site's.
@@ -892,11 +928,21 @@ Some hosts or edge caches only forward cookies whose names match their own
 rules, and drop the rest before the request reaches WordPress. The pass then
 never comes back, and a visitor who solved a challenge keeps being challenged.
 If that happens, set the name to one your host forwards (check your host's
-documentation). In `exception` mode the interstitial says so: a visitor
-challenged within two minutes of solving one, without the pass, is told the
-verification cookie did not come back. That uses a short-lived marker cookie
-named after the pass cookie (`<name>_solved`), so a prefix chosen for your
-host applies to it too.
+documentation). The interstitial says so, in `block` and `exception` mode
+alike (#46): a visitor challenged within two minutes of solving one, without
+the pass, is told the verification cookie did not come back. That uses a
+short-lived marker cookie named after the pass cookie (`<name>_solved`), so a
+prefix chosen for your host applies to it too. The marker is set when the
+challenge is solved, by whichever path answered it, and the line is added
+through the library's own notice mechanism (`RequestChallenged::addNotice()`,
+kanopi/firewall 2.35.0), so it appears on the library's page, above the form,
+in both modes. The wp-config.php path reads the pass cookie's name from the
+runtime sidecar beside the compiled file, which is written whenever the name
+is not the default.
+
+The library's `challenge.notice`, a fixed line shown on every challenge page
+("Having trouble? Email help@example.com."), has no field on the Challenge
+screen yet; set it in the Advanced YAML if you want one.
 
 Changing the name invalidates passes already issued: each visitor holding one
 is challenged once more.
@@ -1165,16 +1211,12 @@ identical code, including negation and the operator names this plugin uses. Set
 as an AND group; it wins over the selects.
 
 **A list of autonomous system numbers** compared with *is equal to*, *is one of*
-or *is not equal to* is matched number by number: each entry becomes the pattern
-`^16509$` run against the visitor's number, because the library compares a
-number strictly and a text list's entries are strings — compared as written,
-such a list would match nothing. **Write each entry as digits alone.** An entry
-is admitted into that pattern only if it is nothing but digits, so a published
-list cannot smuggle in `.*`; the cost is that an entry written `AS16509` is
-skipped rather than matched, since the prefix cannot be taken off an entry the
-library fills in after the rule is compiled. The rule screen says so beside the
-list. A JSON list of integers works as it is, and for names use *contains* on
-`asn_org`.
+or *is not equal to* is matched number by number. The library reads both the
+visitor's number and each entry as a number (kanopi/firewall 2.35.0 and later),
+so an entry can be written `16509` or `AS16509`, and a JSON list of integers
+works as it is. For names, use *contains* on `asn_org`. Earlier versions of this
+plugin compiled such a list into a digits-only pattern and skipped an entry
+written `AS16509`; that workaround is gone, and a stored rule needs no change.
 
 One difference from the IP rule is worth knowing: **a relative file reference is
 resolved to an absolute path at compile time.** The library resolves
@@ -1465,11 +1507,26 @@ two lines for `/wp-login.php` in the same rule leave the second doing nothing:
 /wp-login.php 50 300
 ```
 
-The screen refuses the same pattern twice in one rule for that reason. (The
-library's own documentation shows the pair as two entries in one list, and its
-linter accepts that; both are wrong about what the evaluator does.) The pairing
-check compares patterns as written, so `/wp-*` in another rule is not recognised
-as covering `/wp-login.php` even where it would.
+The screen refuses the same pattern twice in one rule for that reason, and
+warns (and saves) when a line can never run because an earlier line in the same
+rule covers it: `/log*` before `/login`, `/api*` before `/api/v1/*`, or
+`/login` before `/LOGIN`, since patterns ignore case. The warning names the line
+that takes the requests. Patterns written as a regular expression are left
+alone, because whether one arbitrary regex covers another cannot be decided.
+These are the same cases `firewall-check --lint` reports from kanopi/firewall
+2.35.1, asked of the library's own pattern matcher
+(`RateLimit::patternToRegex()`), so the two cannot disagree.
+
+The pairing check (on save and in Site Health) judges coverage the way the
+library does since 2.35.1: by the line that actually runs. A line an earlier one
+covers neither needs a companion nor counts as one; a companion is the line of
+another **enabled** rule that takes the request, so a switched-off address
+limit no longer silences the warning; and paths are compared without regard to
+case, so `/LOGIN` in another rule pairs `/login`. For an exact path the check
+asks which line of the other rule matches it first, so an address-keyed
+`/wp-*` in another rule is recognised as covering `/wp-login.php` (the library's
+lint, which compares paths as written, still warns about that one). A wildcard
+or regex pattern is paired only by the same pattern.
 
 It also counts every attempt against the named account from anywhere, which
 means anyone can spend that account's budget for it: five failed logins as

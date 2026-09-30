@@ -71,6 +71,7 @@ final class Config_Compiler {
 		'enabled'     => true,
 		'redact'      => array(),
 		'defer_login' => false,
+		'pass_cookie' => Pass_Cookie::DEFAULT_NAME,
 	);
 
 	/**
@@ -328,6 +329,10 @@ final class Config_Compiler {
 			// A role is exempt, so a request carrying a login cookie is left
 			// for the runner, which can validate it; see Role_Bypass.
 			'defer_login' => array() !== Role_Bypass::clean( (array) $settings->get( 'global.bypass_roles', array() ) ),
+
+			// The pass cookie's name, as compiled, so the dispatcher on that
+			// path can see a pass that did not come back; see Decision_Dispatcher.
+			'pass_cookie' => Pass_Cookie::name( (string) $settings->get( 'challenge.cookie_name', '' ) ),
 		);
 	}
 
