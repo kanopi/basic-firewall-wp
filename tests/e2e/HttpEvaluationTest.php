@@ -364,25 +364,21 @@ final class HttpEvaluationTest extends TestCase {
 	}
 
 	/**
-	 * #34: a per-rule ALTCHA challenge on a real page, in both modes.
+	 * #34: a per-rule ALTCHA challenge on a routed page, in both modes.
 	 *
 	 * The reported setup: a `url` rule on a path prefix, `response:
 	 * challenge`, the rule naming `altcha` while the default is `math`, on a
-	 * page WordPress routes through index.php. In `exception` mode the report
-	 * was the page itself, with WordPress's cache headers, then cached at the
-	 * edge. Whichever path answers -- the library in `block` mode, the
-	 * plugin's responder in `exception` mode -- the visitor gets the ALTCHA
-	 * interstitial, never the page, and every no-store header a cache in front
-	 * of the site might read.
+	 * path WordPress routes through index.php. A path of its own rather than
+	 * a real page's, so it is the same under plain permalinks, where a page's
+	 * permalink is `/?page_id=2` and has no path to match. In `exception`
+	 * mode the report was the page itself, with WordPress's cache headers,
+	 * then cached at the edge. Whichever path answers -- the library in
+	 * `block` mode, the plugin's responder in `exception` mode -- the visitor
+	 * gets the ALTCHA interstitial, never the page, and every no-store header
+	 * a cache in front of the site might read.
 	 */
-	public function test_a_per_rule_altcha_challenge_guards_a_real_page_in_both_modes(): void {
-		$page = get_page_by_path( 'sample-page' );
-
-		if ( ! $page instanceof \WP_Post ) {
-			$this->markTestSkipped( 'The site has no sample-page to challenge.' );
-		}
-
-		$path = (string) wp_parse_url( (string) get_permalink( $page ), PHP_URL_PATH );
+	public function test_a_per_rule_altcha_challenge_guards_a_routed_page_in_both_modes(): void {
+		$path = '/bfw-e2e-learning-resources/some-page/';
 
 		$rule = array(
 			'id'                 => 'e2e_issue_34',
@@ -399,7 +395,7 @@ final class HttpEvaluationTest extends TestCase {
 					array(
 						'variable' => 'path',
 						'operator' => 'starts_with',
-						'value'    => untrailingslashit( $path ),
+						'value'    => '/bfw-e2e-learning-resources',
 					),
 				),
 			),
