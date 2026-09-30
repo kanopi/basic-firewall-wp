@@ -988,7 +988,7 @@ final class Rule_Edit_Screen extends Screen {
 		$this->row(
 			__( 'Weight', 'basic-firewall' ),
 			self::text( 'weight', (string) $rule['weight'], 'number', 'min="-1000" max="1000"' ),
-			__( 'Lower runs first. Put cheap checks (address, path) ahead of expensive ones (Core Rule Set, IP reputation) so obvious traffic is dealt with before anything costly runs.', 'basic-firewall' )
+			__( 'Lower runs first. Put cheap checks (address, path) ahead of expensive ones (Core Rule Set, IP reputation, vulnerability scoring) so obvious traffic is dealt with before anything costly runs.', 'basic-firewall' )
 		);
 
 		if ( $type->supports_shared_status_code() ) {

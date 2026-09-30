@@ -677,16 +677,12 @@ generated.
 | ASN | Autonomous system number (`asn`) or organisation (`asn_org`). Needs a MaxMind ASN database |
 | Geolocation | Country, continent, city, postal code, timezone, coordinates. MaxMind database or CDN headers |
 | IP reputation | AbuseIPDB confidence score. Free API key, one cached lookup per visitor per day, fails open |
+| Vulnerability score | A total of scores for the method, attack patterns, user agent and — with MaxMind databases — country and network, against risk levels you set |
 | OWASP Core Rule Set | The full CRS ruleset, via `kanopi/crs-engine` |
 
-**The vulnerability score type is withdrawn from 1.0.** It saved a threshold and
-a set of weights, and the library's `VulnerabilityScore` plugin reads neither: it
-scores with its own signals (`scoring.*`) and matches on `risk_levels`. So the
-rule loaded, reported itself healthy, and never matched anything. It comes back
-when it is rebuilt on the library's scoring model. Until then it is not offered,
-another plugin cannot register a type under its id, and a rule saved by a
-pre-release build is kept as it is — never compiled, and named on the Status
-screen and in Site Health until you delete it.
+Ten types. The vulnerability score type was withdrawn from 1.0 and is back,
+rebuilt on the library's own scoring model; see
+[Adding up suspicion](#adding-up-suspicion-the-vulnerability-score-type).
 
 ### What a Request / URL condition reads
 
@@ -1425,9 +1421,86 @@ nothing, which is why the rule screens offer no other. Earlier releases offered
 matched nothing; they are rewritten on upgrade and translated if one arrives in
 an import. `network`, once offered on the ASN rule, is not something the library
 reads at all — a rule still carrying it says so, and a network block belongs in
-an IP address rule. Coordinates are floats, so compare them with "is greater
-than" or "is less than"; an autonomous system number can be typed with or
-without its `AS`.
+an IP address rule. An autonomous system number can be typed with or without
+its `AS`.
+
+**Coordinates are numbers.** "Is greater than" and "is less than" draw an area,
+and work from either source. "Is equal to", "is not equal to" and "is one of"
+match only the exact coordinate — a city's, since that is what a lookup
+returns. A MaxMind database answers with floats and the library compares those
+operators strictly, so on a database-backed rule the value is compiled as a
+number: `51.5142` matches a visitor at 51.5142, and `not equal to` no longer
+matches everyone. A CDN sends the coordinate as text, which already compares
+as typed, so a header-backed rule compiles it unchanged. Coordinates in a
+referenced list are filled in after compiling and stay text, so an exact match
+against a database belongs in the rule's own conditions.
+
+### Adding up suspicion: the vulnerability score type
+
+Some requests are only suspicious in combination — a `DELETE` carrying a
+scanner's user agent, from a hosting network, to a path with an encoded
+`<script`. The vulnerability score type adds a score for each thing a request
+looks like, and matches on the total. It is the library's `VulnerabilityScore`
+plugin, and the form holds exactly what that plugin reads and nothing else.
+
+**Risk levels** decide what a total means. One per line:
+
+```
+medium 20 pass
+high 40 match 0 3600
+critical 60 match 403 86400
+```
+
+A request's level is the one with the highest threshold its total reaches. The
+rule matches only when that level says `match` (the library's `block: true`),
+and then does whatever the rule's response is: block, challenge, record, and
+so on. A `match` level may name a status code and a ban length in seconds that
+override the rule's — `0` keeps the rule's code. A `pass` level only names the
+score in the log. Refused, because the library would read them as something
+nobody means: no level that matches; a matching level at zero or below (every
+plain request scores zero); two levels with one name or one threshold (the
+library keeps one); and a `pass` level above a `match` level, which would let
+the highest-scoring requests through.
+
+**Scores**, each its own field:
+
+| Field | One per line | Notes |
+|---|---|---|
+| Request method | `DELETE: 25` | A method not listed scores nothing |
+| Attack patterns | `score type where pattern` — `30 contains uri /.env` | `regex`, `contains` or `exact` (the last two ignore case); where is any of `uri`, `query_string`, `body`, `headers`, comma separated. Every pattern that matches adds its score once |
+| User agent | `score type pattern` — `50 contains sqlmap` | Only the **first** line that matches counts, so put the highest first. `20 regex /^$/` scores a missing user agent |
+| Country | `CN: 30` | Needs a MaxMind **Country** database; a City one is refused by the lookup this uses |
+| Network (ASN) | `4134: 30` | Needs a GeoLite2-ASN database. Negative scores lower the total, which is how a trusted network offsets a country |
+| Network organisation | `hosting: 15` | Anywhere in the organisation name, ignoring case; only the first line that matches counts. Needs the ASN database |
+
+A regular expression needs the same delimiter at both ends — the library
+refuses `(abc)i` and `^$` and the pattern would never match, so the form refuses
+them too. The query string is read URL-encoded, so a space there is `%20`: the
+default SQL injection pattern allows for `%20` and `+` as well as a space.
+Country and network scores with no database path are refused rather than
+saved, because the library skips a signal it has no reader for without a word.
+A database that is missing, unreadable or the wrong kind is reported on the
+rule, on the Status screen and in Site Health.
+
+The defaults are a working subset of the library's `malicious-requests` preset:
+its method scores and risk levels, six attack patterns and four scanner user
+agents, chosen so a request needs a clear attack signature, or several weaker
+signals, to reach the first level that matches. Start it observing (see
+[Observing a rule before letting it act](#observing-a-rule-before-letting-it-act)) to see
+what it would match before letting it act. At the `info` log level the library
+also logs every request's `total_score`, `risk_level` and the scores that made
+it up.
+
+**Rules saved before 1.1.** The withdrawn type stored a threshold and a set of
+weights, which the library never read, and 1.0 skipped those rules and named
+them in Site Health. Upgrading translates each one it soundly can: a threshold
+with no weights becomes one level that matches at that threshold, with the
+default scores, and the rule keeps its response and whether it was switched
+on. A weight was one number for a whole signal, and the library scores each
+method, pattern and country separately, so there is nothing to map one to
+without guessing. A rule with weights is kept exactly as it was, switched off,
+and named on the Status screen, in Site Health and in the rule list until you
+set its scores and levels and save it, or delete it.
 
 ### How a rate limit counts
 

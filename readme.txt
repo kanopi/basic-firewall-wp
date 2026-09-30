@@ -22,7 +22,7 @@ It is the WordPress port of the Drupal module `basic_firewall`, built on the
 `kanopi/firewall` library, and it keeps that module's habit of writing down what
 does not work as well as what does.
 
-**Nine rule types**
+**Ten rule types**
 
 * IP address — single addresses, CIDR blocks, ranges, IPv4 and IPv6
 * Request / URL — method, host, path, port, query parameters, posted fields, headers, cookies
@@ -32,6 +32,7 @@ does not work as well as what does.
 * ASN — turn away a whole hosting provider or VPN
 * Geolocation — from a MaxMind database or your CDN's headers
 * IP reputation — AbuseIPDB, cached, fails open
+* Vulnerability score — adds up method, attack pattern, user agent, country and network scores, and matches at the risk levels you set
 * OWASP Core Rule Set
 
 **What it costs**
