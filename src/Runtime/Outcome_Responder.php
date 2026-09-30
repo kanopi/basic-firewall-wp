@@ -15,6 +15,7 @@ use Kanopi\Firewall\Exception\ChallengeSolvedException;
 use Kanopi\Firewall\Exception\FirewallBlockedException;
 use Kanopi\Firewall\Exception\FirewallLockdownException;
 use Kanopi\Firewall\Exception\FirewallRedirectException;
+use Kanopi\Firewall\Utility\NoStore;
 use Symfony\Component\HttpFoundation\Request;
 
 /**
@@ -35,31 +36,6 @@ use Symfony\Component\HttpFoundation\Request;
  * basic_firewall_answer_outcome() in bootstrap.php.
  */
 final class Outcome_Responder {
-
-	/**
-	 * Headers that keep a firewall response out of every cache.
-	 *
-	 * The same set as the library's `NoStore::HEADERS` (kanopi/firewall#418),
-	 * and used only when the library copy in use predates that class; see
-	 * no_store_headers(). `no-store` alone was not enough: Pantheon's
-	 * Fastly-based edge caches a response carrying only that, and a cached
-	 * challenge or refusal is served to every visitor after the first --
-	 * #34, where a page reached the edge with WordPress's `max-age=3600`.
-	 * So every directive a cache might read is sent: `private` and
-	 * `max-age=0`, which shared caches reliably honour; `no-store`,
-	 * `no-cache` and `must-revalidate`; `Pragma` and `Expires` for HTTP/1.0
-	 * caches; and `Surrogate-Control` and `CDN-Cache-Control`, which some
-	 * CDNs read in preference to `Cache-Control`.
-	 *
-	 * @var array<string, string>
-	 */
-	public const NO_STORE_HEADERS = array(
-		'Cache-Control'     => 'private, no-store, no-cache, must-revalidate, max-age=0',
-		'Pragma'            => 'no-cache',
-		'Expires'           => '0',
-		'Surrogate-Control' => 'no-store',
-		'CDN-Cache-Control' => 'no-store',
-	);
 
 	/**
 	 * Respond to whatever the firewall threw.
@@ -544,31 +520,25 @@ final class Outcome_Responder {
 	}
 
 	/**
-	 * The no-store headers, from the library when it has them.
+	 * The headers that keep a firewall response out of every cache.
 	 *
-	 * The library's `NoStore::HEADERS` first, under whichever name the copy
-	 * in use carries it, so the plugin and the library cannot drift apart on
-	 * what keeps a response out of a cache. This class's own identical set
-	 * fills in for a library that predates it, and fills any name the
-	 * library's set leaves out.
+	 * The library's own set (kanopi/firewall#418), so the plugin and the
+	 * library cannot drift apart on what keeps a response out of a cache.
+	 * `no-store` alone was not enough: Pantheon's Fastly-based edge caches a
+	 * response carrying only that, and a cached challenge or refusal is
+	 * served to every visitor after the first -- #34, where a page reached
+	 * the edge with WordPress's `max-age=3600`.
+	 *
+	 * No fallback of its own: the plugin requires ^2.34.1, the release that
+	 * added the class, so every copy of the library this class can be loaded
+	 * beside has it. The bootstrap, which must answer even when the library
+	 * is not the copy it expected, keeps one; see
+	 * basic_firewall_no_store_headers().
 	 *
 	 * @return array<string, string>
 	 */
 	public static function no_store_headers(): array {
-		foreach ( array( 'Kanopi\\BasicFirewall\\Vendor\\Kanopi\\Firewall\\Utility\\NoStore', 'Kanopi\\Firewall\\Utility\\NoStore' ) as $class ) {
-			// @phpstan-ignore function.impossibleType (Absent from the library copy analysed against; present from 2.34.1.)
-			if ( ! class_exists( $class ) || ! defined( $class . '::HEADERS' ) ) {
-				continue;
-			}
-
-			$headers = constant( $class . '::HEADERS' );
-
-			if ( is_array( $headers ) ) {
-				return array_map( 'strval', $headers ) + self::NO_STORE_HEADERS;
-			}
-		}
-
-		return self::NO_STORE_HEADERS;
+		return NoStore::HEADERS;
 	}
 
 	/**

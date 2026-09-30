@@ -143,6 +143,8 @@ if ( ! is_readable( $autoload ) ) {
 		'Kanopi\\Firewall\\Storage\\RecordedRequest',
 		// Named by the compiler and the request path Site Health check.
 		'Kanopi\\Firewall\\Utility\\RequestPath',
+		// The no-store header set every response the responder writes carries.
+		'Kanopi\\Firewall\\Utility\\NoStore',
 		'Monolog\\Handler\\RotatingFileHandler',
 		'Monolog\\Level',
 		'Symfony\\Component\\Yaml\\Yaml',

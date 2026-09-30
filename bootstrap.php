@@ -527,8 +527,10 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 	 * this path runs, when it has the class, so a refusal written here and
 	 * one written by the library cannot differ. The same set written out
 	 * otherwise, because this is the answer of last resort and must not
-	 * depend on anything else having loaded; Outcome_Responder carries the
-	 * same fallback for the same reason.
+	 * depend on anything else having loaded -- including a library copy new
+	 * enough to have the class, which a site's own Composer tree loaded above
+	 * the snippet need not be. Outcome_Responder, which only runs beside a
+	 * library the plugin's ^2.34.1 requirement admitted, uses the class alone.
 	 *
 	 * @return array<string, string>
 	 */

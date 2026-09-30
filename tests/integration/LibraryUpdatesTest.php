@@ -41,8 +41,8 @@ final class LibraryUpdatesTest extends TestCase {
 
 		$this->assertIsString( $version );
 		$this->assertTrue(
-			version_compare( ltrim( $version, 'v' ), '2.32.0', '>=' ),
-			sprintf( 'The recorded-request allowlist and the deferred log handler need 2.31.0, and the signed pass lifetime 2.32.0; this is %s.', $version )
+			version_compare( ltrim( $version, 'v' ), '2.34.1', '>=' ),
+			sprintf( 'The recorded-request allowlist and the deferred log handler need 2.31.0, the signed pass lifetime 2.32.0, path_source 2.34.0 and the NoStore header set the responder sends 2.34.1; this is %s.', $version )
 		);
 	}
 

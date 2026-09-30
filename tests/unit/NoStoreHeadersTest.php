@@ -16,6 +16,7 @@ use Kanopi\Firewall\Exception\ChallengeSolvedException;
 use Kanopi\Firewall\Exception\FirewallBlockedException;
 use Kanopi\Firewall\Exception\FirewallLockdownException;
 use Kanopi\Firewall\Exception\FirewallRedirectException;
+use Kanopi\Firewall\Utility\NoStore;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\HttpFoundation\Request;
 
@@ -47,11 +48,11 @@ final class NoStoreHeadersTest extends TestCase {
 	);
 
 	/**
-	 * The plugin's own copy of the set is the library's, word for word.
+	 * The responder's set is the library's, and the library's is #418's.
 	 */
-	public function test_the_fallback_set_is_the_librarys(): void {
-		$this->assertSame( self::EXPECTED, Outcome_Responder::NO_STORE_HEADERS );
-		$this->assertSame( self::EXPECTED, Outcome_Responder::no_store_headers() );
+	public function test_the_set_is_the_librarys(): void {
+		$this->assertSame( self::EXPECTED, NoStore::HEADERS );
+		$this->assertSame( NoStore::HEADERS, Outcome_Responder::no_store_headers() );
 	}
 
 	/**

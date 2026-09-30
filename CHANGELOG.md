@@ -7,6 +7,22 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed
+
+- **Requires and bundles `kanopi/firewall` 2.34.1** (was ^2.34). The release
+  zip bundles 2.34.1, namespace-scoped. In `block` mode the library answers
+  itself, and every response it writes now carries the full no-cache set
+  ([kanopi/firewall#417](https://github.com/kanopi/firewall/issues/417),
+  [#418](https://github.com/kanopi/firewall/pull/418)): the challenge
+  interstitial, block pages (which sent no cache header at all), lockdown,
+  redirects, and the challenge-verify JSON that sets the pass cookie (none
+  either). The interstitial ignores a double submit while one is in flight.
+  A spent challenge solution coming back from a different client, which is
+  what a cached challenge page looks like, is now logged at warning; the
+  same client twice stays at info. No configuration changes.
+- **The mu-plugin loader is 1.2.0**; the plugin replaces the installed copy
+  on the next admin, cron or WP-CLI request. See Fixed.
+
 ### Fixed
 
 - **An `exception` mode verdict on the wp-config.php path can no longer
@@ -34,7 +50,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   same name. That is the challenge interstitial, block, lockdown and redirect
   answers, and the solved-challenge JSON and redirect. They carried only
   `no-store` and `Pragma`, which Pantheon's edge caches anyway. The set is
-  the library's `NoStore::HEADERS` when the library has it.
+  the library's `NoStore::HEADERS`.
 
 ## [1.0.0-rc.3]
 
