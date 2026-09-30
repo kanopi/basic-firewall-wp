@@ -4,7 +4,7 @@ Tags: security, firewall, rate limiting, bot protection, waf
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 1.0.0-rc.3
+Stable tag: 1.0.0-rc.4
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -133,6 +133,11 @@ proxy too.
 4. Blocked clients, with an address lookup that works on every backend.
 
 == Changelog ==
+
+= 1.0.0-rc.4 =
+* In exception mode, a challenge, redirect or block on the wp-config.php path can no longer serve the page: any failure to answer it ends in a 503 and is logged.
+* The pass cookie name on the Challenge screen is what both evaluation paths issue and check; set it to a name your host forwards if a solved challenge keeps coming back.
+* Every response the firewall writes carries the full no-cache header set; bundles kanopi/firewall 2.34.1.
 
 = 1.0.0-rc.3 =
 * Rules see the path of a directly requested PHP file (wp-login.php, xmlrpc.php, /wp-admin/*.php), which previously reached them as "/": login rate limits count, admin and xmlrpc rules match, and a URL spelled differently cannot get past them.
