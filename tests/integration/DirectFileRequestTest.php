@@ -398,13 +398,18 @@ final class DirectFileRequestTest extends Settings_Snapshot {
 		$this->assertStringNotContainsString( '"path":"/"', str_replace( '\\/', '/', $logged ), 'The log still records a direct request as `/`.' );
 
 		/*
-		 * The logged `url` is not asserted. The library's logger builds it with
-		 * Symfony's getUri(), which joins the base URL -- the file, for a direct
-		 * request -- and the path info, `/`, so it reads `.../edit.php/?...`.
-		 * #31's rewrite hid that by making every request look routed; the
-		 * library fixed the block record's `uri` in 2.34.0 (asserted below)
-		 * but not the log line. An upstream follow-up.
+		 * The logged `url` used to be left unasserted: the library's logger
+		 * built it with Symfony's getUri(), which joins the base URL -- the
+		 * file, for a direct request -- and the path info, `/`, so it read
+		 * `.../edit.php/?...`, beside a block record that said `edit.php`.
+		 * kanopi/firewall 2.35.0 builds both from one helper (#419), so the
+		 * log line now carries the file without the stray `/`.
 		 */
+		$unescaped = str_replace( '\\/', '/', $logged );
+
+		$this->assertStringContainsString( '"url":', $unescaped, 'The log line carries no url, so the next assertion proves nothing.' );
+		$this->assertStringContainsString( '/wp-admin/edit.php?post_type=page', $unescaped, 'The logged url is not the requested file.' );
+		$this->assertStringNotContainsString( 'edit.php/', $unescaped, 'The logged url has a `/` after the file name.' );
 
 		$store = Plugin::instance()->paths()->base() . '/' . self::STORE . 'blocked.data';
 		$data  = file_exists( $store ) ? json_decode( (string) file_get_contents( $store ), true ) : null; // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- the test's own block store.

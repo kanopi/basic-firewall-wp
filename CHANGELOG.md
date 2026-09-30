@@ -7,6 +7,37 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### What changes on upgrade
+
+This release bundles kanopi/firewall 2.35.1. Several of its fixes change what
+an existing configuration does:
+
+- **ASN equality rules start matching.** An ASN rule with *is equal to* or
+  *is one of* (`16509`, `AS16509`) never matched before; a block rule on a
+  network now blocks it. **An ASN *is not equal to* X rule stops matching
+  network X** — it used to match every visitor, X included. Check your ASN
+  rules, especially negated ones.
+- **The path every rule sees is normalised.** Doubled slashes, `.` segments
+  (raw or `%2e`), percent-encoded unreserved characters and `;params` no
+  longer change what a rule or rate limit matches; `..` is kept as written.
+  The log and block records show the normalised path.
+- **The WordPress presets are at Preset-Version 2.** `search-bots.yml` (and
+  `wordpress.yml`, which this plugin does not offer on a WordPress site)
+  match WordPress's paths at any depth: **wider** (a subdirectory install,
+  core in its own directory, `readme.html` anywhere) and slightly
+  **narrower** (a slug that merely starts with `wp-login` or `wp-admin`, such
+  as `/wp-login-help/`, is no longer treated as the login or the admin).
+- **Rate-limit paths ignore case**, as URL rules already did: a
+  `/wp-login.php` limit also counts `/WP-LOGIN.PHP`. A pattern written as a
+  regular expression keeps its own flags.
+- **Redirect targets with a raw control character or whitespace go to `/`**
+  after a solved challenge, as does anything a browser would read as `//`.
+- **`firewall-check --lint` may warn about a rate-limit entry that never
+  runs** because an earlier entry in the same rule covers it. The rule screen
+  now says the same.
+- **The logged URL of a directly requested file loses its stray trailing
+  `/`** (`/wp-login.php`, not `/wp-login.php/`), matching the block record.
+
 ### Added
 
 - **The rule screen warns about a rate-limit line that can never run**
