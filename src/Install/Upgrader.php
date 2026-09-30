@@ -333,6 +333,19 @@ final class Upgrader {
 			10 => static function (): void {
 				// Deliberately empty: the rebuild that follows every upgrade is the point.
 			},
+
+			/*
+			 * 11: recompile, so the compiled file names the pass cookie
+			 * explicitly and the compile record carries it.
+			 *
+			 * Nothing stored changes. The runner now sets the pass under the
+			 * name the compiled file gives the library, read from the compile
+			 * record (#35); without a rebuild an existing site has no record
+			 * until the next settings save.
+			 */
+			11 => static function (): void {
+				// Deliberately empty: the rebuild that follows every upgrade is the point.
+			},
 		);
 	}
 

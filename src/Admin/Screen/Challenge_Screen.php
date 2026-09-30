@@ -11,6 +11,7 @@ namespace Kanopi\BasicFirewall\Admin\Screen;
 
 use Kanopi\BasicFirewall\Admin\Notices;
 use Kanopi\BasicFirewall\Admin\Screen;
+use Kanopi\BasicFirewall\Challenge\Pass_Cookie;
 use Kanopi\BasicFirewall\Compiler\Library_Map;
 use Kanopi\BasicFirewall\Install\Challenge_Secret;
 
@@ -91,6 +92,20 @@ final class Challenge_Screen extends Screen {
 		}
 
 		/*
+		 * The pass cookie name is required, like a remote provider's keys: an
+		 * empty or malformed name is refused rather than quietly replaced, so
+		 * the field always shows the cookie actually in use.
+		 */
+		if ( ! Pass_Cookie::is_valid( (string) $all['challenge']['cookie_name'] ) ) {
+			Notices::add(
+				__( 'The pass token cookie needs a name made of letters, digits and !#$%&\'*+-.^_`|~ only — no spaces, commas, semicolons or equals signs. Nothing was saved.', 'basic-firewall' ),
+				'error'
+			);
+
+			$this->redirect( $this->slug() );
+		}
+
+		/*
 		 * A remote provider without both keys is refused at save time rather
 		 * than at request time. The library raises during startup, this plugin
 		 * catches it and fails open, and the result is a site with no firewall
@@ -163,7 +178,8 @@ final class Challenge_Screen extends Screen {
 
 		$this->row(
 			__( 'Pass token cookie', 'basic-firewall' ),
-			self::text( 'cookie_name', (string) $settings->get( 'challenge.cookie_name', '' ) )
+			self::text( 'cookie_name', (string) $settings->get( 'challenge.cookie_name', '' ) ),
+			__( 'The cookie a solved challenge is remembered in. Some hosts and edge caches only pass on cookies whose names match their own rules; if visitors are challenged again straight after solving one, set a name your host forwards. Changing it invalidates passes already issued, so each visitor holding one is challenged once more.', 'basic-firewall' )
 		);
 
 		$this->row(

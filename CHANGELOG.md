@@ -22,9 +22,28 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   same client twice stays at info. No configuration changes.
 - **The mu-plugin loader is 1.2.0**; the plugin replaces the installed copy
   on the next admin, cron or WP-CLI request. See Fixed.
+- **The pass cookie name set on the Challenge screen is now what both
+  evaluation paths issue and check** (#35). The compiled file always names
+  the cookie explicitly (the field's value, trimmed; `bfw_pass` by default)
+  rather than leaving it to the library's default, and in `exception` mode
+  the runner sets the pass under the compiled name instead of re-reading
+  settings. The field is required: an empty or malformed name is refused
+  with a notice and nothing is saved. Upgrade routine 11 recompiles on the
+  first request after updating. **Changing the name invalidates passes
+  already issued**, so each visitor holding one is challenged once more.
 
 ### Fixed
 
+- **A solved challenge that keeps being challenged is now explained in
+  `exception` mode** (#35). Some hosts or edge caches only forward cookies
+  whose names match their own rules, so the pass never comes back; the fix
+  is to set a name the host forwards (see Changed, and the README). A
+  visitor challenged within two minutes of solving one, without the pass, is
+  now told the verification cookie did not come back, and a warning is
+  logged. It uses a short-lived, unsigned marker cookie named after the pass
+  cookie (`<name>_solved`), so a prefix chosen for the host applies to it
+  too; the interstitial stays no-store. `block` mode is unchanged, because
+  the library renders that page itself.
 - **An `exception` mode verdict on the wp-config.php path can no longer
   serve the page** (#34). Every route by which the early path could fail
   open on a challenge, redirect or block now ends in a plain 503

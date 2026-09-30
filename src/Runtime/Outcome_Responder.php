@@ -9,6 +9,7 @@ declare( strict_types = 1 );
 
 namespace Kanopi\BasicFirewall\Runtime;
 
+use Kanopi\BasicFirewall\Challenge\Pass_Cookie;
 use Kanopi\BasicFirewall\Plugin;
 use Kanopi\Firewall\Exception\ChallengeRequiredException;
 use Kanopi\Firewall\Exception\ChallengeSolvedException;
@@ -36,6 +37,20 @@ use Symfony\Component\HttpFoundation\Request;
  * basic_firewall_answer_outcome() in bootstrap.php.
  */
 final class Outcome_Responder {
+
+	/**
+	 * How long the solved marker lives, in seconds.
+	 *
+	 * The marker is set beside the pass (see solved_cookies()) and named after
+	 * it (Pass_Cookie::marker_name()), so a prefix an admin chose to get the
+	 * pass past their host's edge applies to the marker too. Its only job is
+	 * to let the next challenge tell "never solved" from "solved, and the
+	 * pass did not come back" (see pass_went_missing()).
+	 *
+	 * Long enough to cover the redirect and a slow page, short enough that a
+	 * visitor who clears their cookies later is not told a stale story.
+	 */
+	public const SOLVED_MARKER_TTL = 120;
 
 	/**
 	 * Respond to whatever the firewall threw.
@@ -307,14 +322,88 @@ final class Outcome_Responder {
 			return $response;
 		}
 
+		$warning = null;
+
+		if ( self::pass_went_missing( $outcome, $request ) ) {
+			$body    = self::with_missing_pass_notice( $body );
+			$warning = 'a visitor who solved a challenge moments ago came back without the pass cookie, so the host or the browser is not returning it.';
+		}
+
 		// The library composes the interstitial, including whatever widget the
 		// provider needs. It is markup by contract, so it is not escaped.
 		return array(
 			'status'  => 503,
 			'headers' => self::page_headers() + array( 'Retry-After' => '60' ),
 			'body'    => $body,
-			'warning' => null,
+			'warning' => $warning,
 		);
+	}
+
+	/**
+	 * Is this visitor being challenged again right after solving a challenge?
+	 *
+	 * A solved challenge sets the pass cookie and, beside it, a short-lived
+	 * marker (see solved_cookies()). A challenge that arrives carrying the
+	 * marker but no pass cookie at all means the pass was issued and then did
+	 * not come back: a host or edge cache that forwards only cookies matching
+	 * its own rules (#35), or a browser refusing it. Left
+	 * alone, that visitor solves the same challenge again and again with
+	 * nothing on the page to say why.
+	 *
+	 * Only when the pass cookie is absent. A pass that arrived and was refused
+	 * -- expired, revoked, earned against a different provider -- is a
+	 * different story, and the ordinary interstitial is the right answer.
+	 *
+	 * The marker is not signed, and does not need to be: it only changes the
+	 * wording of a page the visitor is already being refused with, and a
+	 * visitor who forges it misleads nobody but themselves.
+	 *
+	 * @param ChallengeRequiredException $outcome The challenge.
+	 * @param Request                    $request The request being challenged.
+	 */
+	public static function pass_went_missing( ChallengeRequiredException $outcome, Request $request ): bool {
+		$name = (string) ( $outcome->getRenderContext()['cookie_name'] ?? '' );
+
+		if ( '' === $name || $request->cookies->has( $name ) ) {
+			return false;
+		}
+
+		$marker = $request->cookies->get( Pass_Cookie::marker_name( $name ) );
+
+		if ( ! is_string( $marker ) || ! ctype_digit( $marker ) ) {
+			return false;
+		}
+
+		// The marker's own lifetime, checked again: a browser that ignores
+		// Max-Age must not see the hint on every challenge for ever after.
+		$age = time() - (int) $marker;
+
+		return $age >= 0 && $age <= self::SOLVED_MARKER_TTL;
+	}
+
+	/**
+	 * The interstitial, with a line explaining the missing pass.
+	 *
+	 * Placed just above the form, where the visitor looks first; prepended to
+	 * the body if a provider's page has no form this can find. The text is
+	 * fixed and escaped, and the response carries the full no-store set like
+	 * every interstitial, so nothing about it can be cached for anybody else.
+	 *
+	 * @param string $body The rendered interstitial.
+	 */
+	public static function with_missing_pass_notice( string $body ): string {
+		$text = self::can_translate()
+			? __( 'You completed this check a moment ago, but the verification cookie did not come back with this request. Your browser may be blocking cookies for this site, or the site\'s host may not be passing the cookie on. If this keeps happening, allow cookies for this site or contact the site owner.', 'basic-firewall' )
+			: 'You completed this check a moment ago, but the verification cookie did not come back with this request. Your browser may be blocking cookies for this site, or the site\'s host may not be passing the cookie on. If this keeps happening, allow cookies for this site or contact the site owner.';
+
+		$notice = '<p class="bfw-missing-pass" role="alert" style="color:#b42318">' . self::escape( $text ) . '</p>' . "\n";
+		$form   = strpos( $body, '<form' );
+
+		if ( false !== $form ) {
+			return substr( $body, 0, $form ) . $notice . substr( $body, $form );
+		}
+
+		return $notice . $body;
 	}
 
 	/**
@@ -344,41 +433,75 @@ final class Outcome_Responder {
 	/**
 	 * A challenge was solved: set the pass cookie and send the visitor on.
 	 *
-	 * Needs WordPress, for the cookie name in settings and for `is_ssl()`. The
-	 * wp-config.php bootstrap therefore never answers this outcome itself; it
-	 * leaves it for the runner, which is safe because a solution is a POST to
-	 * the challenge path and no page cache serves a POST.
+	 * Needs WordPress, for the compile record that names the cookie and for
+	 * `is_ssl()`. The wp-config.php bootstrap therefore never answers this
+	 * outcome itself; it leaves it for the runner, which is safe because a
+	 * solution is a POST to the challenge path and no page cache serves a POST.
 	 *
 	 * @param ChallengeSolvedException $outcome The solved challenge.
 	 * @param Request|null             $request The submission.
 	 */
 	private function send_solved( ChallengeSolvedException $outcome, ?Request $request ): void {
-		$settings = Plugin::instance()->settings();
-		$name     = (string) $settings->get( 'challenge.cookie_name', 'bfw_pass' );
+		$cookies = self::solved_cookies( $outcome->getToken(), Plugin::instance()->compiled()->pass_cookie(), is_ssl() );
 
-		$secure = is_ssl();
-
-		setcookie(
-			$name,
-			$outcome->getToken(),
-			array(
-				'expires'  => 0,
-				'path'     => '/',
-
-				/*
-				 * HttpOnly: the token is presented by the browser on the next
-				 * request and nothing on the page needs to read it, so there is
-				 * no reason for script to be able to. SameSite=Lax so an
-				 * ordinary top-level navigation back to the site still carries
-				 * it, while a cross-site POST does not.
-				 */
-				'httponly' => true,
-				'secure'   => $secure,
-				'samesite' => 'Lax',
-			)
-		);
+		foreach ( $cookies as $cookie ) {
+			setcookie( $cookie['name'], $cookie['value'], $cookie['options'] );
+		}
 
 		$this->emit( self::solved_http_response( $outcome, $request ) );
+	}
+
+	/**
+	 * The cookies a solved challenge sets: the pass, and a short-lived marker.
+	 *
+	 * The name is the one the compiled file gives the library, read from the
+	 * compile record rather than from settings: the library looks for the pass
+	 * under the compiled name, and a cookie set under any other is a pass
+	 * nobody ever reads (#35).
+	 *
+	 * @param string $token  The pass token.
+	 * @param string $name   The pass cookie's name.
+	 * @param bool   $secure Whether the request arrived over HTTPS.
+	 *
+	 * @return list<array{name: string, value: string, options: array<string, mixed>}>
+	 */
+	public static function solved_cookies( string $token, string $name, bool $secure ): array {
+		return array(
+			array(
+				'name'    => $name,
+				'value'   => $token,
+				'options' => array(
+					'expires'  => 0,
+					'path'     => '/',
+
+					/*
+					 * HttpOnly: the token is presented by the browser on the
+					 * next request and nothing on the page needs to read it,
+					 * so there is no reason for script to be able to.
+					 * SameSite=Lax so an ordinary top-level navigation back to
+					 * the site still carries it, while a cross-site POST does
+					 * not.
+					 */
+					'httponly' => true,
+					'secure'   => $secure,
+					'samesite' => 'Lax',
+				),
+			),
+
+			// The marker: when it was solved, so a re-challenge moments later
+			// can say the pass went missing instead of silently asking again.
+			array(
+				'name'    => Pass_Cookie::marker_name( $name ),
+				'value'   => (string) time(),
+				'options' => array(
+					'expires'  => time() + self::SOLVED_MARKER_TTL,
+					'path'     => '/',
+					'httponly' => true,
+					'secure'   => $secure,
+					'samesite' => 'Lax',
+				),
+			),
+		);
 	}
 
 	/**

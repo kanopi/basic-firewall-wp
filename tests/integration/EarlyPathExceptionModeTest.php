@@ -10,6 +10,7 @@ declare( strict_types = 1 );
 namespace Kanopi\BasicFirewall\Tests\integration;
 
 use Kanopi\BasicFirewall\Health\Site_Health;
+use Kanopi\BasicFirewall\Runtime\Outcome_Responder;
 use Kanopi\BasicFirewall\Plugin;
 use Kanopi\BasicFirewall\Runtime\Runner;
 use Kanopi\Firewall\Exception\ChallengeRequiredException;
@@ -18,6 +19,7 @@ use Kanopi\Firewall\Exception\ConfigurationException;
 use Kanopi\Firewall\Exception\FirewallBlockedException;
 use Kanopi\Firewall\Exception\FirewallLockdownException;
 use Kanopi\Firewall\Exception\FirewallRedirectException;
+use Kanopi\Firewall\Firewall;
 use Symfony\Component\HttpFoundation\Request;
 
 /**
@@ -45,6 +47,11 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 	 * What the fixture prints once the firewall has let a request through.
 	 */
 	private const SERVED = 'SERVED BY WORDPRESS';
+
+	/**
+	 * A pass cookie name other than the default, set through the settings.
+	 */
+	private const CUSTOM_COOKIE = 'STYXKEY_bfw_pass';
 
 	/**
 	 * The banning message the fixtures configure.
@@ -403,6 +410,155 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 		// The library's own plain-text answer: nothing of this plugin's
 		// responder is involved when the library can answer by itself.
 		$this->assertStringContainsString( 'text/plain', $response['type'] );
+	}
+
+	/**
+	 * #35, block mode: the library issues and accepts the configured cookie name.
+	 *
+	 * Over HTTP, end to end, with the library answering everything itself: the
+	 * interstitial, the solution (which sets the pass cookie), and the next
+	 * request carrying it. The compiled file is the only place the name comes
+	 * from on this path, so what is pinned is that the compiler wrote the
+	 * configured name and that the cookie issued under it is the one accepted.
+	 */
+	public function test_block_mode_issues_and_accepts_the_configured_cookie(): void {
+		$this->given_rule( 'challenge', 'block', array(), self::custom_cookie() );
+
+		$this->assertStringContainsString( 'cookie_name: ' . self::CUSTOM_COOKIE, (string) Plugin::instance()->compiled()->contents() );
+
+		$page = $this->request( '/bfw-early-match' );
+
+		$this->assertStringNotContainsString( self::SERVED, $page['body'], 'The challenged page was served.' );
+
+		$solved = $this->post( '/basic-firewall/challenge', self::solution( $page['body'] ) );
+		$token  = $solved['cookies'][ self::CUSTOM_COOKIE ] ?? '';
+
+		$this->assertNotSame( '', $token, 'Solving the challenge did not set ' . self::CUSTOM_COOKIE . '. Cookies set: ' . implode( ', ', array_keys( $solved['cookies'] ) ) );
+		$this->assertArrayNotHasKey( 'bfw_pass', $solved['cookies'], 'The pass went out under the default name, not the configured one.' );
+
+		$this->assertStringContainsString( self::SERVED, $this->request( '/bfw-early-match', array( 'Cookie' => self::CUSTOM_COOKIE . '=' . $token ) )['body'], 'The pass the library issued was not accepted.' );
+		$this->assertStringNotContainsString( self::SERVED, $this->request( '/bfw-early-match', array( 'Cookie' => 'bfw_pass=' . $token ) )['body'], 'The pass was accepted under a name other than the configured one.' );
+	}
+
+	/**
+	 * #35, exception mode: the runner's cookie is the one the early path reads.
+	 *
+	 * In exception mode the library hands the solved pass to the plugin, and
+	 * the runner sets the cookie. The solution is posted in-process, where the
+	 * runner's own cookie list is composed from the compile record, and the
+	 * cookie is then presented over HTTP to the wp-config.php path, which
+	 * reads only the compiled file.
+	 */
+	public function test_exception_mode_issues_and_accepts_the_configured_cookie(): void {
+		$this->given_rule( 'challenge', 'exception', array(), self::custom_cookie() );
+
+		$firewall = Firewall::create( array( Plugin::instance()->paths()->compiled_file() ) );
+
+		try {
+			$firewall->evaluate( Request::create( '/bfw-early-match' ) );
+			$this->fail( 'The matching request was not challenged.' );
+		} catch ( ChallengeRequiredException $challenge ) {
+			$page = $challenge->renderInterstitial( Request::create( '/bfw-early-match' ) );
+		}
+
+		try {
+			$firewall->evaluate( Request::create( '/basic-firewall/challenge', 'POST', self::solution( $page ) ) );
+			$this->fail( 'The solution was not accepted.' );
+		} catch ( ChallengeSolvedException $solved ) {
+			$cookies = Outcome_Responder::solved_cookies( $solved->getToken(), Plugin::instance()->compiled()->pass_cookie(), false );
+		}
+
+		$this->assertSame( self::CUSTOM_COOKIE, $cookies[0]['name'], 'The runner would set the pass under a name other than the compiled one.' );
+		$this->assertSame( self::CUSTOM_COOKIE . '_solved', $cookies[1]['name'], 'The solved marker is not named after the pass cookie.' );
+
+		$pass = $cookies[0]['name'] . '=' . $cookies[0]['value'];
+
+		$this->assertTrue( $firewall->evaluate( Request::create( '/bfw-early-match', 'GET', array(), array( $cookies[0]['name'] => $cookies[0]['value'] ) ) ), 'The normal path refused the pass it issued.' );
+		$this->assertStringContainsString( self::SERVED, $this->request( '/bfw-early-match', array( 'Cookie' => $pass ) )['body'], 'The early path refused the pass the runner issued.' );
+		$this->assertStringNotContainsString( self::SERVED, $this->request( '/bfw-early-match', array( 'Cookie' => 'bfw_pass=' . $cookies[0]['value'] ) )['body'], 'The early path accepted the pass under a name other than the configured one.' );
+
+		// And the safeguard: solved a moment ago, but the pass did not come back.
+		$lost = $this->request( '/bfw-early-match', array( 'Cookie' => $cookies[1]['name'] . '=' . time() ) );
+
+		$this->assertSame( 503, $lost['status'] );
+		$this->assertStringContainsString( 'bfw-missing-pass', $lost['body'], 'A visitor whose pass went missing was challenged again without being told.' );
+		$this->assert_no_store( $lost );
+		$this->assertStringNotContainsString( 'bfw-missing-pass', $this->request( '/bfw-early-match' )['body'], 'A first challenge carried the missing-pass notice.' );
+	}
+
+	/**
+	 * A challenge section whose pass cookie is set to CUSTOM_COOKIE, as the
+	 * Challenge screen's field would store it.
+	 *
+	 * @return array<string, mixed>
+	 */
+	private static function custom_cookie(): array {
+		return array(
+			'challenge' => array(
+				'provider'    => 'math',
+				'secret'      => str_repeat( 'early-path-secret-', 3 ),
+				'cookie_name' => self::CUSTOM_COOKIE,
+			),
+		);
+	}
+
+	/**
+	 * The fields that answer a rendered arithmetic interstitial correctly.
+	 *
+	 * The math provider signs `answer|expiry` into a hidden field, so the
+	 * expected answer is readable from the page -- the signature, not secrecy,
+	 * is what stops it being altered.
+	 *
+	 * @param string $page The interstitial.
+	 *
+	 * @return array<string, string>
+	 */
+	private static function solution( string $page ): array {
+		preg_match_all( '/<input type="hidden" name="([^"]+)" value="([^"]*)">/', $page, $matches, PREG_SET_ORDER );
+
+		$fields = array();
+
+		foreach ( $matches as $match ) {
+			$fields[ html_entity_decode( $match[1] ) ] = html_entity_decode( $match[2] );
+		}
+
+		$fields['challenge_answer'] = strtok( $fields['challenge_state'] ?? '', '|' );
+
+		return $fields;
+	}
+
+	/**
+	 * Post a form to the fixture.
+	 *
+	 * @param string                $path   Path to post to.
+	 * @param array<string, string> $fields Form fields.
+	 *
+	 * @return array{status: int, cookies: array<string, string>}
+	 */
+	private function post( string $path, array $fields ): array {
+		$response = wp_remote_post(
+			self::$base . $path,
+			array(
+				'timeout'     => 15,
+				'redirection' => 0,
+				'body'        => $fields,
+			)
+		);
+
+		if ( is_wp_error( $response ) ) {
+			$this->fail( 'The request failed: ' . $response->get_error_message() );
+		}
+
+		$cookies = array();
+
+		foreach ( wp_remote_retrieve_cookies( $response ) as $cookie ) {
+			$cookies[ $cookie->name ] = $cookie->value;
+		}
+
+		return array(
+			'status'  => (int) wp_remote_retrieve_response_code( $response ),
+			'cookies' => $cookies,
+		);
 	}
 
 	/**

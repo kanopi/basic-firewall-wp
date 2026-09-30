@@ -382,7 +382,7 @@ loaded without WordPress:
 
 Not later, from the mu-plugin, because `advanced-cache.php` runs in between: a
 page cache would serve the refused visitor the page. The solved challenge is
-the exception because it needs settings to name the pass cookie, and it is safe
+the exception because it needs WordPress to name the pass cookie, and it is safe
 to leave because it is a POST to the challenge path, which no page cache serves.
 The bootstrap leaves it in a global and the runner answers it before any
 ordinary plugin loads — or at `plugins_loaded`, if the mu-plugin loader is
@@ -761,6 +761,27 @@ not work at the moment it has just caught them.
 no log line, and every rate limit — a preset's as well as your own — counts in
 memory for the run, so testing a limited path as often as you like never spends
 a real client's allowance.
+
+### The pass cookie's name
+
+A solved challenge is remembered in a cookie, `bfw_pass` by default. Its name
+is the **Pass token cookie** field on the Challenge screen, and the name set
+there is the one both evaluation paths issue and check. The field is required:
+an empty name, or one containing spaces, commas, semicolons or other characters
+not allowed in a cookie name, is refused and nothing is saved.
+
+Some hosts or edge caches only forward cookies whose names match their own
+rules, and drop the rest before the request reaches WordPress. The pass then
+never comes back, and a visitor who solved a challenge keeps being challenged.
+If that happens, set the name to one your host forwards (check your host's
+documentation). In `exception` mode the interstitial says so: a visitor
+challenged within two minutes of solving one, without the pass, is told the
+verification cookie did not come back. That uses a short-lived marker cookie
+named after the pass cookie (`<name>_solved`), so a prefix chosen for your
+host applies to it too.
+
+Changing the name invalidates passes already issued: each visitor holding one
+is challenged once more.
 
 ### Giving a rule opening hours
 
