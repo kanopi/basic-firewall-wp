@@ -7,6 +7,53 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### What changes on upgrade
+
+- **Vulnerability score rules saved by a pre-release build are translated**
+  (schema 12). A rule with a threshold and no weights becomes one risk level
+  that matches at that threshold, with the new type's default scores, and
+  keeps its response and whether it was on — so a rule that matched nothing
+  starts matching. A rule with weights has no equivalent in the library's
+  scoring, so it is kept as it was, switched off, and named on the Status
+  screen, in Site Health and in the rule list until you set its scores or
+  delete it.
+- **Latitude/longitude *is equal to*, *is not equal to* and *is one of*
+  start working against a MaxMind database** (#49). *Is not equal to* stops
+  matching every visitor.
+
+### Added
+
+- **The vulnerability score rule type is back, rebuilt on the library's
+  scoring model** (#52). Withdrawn from 1.0 because it saved a threshold and
+  weights the library's `VulnerabilityScore` plugin never reads. It now
+  stores exactly what that plugin reads: risk levels (a threshold, whether
+  the rule matches there, and an optional status code and ban length per
+  level) and scores for the request method, attack patterns, user agent,
+  country and network, with a MaxMind Country and ASN database opened only
+  when a score needs one. Defaults are a working subset of the library's
+  `malicious-requests` preset. The form refuses what the library would
+  reject or silently ignore: a regex without matching delimiters or that
+  does not compile, an unknown location or match type, a matching level at
+  zero or below, duplicate level names or thresholds, a pass level above a
+  matching one, and country or network scores without a database. Every
+  field is covered by the honoured-settings tests against the real library.
+  See "What changes on upgrade" for rules saved by a pre-release build.
+
+### Fixed
+
+- **Latitude/longitude *is equal to*, *is not equal to* and *is one of*
+  match against a MaxMind database** (fixes #49). The record holds floats,
+  the value compiled as text, and the library compares these operators
+  strictly (2.35 coerces only the ASN), so *is equal to* never matched and
+  *is not equal to* matched every visitor. A database-backed geolocation
+  rule now compiles those values as numbers; a CDN-backed one sends text
+  and is compiled as before. Rules need no change.
+
+- **Patterns keep `<` and percent-encoded characters through the rule
+  screen.** The textarea sanitiser stripped both from the vulnerability
+  score's patterns on every save; fields a type marks `verbatim` are now
+  read as typed, and still checked by the type's validator.
+
 ## [1.0.0-rc.5]
 
 **Fifth release candidate for 1.0.0.** Published as a GitHub pre-release, so
@@ -55,35 +102,8 @@ an existing configuration does:
   now says the same.
 - **The logged URL of a directly requested file loses its stray trailing
   `/`** (`/wp-login.php`, not `/wp-login.php/`), matching the block record.
-- **Vulnerability score rules saved by a pre-release build are translated**
-  (schema 12). A rule with a threshold and no weights becomes one risk level
-  that matches at that threshold, with the new type's default scores, and
-  keeps its response and whether it was on — so a rule that matched nothing
-  starts matching. A rule with weights has no equivalent in the library's
-  scoring, so it is kept as it was, switched off, and named on the Status
-  screen, in Site Health and in the rule list until you set its scores or
-  delete it.
-- **Latitude/longitude *is equal to*, *is not equal to* and *is one of*
-  start working against a MaxMind database** (#49). *Is not equal to* stops
-  matching every visitor.
 
 ### Added
-
-- **The vulnerability score rule type is back, rebuilt on the library's
-  scoring model** (#52). Withdrawn from 1.0 because it saved a threshold and
-  weights the library's `VulnerabilityScore` plugin never reads. It now
-  stores exactly what that plugin reads: risk levels (a threshold, whether
-  the rule matches there, and an optional status code and ban length per
-  level) and scores for the request method, attack patterns, user agent,
-  country and network, with a MaxMind Country and ASN database opened only
-  when a score needs one. Defaults are a working subset of the library's
-  `malicious-requests` preset. The form refuses what the library would
-  reject or silently ignore: a regex without matching delimiters or that
-  does not compile, an unknown location or match type, a matching level at
-  zero or below, duplicate level names or thresholds, a pass level above a
-  matching one, and country or network scores without a database. Every
-  field is covered by the honoured-settings tests against the real library.
-  See "What changes on upgrade" for rules saved by a pre-release build.
 
 - **The rule screen warns about a rate-limit line that can never run**
   because an earlier line in the same rule covers it (`/log*` before
@@ -195,19 +215,6 @@ an existing configuration does:
 
 ### Fixed
 
-- **Latitude/longitude *is equal to*, *is not equal to* and *is one of*
-  match against a MaxMind database** (fixes #49). The record holds floats,
-  the value compiled as text, and the library compares these operators
-  strictly (2.35 coerces only the ASN), so *is equal to* never matched and
-  *is not equal to* matched every visitor. A database-backed geolocation
-  rule now compiles those values as numbers; a CDN-backed one sends text
-  and is compiled as before. Rules need no change.
-
-- **Patterns keep `<` and percent-encoded characters through the rule
-  screen.** The textarea sanitiser stripped both from the vulnerability
-  score's patterns on every save; fields a type marks `verbatim` are now
-  read as typed, and still checked by the type's validator.
-
 - **The rate-limit pairing check judges coverage by the line that runs**, as
   `firewall-check --lint` does from kanopi/firewall 2.35.1. On save and in
   Site Health, an identity-keyed line that an earlier line in its rule covers
@@ -245,8 +252,8 @@ an existing configuration does:
   with *is equal to*, *is one of* or *is not equal to* is no longer compiled
   into a digits-only `#^16509$#` pattern: the library reads both sides as a
   number now. A list entry written `AS16509` is matched instead of skipped.
-  Stored rules need no change. The latitude/longitude half of #49 is under
-  *Fixed*.
+  Stored rules need no change. (Latitude/longitude *equals* is not part of
+  this release.)
 
 - **The block list screen and WP-CLI resolve a `%env()%` Redis password**
   rather than sending the token itself as the password (#48).
