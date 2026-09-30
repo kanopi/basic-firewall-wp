@@ -212,7 +212,45 @@ final class Importer {
 		}
 
 		// Restore anything the document did not carry a credential for.
-		return $this->preserve_credentials( $current, $result, $incoming );
+		$result = $this->preserve_credentials( $current, $result, $incoming );
+
+		return $this->restore_advanced_yaml( $current, $result, $incoming );
+	}
+
+	/**
+	 * Put this site's credentials back into an imported advanced YAML.
+	 *
+	 * An export shows each credential in the advanced block as [redacted].
+	 * Where this site's own block has the same credential at the same place,
+	 * with the same host beside it, it is kept -- the round trip an export
+	 * then import of one site makes. Anywhere else the key is dropped, never
+	 * stored as the placeholder, and the preview says so; the block is then
+	 * re-written from its parsed form, so its comments do not survive.
+	 *
+	 * @param array<string, mixed> $current  Current settings.
+	 * @param array<string, mixed> $result   Merged settings.
+	 * @param array<string, mixed> $incoming What the document says.
+	 *
+	 * @return array<string, mixed>
+	 */
+	private function restore_advanced_yaml( array $current, array $result, array $incoming ): array {
+		if ( ! is_string( $incoming['advanced_yaml'] ?? null ) ) {
+			return $result;
+		}
+
+		$restored = Advanced_Yaml_Secrets::restore( $incoming['advanced_yaml'], (string) ( $current['advanced_yaml'] ?? '' ), true );
+
+		$result['advanced_yaml'] = $restored['text'];
+
+		foreach ( $restored['unrestored'] as $path ) {
+			$this->withheld[] = sprintf(
+				/* translators: %s: the credential's path inside the advanced YAML. */
+				__( 'advanced_yaml: %s was exported as [redacted], and this site\'s Advanced YAML has no matching credential to keep, so the key is left out. Add it on the Advanced screen, ideally as a %%env(NAME)%% token.', 'basic-firewall' ),
+				$path
+			);
+		}
+
+		return $result;
 	}
 
 	/**
@@ -596,6 +634,13 @@ final class Importer {
 			'rules_removed'        => array_values( array_diff( $current_ids, $result_ids ) ),
 			'sections_changed'     => $sections,
 			'credentials_withheld' => $this->withheld,
+
+			/*
+			 * Credentials the document's advanced YAML carries in the clear.
+			 * Kept -- the document asked for them -- but named, so importing a
+			 * block with a password typed into it is not a silent act.
+			 */
+			'advanced_credentials' => is_string( $incoming['advanced_yaml'] ?? null ) ? Advanced_Yaml_Secrets::paths( $incoming['advanced_yaml'] ) : array(),
 		);
 	}
 }

@@ -53,6 +53,7 @@ final class DiagnosticsTest extends Settings_Snapshot {
 			'server'    => $_SERVER,
 			'last'      => get_transient( Diagnostics::LAST ),
 			'anomaly'   => get_transient( Diagnostics::ANOMALY ),
+			'sample'    => get_transient( Diagnostics::SAMPLE ),
 			'error_log' => (string) ini_get( 'error_log' ),
 		);
 
@@ -77,6 +78,7 @@ final class DiagnosticsTest extends Settings_Snapshot {
 		foreach ( array(
 			Diagnostics::LAST    => 'last',
 			Diagnostics::ANOMALY => 'anomaly',
+			Diagnostics::SAMPLE  => 'sample',
 		) as $transient => $key ) {
 			if ( false === $this->saved[ $key ] ) {
 				delete_transient( $transient );
@@ -122,6 +124,59 @@ final class DiagnosticsTest extends Settings_Snapshot {
 	}
 
 	/**
+	 * The same runner fail-open is logged at most once a minute, with a count (#41).
+	 */
+	public function test_a_runner_fail_open_is_logged_once_a_minute(): void {
+		$this->given_exception_mode();
+
+		// One class, cloned per request, so each failure has one origin.
+		$broken = new class() extends Request {
+			/**
+			 * Fail the same way, from the same place, every time.
+			 *
+			 * @throws \LogicException Always.
+			 */
+			public function getPathInfo(): string {
+				throw new \LogicException( 'the runner keeps breaking' );
+			}
+		};
+
+		for ( $i = 0; $i < 3; $i++ ) {
+			Runner::reset();
+
+			$this->assertTrue( $this->evaluate_compiled( Plugin::instance()->paths()->compiled_file(), clone $broken ), 'A held-back line refused the request.' );
+			$this->assertSame( 'evaluation-failed', Runner::state()['failure'], 'A held-back line was not still recorded for the report.' );
+		}
+
+		$this->assertSame( 1, substr_count( $this->logged(), 'fail-open (runner)' ), 'Three failures within a minute logged more than one line.' );
+
+		$markers = (array) glob( Plugin::instance()->paths()->base() . '/.warned-fail-open-*' );
+
+		$this->assertCount( 1, $markers );
+		$this->assertSame( 2, json_decode( (string) file_get_contents( (string) $markers[0] ), true )['suppressed'] ?? null ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- the marker.
+
+		// A minute on, logged again, saying how many were held back.
+		$aged = (string) wp_json_encode(
+			array(
+				'logged'     => time() - 61,
+				'suppressed' => 2,
+			)
+		);
+
+		file_put_contents( (string) $markers[0], $aged ); // phpcs:ignore WordPress.WP.AlternativeFunctions -- ageing the marker.
+
+		Runner::reset();
+		$this->evaluate_compiled( Plugin::instance()->paths()->compiled_file(), clone $broken );
+
+		$this->assertSame( 2, substr_count( $this->logged(), 'fail-open (runner)' ) );
+		$this->assertMatchesRegularExpression( '/fail-open \(runner\).*\(2 more since \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC\)/', $this->logged() );
+
+		// The early path's marker for the same failure is its own.
+		$this->assertSame( Diagnostics::fail_open_marker( 'runner|LogicException|x' ), Diagnostics::fail_open_marker( 'runner|LogicException|x' ) );
+		$this->assertNotSame( Diagnostics::fail_open_marker( 'early|LogicException|x' ), Diagnostics::fail_open_marker( 'runner|LogicException|x' ) );
+	}
+
+	/**
 	 * A firewall that cannot start fails open on the runner path, and is logged.
 	 */
 	public function test_a_runner_that_cannot_start_is_logged(): void {
@@ -153,6 +208,369 @@ final class DiagnosticsTest extends Settings_Snapshot {
 		$this->assertSame( '', $this->logged() );
 		$this->assertSame( 'allowed', Runner::state()['outcome'] );
 		$this->assertNull( Runner::state()['failure'] );
+	}
+
+	/**
+	 * A rule the runner's firewall could not construct is recorded, and is an anomaly (#41).
+	 */
+	public function test_failed_rules_on_the_runner_path_are_recorded(): void {
+		$this->given_exception_mode();
+
+		// Rule 0 turned into a reputation rule with no provider: its
+		// constructor throws, and the library skips it.
+		$break = static fn ( array $overrides ): array => array( '[plugins][0][plugin]' => 'Kanopi\\Firewall\\Plugins\\Reputation' ) + $overrides;
+
+		add_filter( 'basic_firewall_config_overrides', $break );
+
+		try {
+			$this->assertTrue( $this->evaluate_compiled( Plugin::instance()->paths()->compiled_file(), Request::create( '/bfw-diagnostics-match' ) ) );
+		} finally {
+			remove_filter( 'basic_firewall_config_overrides', $break );
+		}
+
+		$this->assertSame( array( 'challenge/Reputation:0' ), Runner::state()['failed_rules'] );
+		$this->assertSame( array( 'challenge/Reputation:0' ), Diagnostics::compact()['runner']['failed_rules'], 'The debug header does not name the rule.' );
+
+		$GLOBALS['basic_firewall_early'] = array( 'called' => false );
+
+		Diagnostics::persist();
+
+		$report = Diagnostics::last_anomaly();
+
+		$this->assertIsArray( $report, 'A request that ran without a rule was not kept as an anomaly.' );
+		$this->assertSame( 'failed-rules', $report['anomaly'] );
+		$this->assertSame( array( 'failed-rules' ), $report['anomalies'] );
+		$this->assertSame( array( 'challenge/Reputation:0' ), $report['runner']['failed_rules'] );
+		$this->assertNull( $report['early']['failed_rules'], 'An early path that built no firewall reported an empty list.' );
+		$this->assertStringNotContainsString( 'upstream', (string) wp_json_encode( $report ), 'The constructor\'s message reached the report.' );
+		$this->assertStringContainsString( 'runner failed rules: 1 (challenge/Reputation:0; sampled: interval)', Diagnostics::summary( $report ) );
+		$this->assertSame( 'interval', $report['runner']['failed_rules_sampled'] );
+
+		// The sample is kept on its own, for status and early-report.
+		$sample = Diagnostics::last_sample();
+
+		$this->assertSame( array( 'challenge/Reputation:0' ), $sample['runner']['failed_rules'] ?? null );
+		$this->assertStringContainsString( 'runner: 1 failed: challenge/Reputation:0', Diagnostics::sample_summary( $sample ) );
+
+		// The next request, within the interval, is not sampled: null, not "none failed".
+		Runner::reset();
+
+		$this->evaluate_compiled( Plugin::instance()->paths()->compiled_file(), Request::create( '/nothing-matches-this' ) );
+
+		$this->assertNull( Runner::state()['failed_rules'], 'A request within the interval built every rule to ask.' );
+		$this->assertNull( Runner::state()['failed_rules_sampled'] );
+
+		// Once it is due, a healthy firewall records an empty list, which is not an anomaly.
+		Diagnostics::reset_throttle();
+		Runner::reset();
+
+		$this->evaluate_compiled( Plugin::instance()->paths()->compiled_file(), Request::create( '/nothing-matches-this' ) );
+
+		$this->assertSame( array(), Runner::state()['failed_rules'] );
+		$this->assertSame( 'interval', Runner::state()['failed_rules_sampled'] );
+	}
+
+	/**
+	 * Failed rules are sampled, not asked on every request (#41).
+	 *
+	 * Asking builds every rule, which undoes the library's lazy construction:
+	 * a visitor an early rule settled would pay for the whole ruleset.
+	 */
+	public function test_failed_rules_are_sampled_not_asked_every_request(): void {
+		$firewall = new class() {
+			/**
+			 * How many times the library was asked.
+			 *
+			 * @var int
+			 */
+			public int $asked = 0;
+
+			/**
+			 * Count the question.
+			 *
+			 * @return list<array{bucket: string, plugin: string, error: string}>
+			 */
+			public function getFailedRules(): array { // phpcs:ignore WordPress.NamingConventions.ValidFunctionName.MethodNameInvalid -- the library's method name.
+				++$this->asked;
+
+				return array();
+			}
+		};
+
+		// The throttle lets the first one through.
+		$this->assertSame( 'interval', Diagnostics::sample_failed_rules( $firewall, null )['sampled'] );
+		$this->assertSame( 1, $firewall->asked );
+
+		// An ordinary request within the interval never asks.
+		for ( $i = 0; $i < 5; $i++ ) {
+			$this->assertSame(
+				array(
+					'failed_rules' => null,
+					'sampled'      => null,
+				),
+				Diagnostics::sample_failed_rules( $firewall, null )
+			);
+		}
+
+		$this->assertSame( 1, $firewall->asked, 'An ordinary request built every rule to ask.' );
+
+		// BASIC_FIREWALL_DEBUG and a failure ask regardless.
+		$this->assertSame( 'debug', Diagnostics::sample_failed_rules( $firewall, 'debug' )['sampled'] );
+		$this->assertSame( 'failure', Diagnostics::sample_failed_rules( $firewall, 'failure' )['sampled'] );
+		$this->assertSame( 3, $firewall->asked );
+
+		// And once the interval has passed, the next ordinary request asks.
+		touch( Plugin::instance()->paths()->base() . '/.sampled-failed-rules-runner', time() - Diagnostics::SAMPLE_INTERVAL - 1 ); // phpcs:ignore WordPress.WP.AlternativeFunctions -- ageing the marker.
+		clearstatcache();
+
+		$this->assertSame( 'interval', Diagnostics::sample_failed_rules( $firewall, null )['sampled'] );
+		$this->assertSame( 4, $firewall->asked );
+	}
+
+	/**
+	 * A runner fail-open samples failed rules even when no sample is due (#41).
+	 */
+	public function test_a_runner_fail_open_samples_failed_rules(): void {
+		$this->given_exception_mode();
+
+		// Not due.
+		touch( Plugin::instance()->paths()->base() . '/.sampled-failed-rules-runner' ); // phpcs:ignore WordPress.WP.AlternativeFunctions -- the marker, as a recent sample leaves it.
+		clearstatcache();
+
+		$request = new class() extends Request {
+			/**
+			 * Fail partway through evaluating.
+			 *
+			 * @throws \LogicException Always.
+			 */
+			public function getPathInfo(): string {
+				throw new \LogicException( 'broke while sampling was not due' );
+			}
+		};
+
+		$this->assertTrue( $this->evaluate_compiled( Plugin::instance()->paths()->compiled_file(), $request ) );
+		$this->assertSame( 'failure', Runner::state()['failed_rules_sampled'] );
+		$this->assertSame( array(), Runner::state()['failed_rules'] );
+	}
+
+	/**
+	 * Site Health raises recent failed rules, critical where the mode refuses (#41).
+	 */
+	public function test_site_health_reports_recent_failed_rules(): void {
+		$GLOBALS['basic_firewall_early'] = array( 'called' => false );
+
+		$this->given_anomaly(
+			array(
+				'anomaly'   => 'failed-rules',
+				'anomalies' => array( 'failed-rules' ),
+				'early'     => array(
+					'called'       => true,
+					'evaluated'    => true,
+					'failed_rules' => array( 'block/Reputation:0' ),
+				),
+			)
+		);
+
+		$check = Site_Health::check( 'evaluation' );
+
+		$this->assertSame( 'critical', $check['status'], 'A block-mode firewall running without a rule is not critical.' );
+		$this->assertSame( 'The firewall recently ran without some of its rules', $check['label'] );
+		$this->assertStringContainsString( 'block/Reputation:0', $check['description'] );
+		$this->assertStringContainsString( 'wp-config.php path', $check['description'] );
+
+		// In log mode nothing is refused either way, so it is a recommendation.
+		$this->given_anomaly(
+			array(
+				'anomaly' => 'failed-rules',
+				'mode'    => array(
+					'configured' => 'log',
+					'early'      => 'log',
+					'runner'     => null,
+				),
+				'runner'  => array(
+					'evaluated'    => true,
+					'failed_rules' => array( 'block/Reputation:0' ),
+				),
+			)
+		);
+
+		$this->assertSame( 'recommended', Site_Health::check( 'evaluation' )['status'] );
+	}
+
+	/**
+	 * A path running another mode from the one compiled is a mismatch; an override is not (#41).
+	 */
+	public function test_a_mode_mismatch_is_flagged_and_overrides_are_reported(): void {
+		$report = static fn ( array $mode, array $early = array(), array $runner = array() ): array => array(
+			'mode'     => $mode + array(
+				'configured' => 'block',
+				'compiled'   => 'block',
+				'early'      => null,
+				'runner'     => null,
+			),
+			'early'    => $early,
+			'runner'   => $runner,
+			'compiled' => array(),
+		);
+
+		$this->assertSame( array(), Diagnostics::compare( $report( array( 'early' => 'block' ) ) )['mismatch'] );
+
+		$this->assertSame(
+			array( 'mode (early): ran log, configured block' ),
+			Diagnostics::compare( $report( array( 'early' => 'log' ) ) )['mismatch'],
+			'A web request running log mode on a block-mode site was not flagged.'
+		);
+
+		// The compile's mode is what is expected, advanced YAML included.
+		$this->assertSame( array(), Diagnostics::compare( $report( array( 'compiled' => 'log', 'early' => 'log' ) ) )['mismatch'] ); // phpcs:ignore WordPress.Arrays.ArrayDeclarationSpacing.AssociativeArrayFound -- one line per case.
+
+		// A panic file changes the mode, and says so: an override.
+		$panicked = Diagnostics::compare( $report( array( 'runner' => 'log' ), array(), array( 'panic' => true ) ) );
+
+		$this->assertSame( array(), $panicked['mismatch'], 'A panic file was flagged as a mismatch.' );
+		$this->assertSame( array( 'runner: panic file (log)' ), $panicked['overrides'] );
+
+		// Lockdown is run as block with lockdown on.
+		$locked = Diagnostics::compare( $report( array( 'compiled' => 'lockdown', 'early' => 'block' ) ) ); // phpcs:ignore WordPress.Arrays.ArrayDeclarationSpacing.AssociativeArrayFound -- as above.
+
+		$this->assertSame( array(), $locked['mismatch'] );
+		$this->assertSame( array( 'early: lockdown (runs as block)' ), $locked['overrides'] );
+
+		// And it is an anomaly of its own.
+		$this->assertSame( 'mismatch', Diagnostics::anomaly( array( 'mismatch' => array( 'mode (early): ran log, configured block' ) ) ) );
+	}
+
+	/**
+	 * A compiled file that differs between the paths or from the last compile is a mismatch (#41).
+	 */
+	public function test_a_stale_compiled_file_is_flagged(): void {
+		$old     = time() - 3600;
+		$report  = static fn ( array $compiled ): array => array(
+			'mode'     => array(),
+			'compiled' => $compiled + array(
+				'path'  => '/private/firewall.yml',
+				'mtime' => time() - 3600,
+				'hash'  => 'aaaaaaaaaaaa',
+				'early' => null,
+				'meta'  => array(
+					'hash'        => 'aaaaaaaaaaaa',
+					'compiled_at' => time() - 3600,
+				),
+			),
+		);
+		$early   = static fn ( array $early ): array => $early + array(
+			'path'  => '/private/firewall.yml',
+			'mtime' => time() - 3600,
+			'hash'  => 'aaaaaaaaaaaa',
+		);
+		$compare = static fn ( array $compiled ): array => Diagnostics::compare( $report( $compiled ) )['mismatch'];
+
+		$this->assertSame( array(), $compare( array( 'early' => $early( array() ) ) ), 'Matching files were flagged.' );
+
+		$this->assertSame(
+			array( 'compiled hash: this container\'s file is bbbbbbbbbbbb, the last compile wrote aaaaaaaaaaaa' ),
+			$compare( array( 'hash' => 'bbbbbbbbbbbb', 'early' => $early( array( 'hash' => 'bbbbbbbbbbbb' ) ) ) ), // phpcs:ignore WordPress.Arrays.ArrayDeclarationSpacing.AssociativeArrayFound -- one line per case.
+			'A container reading a stale copy was not flagged.'
+		);
+
+		$this->assertStringStartsWith( 'compiled hash: the early path saw cccccccccccc', $compare( array( 'early' => $early( array( 'hash' => 'cccccccccccc' ) ) ) )[0] ?? '' );
+		$this->assertStringStartsWith( 'compiled file: the early path read /elsewhere/firewall.yml', $compare( array( 'early' => $early( array( 'path' => '/elsewhere/firewall.yml' ) ) ) )[0] ?? '' );
+
+		// A bootstrap from before the hash: the mtime is compared instead.
+		$this->assertStringStartsWith( 'compiled mtime:', $compare( array( 'early' => $early( array( 'hash' => null, 'mtime' => $old - 60 ) ) ) )[0] ?? '' ); // phpcs:ignore WordPress.Arrays.ArrayDeclarationSpacing.AssociativeArrayFound -- as above.
+
+		// A compile from before the hash was recorded is not compared with.
+		$this->assertSame( array(), $compare( array( 'hash' => 'bbbbbbbbbbbb', 'meta' => array( 'compiled_at' => $old ) ) ) ); // phpcs:ignore WordPress.Arrays.ArrayDeclarationSpacing.AssociativeArrayFound -- as above.
+
+		// Nor is anything within SETTLE seconds of a compile, which a request can straddle.
+		$this->assertSame(
+			array(),
+			$compare(
+				array(
+					'hash' => 'bbbbbbbbbbbb',
+					'meta' => array(
+						'hash'        => 'aaaaaaaaaaaa',
+						'compiled_at' => time() - 5,
+					),
+				)
+			)
+		);
+	}
+
+	/**
+	 * A compile records what it wrote, and a stale file is kept in the anomaly slot (#41).
+	 */
+	public function test_a_mismatch_survives_ordinary_requests(): void {
+		$this->given_exception_mode();
+
+		$meta = Plugin::instance()->compiled()->meta();
+		$file = Plugin::instance()->paths()->compiled_file();
+
+		$this->assertSame( substr( (string) hash_file( 'sha256', $file ), 0, 12 ), $meta['hash'] ?? null, 'The compile did not record the hash of what it wrote.' );
+		$this->assertSame( 'exception', $meta['mode'] ?? null, 'The compile did not record the mode it wrote.' );
+
+		$GLOBALS['basic_firewall_early'] = array( 'called' => false );
+
+		// The last compile wrote something other than what this container
+		// reads, an hour ago: well outside the window a request can straddle.
+		update_option(
+			\Kanopi\BasicFirewall\Compiler\Compiled_Config_Cache::META_OPTION,
+			array(
+				'hash'        => 'ffffffffffff',
+				'compiled_at' => time() - 3600,
+			) + $meta,
+			false
+		);
+		touch( $file, time() - 3600 ); // phpcs:ignore WordPress.WP.AlternativeFunctions -- ageing the compiled file, put back below.
+		clearstatcache();
+
+		try {
+			Diagnostics::persist();
+		} finally {
+			update_option( \Kanopi\BasicFirewall\Compiler\Compiled_Config_Cache::META_OPTION, $meta, false );
+			touch( $file ); // phpcs:ignore WordPress.WP.AlternativeFunctions -- put back.
+			clearstatcache();
+		}
+
+		$anomaly = Diagnostics::last_anomaly();
+
+		$this->assertIsArray( $anomaly, 'A stale compiled file was not kept as an anomaly.' );
+		$this->assertSame( 'mismatch', $anomaly['anomaly'] );
+		$this->assertStringContainsString( 'the last compile wrote ffffffffffff', (string) ( $anomaly['mismatch'][0] ?? '' ) );
+		$this->assertSame( 'ffffffffffff', $anomaly['compiled']['meta']['hash'] );
+		$this->assertStringContainsString( 'mismatch: compiled hash', Diagnostics::summary( $anomaly ) );
+
+		// An ordinary request afterwards does not overwrite it.
+		Diagnostics::reset_throttle();
+		Diagnostics::persist();
+
+		$this->assertSame( array(), Diagnostics::last()['mismatch'] ?? null );
+		$this->assertSame( 'mismatch', Diagnostics::last_anomaly()['anomaly'] ?? null, 'An ordinary request overwrote the mismatch.' );
+	}
+
+	/**
+	 * Site Health raises a recent mismatch as a recommendation, with the rebuild (#41).
+	 */
+	public function test_site_health_reports_a_recent_mismatch(): void {
+		$GLOBALS['basic_firewall_early'] = array( 'called' => false );
+
+		$this->given_anomaly(
+			array(
+				'anomaly'  => 'mismatch',
+				'mismatch' => array( 'compiled hash: this container\'s file is bbbbbbbbbbbb, the last compile wrote aaaaaaaaaaaa' ),
+				'early'    => array(
+					'called'    => true,
+					'evaluated' => true,
+				),
+			)
+		);
+
+		$check = Site_Health::check( 'evaluation' );
+
+		$this->assertSame( 'recommended', $check['status'] );
+		$this->assertSame( 'A recent web request saw a different firewall configuration from the one last compiled', $check['label'] );
+		$this->assertStringContainsString( 'the last compile wrote aaaaaaaaaaaa', $check['description'] );
+		$this->assertNotSame( '', $check['actions'], 'The rebuild is not offered.' );
 	}
 
 	/**
@@ -323,6 +741,22 @@ final class DiagnosticsTest extends Settings_Snapshot {
 				)
 			),
 			'A site with no snippet is not an anomaly.'
+		);
+		$this->assertNull( Diagnostics::anomaly( $early( array( 'evaluated' => true, 'failed_rules' => array() ) ) ), 'Every rule built is not an anomaly.' ); // phpcs:ignore WordPress.Arrays.ArrayDeclarationSpacing.AssociativeArrayFound -- one line per case.
+		$this->assertSame( 'failed-rules', Diagnostics::anomaly( $early( array( 'evaluated' => true, 'failed_rules' => array( 'block/Url:0' ) ) ) ) ); // phpcs:ignore WordPress.Arrays.ArrayDeclarationSpacing.AssociativeArrayFound -- as above.
+
+		// Both problems are kept, the more serious first.
+		$this->assertSame(
+			array( 'fail-open', 'failed-rules' ),
+			Diagnostics::anomalies(
+				array(
+					'early'  => array(),
+					'runner' => array(
+						'failure'      => 'evaluation-failed',
+						'failed_rules' => array( 'block/Url:0' ),
+					),
+				)
+			)
 		);
 	}
 

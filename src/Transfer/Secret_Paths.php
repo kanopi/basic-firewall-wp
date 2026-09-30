@@ -233,6 +233,18 @@ final class Secret_Paths {
 			}
 		}
 
+		/*
+		 * And whatever the advanced YAML holds that its rule counts as a
+		 * credential, since that block is merged into the compiled file as
+		 * typed -- a header value or a key under a name of the library's own
+		 * would otherwise be shown on the Compiled screen.
+		 */
+		if ( is_string( $settings['advanced_yaml'] ?? null ) ) {
+			foreach ( Advanced_Yaml_Secrets::values( $settings['advanced_yaml'] ) as $leaf ) {
+				$values[] = $leaf;
+			}
+		}
+
 		return self::redact_node( $compiled, array_values( array_unique( $values ) ), false );
 	}
 

@@ -184,11 +184,19 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 		 * requests (WP-CLI through a hosting CLI, say), and a report taken
 		 * there says nothing about what a web container is reading. The
 		 * runner saves this beside its own view of the file, so the two can
-		 * be compared; see Diagnostics.
+		 * be compared; see Diagnostics. The hash prefix is what makes that
+		 * comparison mean something (#41): a container reading a stale copy
+		 * of the file -- shared storage that has not caught up, a deploy
+		 * that shipped an old one -- has a different hash from the last
+		 * compile's, and the report flags it as a `mismatch`. One hash of a
+		 * file of a few kilobytes, the same one the library is about to read.
 		 */
+		$hash = hash_file( 'sha256', $compiled );
+
 		$GLOBALS['basic_firewall_early']['compiled'] = array(
 			'path'  => $compiled,
 			'mtime' => (int) filemtime( $compiled ),
+			'hash'  => is_string( $hash ) ? substr( $hash, 0, 12 ) : null,
 		);
 
 		$runtime = basic_firewall_runtime( $options );
@@ -288,6 +296,31 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 			$GLOBALS['basic_firewall_early']['mode'] = basic_firewall_firewall_mode( $firewall );
 
 			/*
+			 * `panic` -- whether a panic file is what put the firewall in that
+			 * mode, so a mode that differs from the configured one is reported
+			 * as the override it is rather than flagged as a mismatch.
+			 */
+			$GLOBALS['basic_firewall_early']['panic'] = basic_firewall_panic_active( $firewall );
+
+			/*
+			 * `failed_rules` -- the rules this path's firewall could not
+			 * construct, which the library skips and logs rather than fatals
+			 * on (#41). A rule that fails only on the web containers -- a
+			 * storage host only they cannot reach, an extension only the CLI
+			 * image has -- showed up nowhere a status screen could see.
+			 *
+			 * Sampled, not asked on every request: the library can only
+			 * answer by building every rule, which undoes its lazy
+			 * construction -- CRS, GeoIP readers and the rest built for a
+			 * visitor an earlier rule had already settled. So it is asked
+			 * with BASIC_FIREWALL_DEBUG on, at most once a minute per
+			 * container otherwise, and on a request that fails (below).
+			 * Asked before evaluating when it is asked, so a request the
+			 * library then refuses and exits on is still reported.
+			 */
+			basic_firewall_sample_failed_rules( $firewall, $options, basic_firewall_debug_enabled() ? 'debug' : null );
+
+			/*
 			 * The request is built here rather than left to the library, so the
 			 * marks can be read back off it.
 			 *
@@ -329,7 +362,15 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 			 * This used to allow all of it. The mu-plugin never evaluated again
 			 * because BASIC_FIREWALL_EVALUATED was already defined, so a site in
 			 * `exception` mode on this path refused nobody at all.
+			 *
+			 * A genuine failure also samples the rules that failed to
+			 * construct, whether or not a sample was due: the cost of asking
+			 * does not matter on this request, and the answer matters most.
 			 */
+			if ( isset( $firewall ) && null === basic_firewall_outcome_kind( $e ) ) {
+				basic_firewall_sample_failed_rules( $firewall, $options, 'failure' );
+			}
+
 			return basic_firewall_answer_outcome( $e, $request, $options );
 		}
 	}
@@ -498,6 +539,88 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 	}
 
 	/**
+	 * Write a warning at most once per interval per key, counting the ones held back.
+	 *
+	 * For a warning that can happen on every request -- a fail-open -- where
+	 * the first matters, a line per request buries the log, and how many
+	 * were held back is itself the thing somebody investigating wants. The
+	 * next line written says how many there were since the last:
+	 * `... (12 more since 2026-01-01 12:00:00 UTC)`.
+	 *
+	 * The marker-file approach of basic_firewall_warn_once(), with the state
+	 * in the file rather than its modification time, because a count has to
+	 * be kept somewhere: when the key was last logged, and how many have been
+	 * held back since. Locked while it is read and rewritten, so two workers
+	 * failing at once neither both log nor lose a count. In the private
+	 * directory when there is one, shared across web containers on a host
+	 * that shares it; the system temporary directory otherwise. A marker
+	 * that cannot be opened means the warning is logged every time -- noisy,
+	 * never silent. Diagnostics::warn_throttled() writes the same file on the
+	 * runner path.
+	 *
+	 * @param string               $key     What the warning is about, e.g. where, class and origin.
+	 * @param string               $message The warning.
+	 * @param array<string, mixed> $options Bootstrap options.
+	 *
+	 * @return bool True when it was logged.
+	 */
+	function basic_firewall_warn_throttled( $key, $message, array $options ) {
+		$interval = isset( $options['fail_open_interval'] ) && is_numeric( $options['fail_open_interval'] ) ? max( 0, (int) $options['fail_open_interval'] ) : 60;
+		$private  = basic_firewall_private_path( $options );
+		$name     = 'fail-open-' . substr( md5( (string) $key ), 0, 16 );
+		$marker   = null !== $private
+			? $private . '/.warned-' . $name
+			: rtrim( sys_get_temp_dir(), '/' ) . '/basic-firewall-warned-' . md5( (string) $options['plugin_path'] ) . '-' . $name;
+
+		// phpcs:disable WordPress.WP.AlternativeFunctions, WordPress.PHP.NoSilencedErrors.Discouraged -- no WP_Filesystem on this path, and a marker that cannot be opened is not an error.
+		$handle = @fopen( $marker, 'c+' );
+
+		if ( false === $handle ) {
+			basic_firewall_warn( $message );
+
+			return true;
+		}
+
+		@flock( $handle, LOCK_EX );
+
+		$state      = json_decode( (string) stream_get_contents( $handle ), true );
+		$logged_at  = is_array( $state ) ? (int) ( $state['logged'] ?? 0 ) : 0;
+		$suppressed = is_array( $state ) ? (int) ( $state['suppressed'] ?? 0 ) : 0;
+		$now        = time();
+		$write      = $logged_at <= 0 || $now - $logged_at >= $interval;
+
+		if ( $write ) {
+			if ( $suppressed > 0 ) {
+				$message .= sprintf( ' (%d more since %s UTC)', $suppressed, gmdate( 'Y-m-d H:i:s', $logged_at ) );
+			}
+
+			basic_firewall_warn( $message );
+
+			$logged_at  = $now;
+			$suppressed = 0;
+		} else {
+			++$suppressed;
+		}
+
+		ftruncate( $handle, 0 );
+		rewind( $handle );
+		fwrite(
+			$handle,
+			(string) json_encode(
+				array(
+					'logged'     => $logged_at,
+					'suppressed' => $suppressed,
+				)
+			)
+		); // phpcs:ignore WordPress.WP.AlternativeFunctions.json_encode_json_encode -- no WordPress yet.
+		@flock( $handle, LOCK_UN );
+		fclose( $handle );
+		// phpcs:enable WordPress.WP.AlternativeFunctions, WordPress.PHP.NoSilencedErrors.Discouraged
+
+		return $write;
+	}
+
+	/**
 	 * What a throwable was, for a log line or a report.
 	 *
 	 * Class, message and where it was thrown -- not a trace, which is long,
@@ -543,6 +666,122 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 	}
 
 	/**
+	 * Whether a panic file is changing a firewall's mode.
+	 *
+	 * @param object $firewall The firewall.
+	 *
+	 * @return bool
+	 */
+	function basic_firewall_panic_active( $firewall ) {
+		if ( ! is_callable( array( $firewall, 'getPanicSwitch' ) ) ) {
+			return false;
+		}
+
+		$switch = call_user_func( array( $firewall, 'getPanicSwitch' ) );
+
+		return is_array( $switch ) && ! empty( $switch['active'] );
+	}
+
+	/**
+	 * Ask a firewall for its failed rules, when this request is one that samples.
+	 *
+	 * Records `failed_rules` (the names, or null when not asked) and
+	 * `failed_rules_sampled` (why it was asked: `debug`, `interval` or
+	 * `failure`, or null) in the bootstrap's report. A request already
+	 * sampled is not asked again.
+	 *
+	 * `interval` is at most once every `failed_rules_interval` seconds (60)
+	 * per container, remembered in a marker file's modification time in the
+	 * private directory, or the system temporary directory without one.
+	 * Checking costs one stat. A marker that cannot be written means asking
+	 * every time: a slower request, never a missing report.
+	 *
+	 * @param object               $firewall The firewall.
+	 * @param array<string, mixed> $options  Bootstrap options.
+	 * @param string|null          $reason   `debug` or `failure` to ask regardless, or null to ask only when the interval is due.
+	 *
+	 * @return bool True when it asked.
+	 */
+	function basic_firewall_sample_failed_rules( $firewall, array $options, $reason = null ) {
+		if ( ! empty( $GLOBALS['basic_firewall_early']['failed_rules_sampled'] ) ) {
+			return false;
+		}
+
+		$GLOBALS['basic_firewall_early']['failed_rules']         = $GLOBALS['basic_firewall_early']['failed_rules'] ?? null;
+		$GLOBALS['basic_firewall_early']['failed_rules_sampled'] = null;
+
+		if ( null === $reason ) {
+			$interval = isset( $options['failed_rules_interval'] ) && is_numeric( $options['failed_rules_interval'] ) ? max( 0, (int) $options['failed_rules_interval'] ) : 60;
+			$private  = basic_firewall_private_path( $options );
+			$marker   = null !== $private
+				? $private . '/.sampled-failed-rules-early'
+				: rtrim( sys_get_temp_dir(), '/' ) . '/basic-firewall-sampled-failed-rules-' . md5( (string) $options['plugin_path'] );
+
+			// phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- no marker yet is the ordinary answer.
+			$sampled = @filemtime( $marker );
+
+			if ( false !== $sampled && time() - $sampled < $interval ) {
+				return false;
+			}
+
+			// phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, WordPress.WP.AlternativeFunctions -- best effort, and WP_Filesystem does not exist on this path.
+			@touch( $marker );
+
+			$reason = 'interval';
+		}
+
+		$GLOBALS['basic_firewall_early']['failed_rules']         = basic_firewall_failed_rules( $firewall );
+		$GLOBALS['basic_firewall_early']['failed_rules_sampled'] = (string) $reason;
+
+		return true;
+	}
+
+	/**
+	 * The rules a firewall could not construct, by name, or null when it cannot say.
+	 *
+	 * Each is `bucket/Class:index` -- the bucket it was configured in and the
+	 * library's own name for it, with the namespace dropped so a scoped and
+	 * an unscoped copy name a rule alike. Names only: the constructor's
+	 * message can carry a host or a DSN, and the library already logs it.
+	 *
+	 * Never throws. The library's answer is built by constructing every rule,
+	 * and a constructor that fails with an Error rather than an Exception is
+	 * not caught by the library; that is a failure the evaluation that
+	 * follows reports as a fail-open, so here it is only "cannot say".
+	 * Diagnostics::failed_rules() does the same on the runner path.
+	 *
+	 * @param object $firewall The firewall.
+	 *
+	 * @return list<string>|null
+	 */
+	function basic_firewall_failed_rules( $firewall ) {
+		if ( ! is_callable( array( $firewall, 'getFailedRules' ) ) ) {
+			return null;
+		}
+
+		try {
+			$failed = call_user_func( array( $firewall, 'getFailedRules' ) );
+		} catch ( \Throwable $e ) {
+			return null;
+		}
+
+		$names = array();
+
+		foreach ( is_array( $failed ) ? $failed : array() as $entry ) {
+			if ( ! is_array( $entry ) ) {
+				continue;
+			}
+
+			$plugin = (string) ( $entry['plugin'] ?? '' );
+			$slash  = strrpos( $plugin, '\\' );
+
+			$names[] = (string) ( $entry['bucket'] ?? '?' ) . '/' . ( false === $slash ? $plugin : substr( $plugin, $slash + 1 ) );
+		}
+
+		return $names;
+	}
+
+	/**
 	 * Whether BASIC_FIREWALL_DEBUG asks for the diagnostic response header.
 	 *
 	 * @return bool
@@ -565,16 +804,20 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 		$origin = isset( $early['failure_origin'] ) ? (string) $early['failure_origin'] : '';
 
 		return array(
-			'called'     => ! empty( $early['called'] ),
-			'evaluated'  => ! empty( $early['evaluated'] ),
-			'reason'     => $early['reason'] ?? null,
-			'autoloader' => $early['autoloader']['source'] ?? null,
-			'library'    => $early['library'] ?? null,
-			'mode'       => $early['mode'] ?? null,
-			'outcome'    => $early['outcome'] ?? null,
-			'failure'    => isset( $early['failure'] ) ? strtok( (string) $early['failure'], ':' ) . ( '' !== $origin ? ' @ ' . basename( $origin ) : '' ) : null,
-			'refused'    => ! empty( $early['refused'] ),
-			'responder'  => ! empty( $early['responder'] ),
+			'called'               => ! empty( $early['called'] ),
+			'evaluated'            => ! empty( $early['evaluated'] ),
+			'reason'               => $early['reason'] ?? null,
+			'autoloader'           => $early['autoloader']['source'] ?? null,
+			'library'              => $early['library'] ?? null,
+			'mode'                 => $early['mode'] ?? null,
+			'outcome'              => $early['outcome'] ?? null,
+			'failure'              => isset( $early['failure'] ) ? strtok( (string) $early['failure'], ':' ) . ( '' !== $origin ? ' @ ' . basename( $origin ) : '' ) : null,
+			'refused'              => ! empty( $early['refused'] ),
+			'responder'            => ! empty( $early['responder'] ),
+
+			// Names only, and null when this request did not sample them.
+			'failed_rules'         => isset( $early['failed_rules'] ) && is_array( $early['failed_rules'] ) ? array_values( array_map( 'strval', $early['failed_rules'] ) ) : null,
+			'failed_rules_sampled' => isset( $early['failed_rules_sampled'] ) ? (string) $early['failed_rules_sampled'] : null,
 		);
 	}
 
@@ -649,26 +892,34 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 			 * WordPress loads, so Site Health reports the failure rather
 			 * than a firewall that evaluated this request and allowed it.
 			 *
-			 * And logged, every time. The report above only lives as long
+			 * And logged. The report above only lives as long
 			 * as this request, and reaches Site Health only when this
 			 * request is the one Site Health is rendering -- so a firewall
 			 * that failed on every visitor's request and never on an
 			 * administrator's left no trace anywhere (#34). The PHP error
 			 * log is the one place this path can write to that somebody
 			 * investigating later will read.
+			 *
+			 * At most once a minute for the same exception from the same
+			 * place (#41), with a count of the ones held back: a failure that
+			 * persists -- a storage outage on a busy site -- would otherwise
+			 * write a line per request and bury everything else in the log.
+			 * The first is always written.
 			 */
 			$failure = basic_firewall_describe_throwable( $outcome );
 
 			$GLOBALS['basic_firewall_early']['failure']        = $failure['class'] . ': ' . $failure['message'];
 			$GLOBALS['basic_firewall_early']['failure_origin'] = $failure['origin'];
 
-			basic_firewall_warn(
+			basic_firewall_warn_throttled(
+				'early|' . $failure['class'] . '|' . $failure['origin'],
 				sprintf(
 					'fail-open (early): the firewall threw %s "%s" at %s on the wp-config.php path, so the request was let through unfiltered.',
 					$failure['class'],
 					$failure['message'],
 					$failure['origin']
-				)
+				),
+				$options
 			);
 
 			basic_firewall_send_debug_header();
@@ -971,28 +1222,38 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 		$defaults = array(
 			// Absolute path to the private directory. The Site Health screen
 			// prints the right value; discovered by glob when absent.
-			'private_path'       => null,
+			'private_path'          => null,
 			// Absolute path to the plugin directory.
-			'plugin_path'        => __DIR__,
+			'plugin_path'           => __DIR__,
 			// Absolute path to the site's Composer autoloader, for a site
 			// whose vendor-dir is not beside the WordPress root. The plugin's
 			// own vendor/ still wins; see basic_firewall_resolve_autoloader().
 			// BASIC_FIREWALL_AUTOLOADER says the same once per environment.
-			'autoloader'         => null,
+			'autoloader'            => null,
 			// Whether to run at all.
-			'enabled'            => ! ( defined( 'BASIC_FIREWALL_ENABLED' ) && false === BASIC_FIREWALL_ENABLED ),
+			'enabled'               => ! ( defined( 'BASIC_FIREWALL_ENABLED' ) && false === BASIC_FIREWALL_ENABLED ),
 			// Addresses permitted to declare the client address.
-			'trusted_proxies'    => defined( 'BASIC_FIREWALL_TRUSTED_PROXIES' ) ? BASIC_FIREWALL_TRUSTED_PROXIES : array(),
+			'trusted_proxies'       => defined( 'BASIC_FIREWALL_TRUSTED_PROXIES' ) ? BASIC_FIREWALL_TRUSTED_PROXIES : array(),
 			// Directories a %file() token may read a secret from.
-			'secret_directories' => defined( 'BASIC_FIREWALL_SECRET_DIRECTORIES' ) ? BASIC_FIREWALL_SECRET_DIRECTORIES : array(),
+			'secret_directories'    => defined( 'BASIC_FIREWALL_SECRET_DIRECTORIES' ) ? BASIC_FIREWALL_SECRET_DIRECTORIES : array(),
 			// Runtime overrides, as Symfony property-access paths.
-			'overrides'          => array(),
+			'overrides'             => array(),
+			// The password for every Redis connection, injected at request
+			// time rather than written to the compiled file. Define the
+			// constant above the snippet; see Redis_Password.
+			'redis_password'        => defined( 'BASIC_FIREWALL_REDIS_PASSWORD' ) ? BASIC_FIREWALL_REDIS_PASSWORD : null,
 			// True on a multisite network, where this path steps aside for
 			// the mu-plugin. MULTISITE and SUBDOMAIN_INSTALL say so as well.
-			'multisite'          => false,
+			'multisite'             => false,
 			// Seconds a "did not evaluate" warning stays quiet once logged.
 			// See basic_firewall_warn_once().
-			'warn_interval'      => 900,
+			'warn_interval'         => 900,
+			// Seconds between two requests that ask the firewall for the
+			// rules it could not construct. See basic_firewall_sample_failed_rules().
+			'failed_rules_interval' => 60,
+			// Seconds the same fail-open stays quiet once logged, counting
+			// the ones held back. See basic_firewall_warn_throttled().
+			'fail_open_interval'    => 60,
 		);
 
 		return array_merge( $defaults, $options );
@@ -1220,12 +1481,17 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 	 *    the two, which is how every other option here treats its constant:
 	 *    trusted_proxies and secret_directories default to theirs, and a
 	 *    value passed in the call replaces it.
-	 * 4. `site` -- the Composer layouts this file can guess: a vendor
+	 * 4. `loaded` -- nothing to require, because the library is already
+	 *    loadable: wp-config.php required the site's autoloader above the
+	 *    snippet. Asked before the guessed locations, not after (#44). A
+	 *    site whose wp-config.php loads one Composer tree while a different
+	 *    `vendor/` sits beside the WordPress root used to have the second
+	 *    required on top of the first, and classes could then resolve from
+	 *    either tree -- the mixed-copy firewall #21 and #36 worked to rule
+	 *    out. Whatever the site chose to load comes first.
+	 * 5. `site` -- the Composer layouts this file can guess: a vendor
 	 *    directory beside the WordPress root, where Bedrock and most
 	 *    `composer create-project` sites keep it.
-	 * 5. `loaded` -- nothing to require, but the library is already loadable,
-	 *    because wp-config.php required the site's autoloader above the
-	 *    snippet. Evaluated with that rather than given up on.
 	 *
 	 * A named autoloader that cannot be read is `unreadable`, and nothing
 	 * after it is tried. Falling through to a guessed location would run the
@@ -1262,6 +1528,20 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 			);
 		}
 
+		/*
+		 * Already loadable, so nothing more is required. Asked with autoloading
+		 * on, so an autoloader wp-config.php registered above the snippet gets
+		 * its say; the plugin's own tree, which would carry the scoped copy,
+		 * was not there, so this cannot be preferring a foreign copy to it.
+		 */
+		if ( null !== basic_firewall_library_prefix() ) {
+			return array(
+				'source' => 'loaded',
+				'file'   => null,
+				'named'  => null,
+			);
+		}
+
 		// A site-level Composer install, where the plugin is a dependency.
 		if ( defined( 'ABSPATH' ) ) {
 			foreach ( array( dirname( ABSPATH, 1 ) . '/vendor/autoload.php', ABSPATH . '../vendor/autoload.php' ) as $candidate ) {
@@ -1276,7 +1556,7 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 		}
 
 		return array(
-			'source' => null === basic_firewall_library_prefix() ? 'none' : 'loaded',
+			'source' => 'none',
 			'file'   => null,
 			'named'  => null,
 		);
@@ -1373,7 +1653,67 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 			}
 		}
 
+		/*
+		 * The Redis password, the same way. With the constant defined the
+		 * compiler leaves it out of the file, and records in a second sidecar
+		 * where each Redis connection's `auth` belongs and the ACL username
+		 * that goes with it. The sidecar is read only when there is a
+		 * password to inject, so a site without the constant pays nothing.
+		 */
+		$redis_password = $options['redis_password'];
+
+		if ( is_string( $redis_password ) && '' !== $redis_password ) {
+			foreach ( basic_firewall_redis_auth_paths( $options ) as $path => $username ) {
+				if ( ! isset( $overrides[ $path ] ) ) {
+					$overrides[ $path ] = '' === $username ? $redis_password : array( $username, $redis_password );
+				}
+			}
+		}
+
 		return $overrides;
+	}
+
+	/**
+	 * Where the compiled configuration wants the Redis password injected.
+	 *
+	 * Read from the sidecar the compiler writes beside the compiled file: a
+	 * map of property-access path to ACL username, never a password. Absent or
+	 * unreadable means no injection, and a Redis connection compiled without
+	 * its password then fails to authenticate -- which the library reports as
+	 * a degraded backend and Site Health names.
+	 *
+	 * @param array<string, mixed> $options Bootstrap options.
+	 *
+	 * @return array<string, string>
+	 */
+	function basic_firewall_redis_auth_paths( array $options ) {
+		$compiled = basic_firewall_compiled_path( $options );
+
+		if ( null === $compiled ) {
+			return array();
+		}
+
+		$sidecar = dirname( $compiled ) . '/redis-auth-paths.json';
+
+		if ( ! is_readable( $sidecar ) ) {
+			return array();
+		}
+
+		$decoded = json_decode( (string) file_get_contents( $sidecar ), true ); // phpcs:ignore WordPress.WP.AlternativeFunctions -- a local file, and WP_Filesystem does not exist on this path.
+
+		if ( ! is_array( $decoded ) ) {
+			return array();
+		}
+
+		$paths = array();
+
+		foreach ( $decoded as $path => $username ) {
+			if ( is_string( $path ) && '' !== $path ) {
+				$paths[ $path ] = is_string( $username ) ? $username : '';
+			}
+		}
+
+		return $paths;
 	}
 
 	/**
