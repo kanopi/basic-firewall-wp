@@ -285,7 +285,7 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 				array( $class, 'create' ),
 				array( $compiled ),
 				basic_firewall_build_overrides( $options ),
-				basic_firewall_decision_dispatcher( $options )
+				basic_firewall_decision_dispatcher( $options, $runtime['pass_cookie'] )
 			);
 
 			/*
@@ -1294,13 +1294,16 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 	 *
 	 * @param array<string, mixed> $options Bootstrap options.
 	 *
-	 * @return array{enabled: bool, redact: list<string>, defer_login: bool}
+	 * @return array{enabled: bool, redact: list<string>, defer_login: bool, pass_cookie: string}
 	 */
 	function basic_firewall_runtime( array $options ) {
 		$runtime = array(
 			'enabled'     => true,
 			'redact'      => array(),
 			'defer_login' => false,
+
+			// Pass_Cookie::DEFAULT_NAME, which the sidecar leaves out.
+			'pass_cookie' => 'bfw_pass',
 		);
 
 		$compiled = basic_firewall_compiled_path( $options );
@@ -1327,6 +1330,11 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 
 		if ( true === ( $decoded['defer_login'] ?? false ) ) {
 			$runtime['defer_login'] = true;
+		}
+
+		// A cookie name, or the default: Pass_Cookie::is_valid()'s test.
+		if ( is_string( $decoded['pass_cookie'] ?? null ) && 1 === preg_match( '/^[!#$%&\'*+\-.^_`|~0-9A-Za-z]+$/', $decoded['pass_cookie'] ) ) {
+			$runtime['pass_cookie'] = $decoded['pass_cookie'];
 		}
 
 		foreach ( is_array( $decoded['redact'] ?? null ) ? $decoded['redact'] : array() as $name ) {
@@ -1771,11 +1779,16 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 	 * `src/`. A dispatcher that cannot be loaded means no announcements, never
 	 * a request that fails.
 	 *
-	 * @param array<string, mixed> $options Bootstrap options.
+	 * Given the pass cookie's name from the runtime sidecar, so a challenge
+	 * answered here can carry the "verification cookie did not come back"
+	 * notice in `block` mode as well as `exception` (#46).
+	 *
+	 * @param array<string, mixed> $options     Bootstrap options.
+	 * @param string               $pass_cookie The pass cookie's name.
 	 *
 	 * @return object|null
 	 */
-	function basic_firewall_decision_dispatcher( array $options ) {
+	function basic_firewall_decision_dispatcher( array $options, string $pass_cookie = '' ) {
 		$class = 'Kanopi\\BasicFirewall\\Runtime\\Decision_Dispatcher';
 
 		if ( ! class_exists( $class, false ) ) {
@@ -1793,7 +1806,7 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 			}
 		}
 
-		return class_exists( $class, false ) ? new $class() : null;
+		return class_exists( $class, false ) ? new $class( $pass_cookie ) : null;
 	}
 
 	/**

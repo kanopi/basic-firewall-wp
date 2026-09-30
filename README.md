@@ -928,11 +928,21 @@ Some hosts or edge caches only forward cookies whose names match their own
 rules, and drop the rest before the request reaches WordPress. The pass then
 never comes back, and a visitor who solved a challenge keeps being challenged.
 If that happens, set the name to one your host forwards (check your host's
-documentation). In `exception` mode the interstitial says so: a visitor
-challenged within two minutes of solving one, without the pass, is told the
-verification cookie did not come back. That uses a short-lived marker cookie
-named after the pass cookie (`<name>_solved`), so a prefix chosen for your
-host applies to it too.
+documentation). The interstitial says so, in `block` and `exception` mode
+alike (#46): a visitor challenged within two minutes of solving one, without
+the pass, is told the verification cookie did not come back. That uses a
+short-lived marker cookie named after the pass cookie (`<name>_solved`), so a
+prefix chosen for your host applies to it too. The marker is set when the
+challenge is solved, by whichever path answered it, and the line is added
+through the library's own notice mechanism (`RequestChallenged::addNotice()`,
+kanopi/firewall 2.35.0), so it appears on the library's page, above the form,
+in both modes. The wp-config.php path reads the pass cookie's name from the
+runtime sidecar beside the compiled file, which is written whenever the name
+is not the default.
+
+The library's `challenge.notice`, a fixed line shown on every challenge page
+("Having trouble? Email help@example.com."), has no field on the Challenge
+screen yet; set it in the Advanced YAML if you want one.
 
 Changing the name invalidates passes already issued: each visitor holding one
 is challenged once more.

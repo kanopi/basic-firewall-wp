@@ -223,9 +223,10 @@ final class Runner {
 			/*
 			 * The dispatcher is what makes a decision reachable from WordPress
 			 * at all -- see Decision_Dispatcher for why it announces later than
-			 * it is told.
+			 * it is told. It is given the pass cookie's name so it can tell a
+			 * challenged visitor their pass did not come back (#46).
 			 */
-			$firewall = Firewall::create( array( $compiled ), $this->overrides(), new Decision_Dispatcher() );
+			$firewall = Firewall::create( array( $compiled ), $this->overrides(), new Decision_Dispatcher( Plugin::instance()->compiled()->pass_cookie() ) );
 		} catch ( \Throwable $e ) {
 			/*
 			 * With require_config on, the library refuses to start rather than

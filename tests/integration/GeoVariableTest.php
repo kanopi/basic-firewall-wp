@@ -416,7 +416,7 @@ final class GeoVariableTest extends Settings_Snapshot {
 
 		$this->assertStringNotContainsString( 'regex', (string) wp_json_encode( $declaration ), 'A list of numbers is still compiled as a pattern.' );
 		$this->assertArrayNotHasKey( 'where', $declaration, 'A list of numbers still carries the digits-only guard.' );
-		$entries     = ( new SourceLoader( null, null, null, null, null, array(), true ) )->pipeline( SourceDefinition::fromArray( $declaration ), $body );
+		$entries = ( new SourceLoader( null, null, null, null, null, array(), true ) )->pipeline( SourceDefinition::fromArray( $declaration ), $body );
 
 		$entry['config'] = array_merge( (array) ( $entry['config'] ?? array() ), $entries );
 		unset( $entry['metadata']['sources'] );

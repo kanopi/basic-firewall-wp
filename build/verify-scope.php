@@ -136,6 +136,8 @@ if ( ! is_readable( $autoload ) ) {
 		'Kanopi\\Firewall\\Plugins\\Url',
 		'Kanopi\\Firewall\\Plugins\\UserAgent',
 		'Kanopi\\Firewall\\Plugins\\RateLimit',
+		// Its notices are how the missing-pass line reaches the page (#46).
+		'Kanopi\\Firewall\\Event\\RequestChallenged',
 		'Kanopi\\Firewall\\Storage\\FileStorage',
 		'Kanopi\\Firewall\\Storage\\DatabaseStorage',
 		'Kanopi\\Firewall\\Logging\\Handler\\DatabaseHandler',
@@ -386,6 +388,25 @@ if ( method_exists( $prefix . '\\Kanopi\\Firewall\\Plugins\\RateLimit', 'keyComp
 	bfw_pass( 'RateLimit::keyComponents() is detectable on the scoped class' );
 } else {
 	bfw_fail( 'RateLimit::keyComponents() is not detectable, so rate limit keys will be reported as unsupported' );
+}
+
+/*
+ * Called statically by Rate_Limit (2.35.1), so the rate limit checks ask the
+ * library's own pattern matcher and cannot drift from the limit that runs.
+ */
+foreach ( array( 'patternToRegex', 'isRegexPattern' ) as $method ) {
+	if ( method_exists( $prefix . '\\Kanopi\\Firewall\\Plugins\\RateLimit', $method ) ) {
+		bfw_pass( sprintf( 'RateLimit::%s() is detectable on the scoped class', $method ) );
+	} else {
+		bfw_fail( sprintf( 'RateLimit::%s() is not detectable, so the rate limit checks fatal', $method ) );
+	}
+}
+
+// Decision_Dispatcher adds the missing-pass notice through it (#46).
+if ( method_exists( $prefix . '\\Kanopi\\Firewall\\Event\\RequestChallenged', 'addNotice' ) ) {
+	bfw_pass( 'RequestChallenged::addNotice() is detectable on the scoped class' );
+} else {
+	bfw_fail( 'RequestChallenged::addNotice() is not detectable, so the missing-pass notice is never shown in block mode' );
 }
 
 // ---------------------------------------------------------------------------

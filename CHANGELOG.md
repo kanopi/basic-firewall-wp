@@ -9,6 +9,21 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **The "verification cookie did not come back" notice in `block` mode**
+  (#46). A visitor challenged within two minutes of solving a challenge,
+  carrying the `<cookie_name>_solved` marker but not the pass, is told why, as
+  #37 did for `exception` mode. Decision_Dispatcher adds the line to the
+  library's `RequestChallenged` event (kanopi/firewall 2.35.0), which the
+  library renders above the form on its own page in `block` mode and puts in
+  the render context's `notices` in `exception` mode, so both modes now share
+  one implementation and the plugin no longer splices its own paragraph into
+  the page. In `block` mode the library issues the pass itself, so the
+  dispatcher also sets the marker when the library announces the solve. Both
+  evaluation paths: the wp-config.php path reads the pass cookie's name from
+  the runtime sidecar (a new `pass_cookie` key, written when the name is not
+  the default). The library's `challenge.notice` has no Challenge-screen field
+  yet; the Advanced YAML can set it.
+
 - **Diagnostics for the early path, readable from anywhere** (#34). Every
   status screen described its own request, and WP-CLI's is not a web request:
   on a host that runs WP-CLI in its own container, `status` could report the

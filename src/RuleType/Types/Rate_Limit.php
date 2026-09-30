@@ -814,42 +814,24 @@ final class Rate_Limit extends Rule_Type_Base {
 	 * The regular expression the library matches a limit's pattern with.
 	 *
 	 * Asked of the library itself -- `RateLimit::patternToRegex()`, public
-	 * from kanopi/firewall 2.35.1 -- so a check made here cannot disagree with
-	 * the limit that runs. The fallback is the same function as of that
-	 * release, for a site where another copy of an older library was loaded
-	 * first: an exact or wildcard pattern is anchored and ignores case (#50),
-	 * and one written as a regular expression is used as written.
+	 * from kanopi/firewall 2.35.1, which this plugin requires -- so a check
+	 * made here cannot disagree with the limit that runs: an exact or wildcard
+	 * pattern is anchored and ignores case (#50), and one written as a regular
+	 * expression is used as written.
 	 *
 	 * @param string $pattern A limit's pattern.
 	 */
 	public static function pattern_regex( string $pattern ): string {
-		if ( method_exists( RateLimit::class, 'patternToRegex' ) ) {
-			return RateLimit::patternToRegex( $pattern );
-		}
-
-		if ( self::is_regex_pattern( $pattern ) ) {
-			return $pattern;
-		}
-
-		return '/^' . str_replace( '\*', '.*', preg_quote( $pattern, '/' ) ) . '$/i';
+		return RateLimit::patternToRegex( $pattern );
 	}
 
 	/**
 	 * Whether the library reads a limit's pattern as a regular expression.
 	 *
-	 * `RateLimit::isRegexPattern()` where the library has it (2.35.1), and the
-	 * same test otherwise: the pattern opens and closes with one delimiter
-	 * that is not a letter, a digit, whitespace or a backslash, followed only
-	 * by flags.
-	 *
 	 * @param string $pattern A limit's pattern.
 	 */
 	public static function is_regex_pattern( string $pattern ): bool {
-		if ( method_exists( RateLimit::class, 'isRegexPattern' ) ) {
-			return RateLimit::isRegexPattern( $pattern );
-		}
-
-		return strlen( $pattern ) >= 3 && 1 === preg_match( '/^([^a-zA-Z0-9\s\\\\]).+\1[imsxuADSUXJ]*$/', $pattern );
+		return RateLimit::isRegexPattern( $pattern );
 	}
 
 	/**
