@@ -635,7 +635,7 @@ record the client even though something below ends the request. And **redirect
 beats block** because the terminal responses run gentlest first: a redirect
 leaves the visitor somewhere to go.
 
-The last four arrived in `kanopi/firewall` 2.26.0, which the plugin's ^2.33.2
+The last four arrived in `kanopi/firewall` 2.26.0, which the plugin's ^2.34
 requirement covers. On an older library — possible when a site's own Composer
 autoloader wins the race — they are not offered, and a rule carrying one is
 skipped at compile time with a warning rather than compiled into something the
@@ -1035,16 +1035,19 @@ stops scanners:
 | Agent | `bot:true` | `automated:true` |
 |---|---|---|
 | `sqlmap/1.7` | allowed | **blocked** |
-| `Nikto/2.5.0` | allowed | **blocked** |
+| Nikto's default agent | **blocked** | **blocked** |
 | `curl/8.0` | allowed | **blocked** |
 | `python-requests/2.31` | allowed | **blocked** |
 | `Googlebot/2.1` | blocked | blocked |
 | iPhone Safari | allowed | allowed |
 
-`bot` is backed by a curated crawler database that does not classify scanners or
-generic HTTP client libraries. **A rule written as `bot equals true` has been
-letting sqlmap and nikto straight through.** The rule screen says so where the
-variable is chosen.
+`bot` is backed by a curated crawler database that does not classify most scanners
+or generic HTTP client libraries. **A rule written as `bot equals true` lets
+sqlmap, curl and python-requests straight through.** The rule screen says so
+where the variable is chosen. Nikto is the exception: its default agent
+(`Mozilla/5.00 (Nikto/2.5.0) ...`) is in the database from
+`matomo/device-detector` 6.5.2, which `kanopi/firewall` 2.34.0 requires, so
+`bot` matches it on every install.
 
 ### Verifying a crawler is the crawler it claims to be
 
@@ -1121,7 +1124,7 @@ site cannot: a **TLS fingerprint** — `ja3`, `ja4` — which identifies the cli
 stack rather than what it claims to be, so a script wearing a browser's user
 agent still negotiates TLS like a script; and a **bot score**, the edge's own
 verdict from signals that never reach the origin. Arrived in
-`kanopi/firewall` 2.27.0, which the plugin's ^2.33.2 requirement covers.
+`kanopi/firewall` 2.27.0, which the plugin's ^2.34 requirement covers.
 
 Choose the CDN — Cloudflare, Fastly, or *something else* with the header names
 typed as `signal: Header-Name`. Akamai and CloudFront are not named on purpose:
@@ -1228,7 +1231,7 @@ what a line without one counts:
 ```
 
 `log` is the username field on WordPress's own login form. Arrived in
-`kanopi/firewall` 2.27.0, which the plugin's ^2.33.2 requirement covers.
+`kanopi/firewall` 2.27.0, which the plugin's ^2.34 requirement covers.
 
 The prefix (`post`, `POST`) and a header name are read in any case: headers are
 case-insensitive, so `header.User-Agent` and `header.user-agent` are the same

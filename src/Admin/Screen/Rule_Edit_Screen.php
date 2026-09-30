@@ -1682,7 +1682,7 @@ final class Rule_Edit_Screen extends Screen {
 			printf(
 				'<div class="bfw-warning"><p>%s</p></div>',
 				wp_kses_post(
-					__( 'To stop scanners, use <code>automated</code> rather than <code>bot</code>. <code>bot</code> is backed by a curated crawler database that does not classify sqlmap, nikto, curl or python-requests — a rule written as <code>bot equals true</code> lets all four straight through. <code>automated</code> is that database plus a wider list.', 'basic-firewall' )
+					__( 'To stop scanners, use <code>automated</code> rather than <code>bot</code>. <code>bot</code> is backed by a curated crawler database that does not classify sqlmap, curl or python-requests — a rule written as <code>bot equals true</code> lets all three straight through. <code>automated</code> is that database plus a wider list.', 'basic-firewall' )
 				)
 			);
 		}
