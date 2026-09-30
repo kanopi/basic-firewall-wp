@@ -868,6 +868,166 @@ final class HttpEvaluationTest extends TestCase {
 	}
 
 	/**
+	 * Decisions are announced as `basic_firewall_decision`, over real HTTP (#3).
+	 *
+	 * DecisionEventsTest drives the dispatcher in-process; this is the path a
+	 * site's own listener is on. A test mu-plugin records each announcement
+	 * (fixtures/decision-recorder.php), and what is expected follows the
+	 * README's "When they arrive": a request let through is announced at
+	 * `plugins_loaded` on either path; a refusal on the mu-plugin path is
+	 * announced at shutdown; a refusal on the wp-config.php path exits before
+	 * WordPress loads and is never announced. Log mode lets the request
+	 * through, so its `blocked` is announced on either path, not enforced.
+	 */
+	public function test_decisions_are_announced_to_an_mu_plugin_listener(): void {
+		$recorder = WPMU_PLUGIN_DIR . '/0-bfw-e2e-decision-recorder.php';
+
+		if ( ! wp_mkdir_p( WPMU_PLUGIN_DIR ) || ! copy( __DIR__ . '/fixtures/decision-recorder.php', $recorder ) ) { // phpcs:ignore WordPress.WP.AlternativeFunctions -- installing a test fixture.
+			$this->fail( 'Could not install the decision recorder in ' . WPMU_PLUGIN_DIR . '.' );
+		}
+
+		try {
+			$rules = array(
+				array(
+					'id'       => 'e2e_decision_block',
+					'type'     => 'url',
+					'label'    => 'End-to-end decision block',
+					'enabled'  => true,
+					'response' => 'block',
+					'weight'   => 0,
+					'record'   => 'no',
+					'settings' => array(
+						'match_type' => 'any',
+						'conditions' => array(
+							array(
+								'variable' => 'path',
+								'operator' => 'equals',
+								'value'    => '/bfw-e2e-decision-blocked',
+							),
+						),
+					),
+				),
+				array(
+					'id'                 => 'e2e_decision_challenge',
+					'type'               => 'url',
+					'label'              => 'End-to-end decision challenge',
+					'enabled'            => true,
+					'response'           => 'challenge',
+					'weight'             => 1,
+					'expiration'         => 600,
+					'challenge_provider' => 'math',
+					'settings'           => array(
+						'match_type' => 'any',
+						'conditions' => array(
+							array(
+								'variable' => 'path',
+								'operator' => 'equals',
+								'value'    => '/bfw-e2e-decision-challenge',
+							),
+						),
+					),
+				),
+			);
+
+			$this->given_rules( $rules );
+
+			// Allowed first, before anything could have put this client on a list.
+			$allowed = $this->recorded_request( '/' );
+
+			$this->assertSame( 200, $allowed['status'] );
+			$this->assertTrue( $allowed['seen'], 'The request never reached WordPress, so the recorder heard nothing.' );
+			$this->assertContains( 'allowed', $allowed['types'], 'An allowed request was not announced: ' . wp_json_encode( $allowed['events'] ) );
+			$this->assertSame( array( 'plugins_loaded' ), array_values( array_unique( array_column( $allowed['events'], 'when' ) ) ), 'A request let through was not announced at plugins_loaded.' );
+
+			$early = $allowed['early'];
+
+			$blocked    = $this->recorded_request( '/bfw-e2e-decision-blocked' );
+			$challenged = $this->recorded_request( '/bfw-e2e-decision-challenge' );
+
+			$this->assertSame( 403, $blocked['status'], 'The block rule did not refuse the request, so there is no refusal to announce.' );
+			$this->assertStringContainsString( 'Verification required', $challenged['body'], 'The challenge rule did not challenge the request.' );
+
+			if ( $early ) {
+				// The wp-config.php path: refusals end the request before WordPress.
+				$this->assertFalse( $blocked['seen'], 'A refusal on the wp-config.php path reached WordPress.' );
+				$this->assertSame( array(), $blocked['types'], 'A refusal on the wp-config.php path was announced, which the README says cannot happen.' );
+				$this->assertSame( array(), $challenged['types'] );
+			} else {
+				$this->assertSame( array( 'blocked' ), $blocked['types'], 'A refusal was not announced as `blocked`: ' . wp_json_encode( $blocked['events'] ) );
+				$this->assertTrue( $blocked['events'][0]['enforced'], 'A refusal in Block mode was announced as not enforced.' );
+				$this->assertSame( '/bfw-e2e-decision-blocked', $blocked['events'][0]['path'] );
+				$this->assertSame( 'shutdown', $blocked['events'][0]['when'], 'A refusal ends the request before plugins_loaded, so it can only be announced at shutdown.' );
+
+				$this->assertSame( array( 'challenged' ), $challenged['types'], 'A challenge was not announced as `challenged`: ' . wp_json_encode( $challenged['events'] ) );
+				$this->assertSame( 'shutdown', $challenged['events'][0]['when'] );
+			}
+
+			// Log mode: the rule matches, nothing is refused, and it is said so.
+			$this->given_rules( $rules, 'log' );
+
+			$logged = $this->recorded_request( '/bfw-e2e-decision-blocked' );
+
+			$this->assertNotSame( 403, $logged['status'], 'Log mode refused the request.' );
+			$this->assertContains( 'blocked', $logged['types'], 'A match in log mode was not announced: ' . wp_json_encode( $logged['events'] ) );
+
+			foreach ( $logged['events'] as $event ) {
+				if ( 'blocked' === $event['type'] ) {
+					$this->assertFalse( $event['enforced'], 'A match in log mode was announced as enforced.' );
+				}
+			}
+		} finally {
+			wp_delete_file( $recorder );
+		}
+	}
+
+	/**
+	 * Make a request the decision recorder writes down, and read what it wrote.
+	 *
+	 * @param string $path Path to request.
+	 *
+	 * @return array{status: int, body: string, seen: bool, early: bool, events: list<array<string, mixed>>, types: list<string>}
+	 */
+	private function recorded_request( string $path ): array {
+		$token = bin2hex( random_bytes( 8 ) );
+		$log   = WP_CONTENT_DIR . '/bfw-e2e-decisions-' . $token . '.jsonl';
+
+		$response = $this->request( $path, array( 'X-Bfw-E2E-Decisions' => $token ) );
+
+		$lines = is_readable( $log ) ? (array) file( $log, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES ) : array();
+
+		wp_delete_file( $log );
+
+		$seen   = false;
+		$early  = false;
+		$events = array();
+
+		foreach ( $lines as $line ) {
+			$entry = json_decode( (string) $line, true );
+
+			if ( ! is_array( $entry ) ) {
+				continue;
+			}
+
+			if ( ! empty( $entry['seen'] ) ) {
+				$seen  = true;
+				$early = ! empty( $entry['early'] );
+				continue;
+			}
+
+			$events[] = $entry;
+		}
+
+		return array(
+			'status' => $response['status'],
+			'body'   => $response['body'],
+			'seen'   => $seen,
+			'early'  => $early,
+			'events' => $events,
+			'types'  => array_values( array_map( 'strval', array_column( $events, 'type' ) ) ),
+		);
+	}
+
+	/**
 	 * Make a request with the path sent exactly as given, and return the status.
 	 *
 	 * @param string $path Request target, sent verbatim.
