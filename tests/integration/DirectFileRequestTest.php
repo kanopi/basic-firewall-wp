@@ -236,6 +236,12 @@ final class DirectFileRequestTest extends Settings_Snapshot {
 	 * Compile what follows as a site installed under `/blog/`.
 	 */
 	private function as_a_subdirectory_install(): void {
+		if ( is_multisite() ) {
+			// A network's base path is the network's own path, which a filter
+			// on home cannot move. SiteLayoutTest covers network layouts.
+			$this->markTestSkipped( 'A single-site layout: a network takes its base path from the network, not from home.' );
+		}
+
 		add_filter( 'pre_option_home', array( self::class, 'blog_address' ) );
 		add_filter( 'pre_option_siteurl', array( self::class, 'blog_address' ) );
 	}

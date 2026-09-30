@@ -32,6 +32,7 @@ use PHPUnit\Framework\TestCase;
 final class UninstallLeftoversTest extends TestCase {
 
 	use Uninstall_Harness;
+	use Test_Services;
 
 	/**
 	 * A scratch directory for this test, outside the site.
@@ -116,11 +117,17 @@ final class UninstallLeftoversTest extends TestCase {
 		$this->write( $dir . '/firewall.yml' );
 		$this->write( $dir . '/logs/firewall-2026-09-28.log' );
 
+		// The runtime sidecar, where Paths says it goes. Found missing from
+		// uninstall's list in #56: the compiler writes it whenever the
+		// firewall is switched off or pinned, and it outlived the plugin.
+		$this->assertSame( $dir . '/runtime.json', Plugin::instance()->paths()->runtime_file() );
+		$this->write( Plugin::instance()->paths()->runtime_file(), '{"enabled":false}' );
+
 		$this->run_uninstall();
 
 		$this->assertFileExists( $dir . '/notes.txt', 'Uninstall deleted a file the plugin never wrote.' );
 
-		foreach ( array( 'blocked.data', 'firewall.yml', 'logs', '.htaccess', 'web.config', 'index.php' ) as $name ) {
+		foreach ( array( 'blocked.data', 'firewall.yml', 'runtime.json', 'logs', '.htaccess', 'web.config', 'index.php' ) as $name ) {
 			$this->assertFileDoesNotExist( $dir . '/' . $name, sprintf( 'Uninstall left the plugin\'s %s in a guarded directory.', $name ) );
 		}
 
@@ -148,17 +155,36 @@ final class UninstallLeftoversTest extends TestCase {
 	 * is unavailable, and uninstall only ever looked under uploads.
 	 */
 	public function test_the_wp_content_fallback_is_removed(): void {
-		$dir = rtrim( WP_CONTENT_DIR, '/' ) . '/basic-firewall-private-' . bin2hex( random_bytes( 8 ) );
+		/*
+		 * On a network every site's fallback sits side by side in the one
+		 * wp-content, so each site's pass takes only its own suffix -- the
+		 * site's, then, rather than any. A directory with a suffix no site
+		 * has belongs to nobody uninstall can name, and stays.
+		 */
+		$suffix  = is_multisite() ? (string) get_option( Paths::SUFFIX_OPTION, '' ) : bin2hex( random_bytes( 8 ) );
+		$dir     = rtrim( WP_CONTENT_DIR, '/' ) . '/basic-firewall-private-' . $suffix;
+		$foreign = rtrim( WP_CONTENT_DIR, '/' ) . '/basic-firewall-private-' . bin2hex( random_bytes( 8 ) );
+
+		$this->assertMatchesRegularExpression( '/^[a-f0-9]{16}$/', $suffix, 'This site has no private directory suffix to test with.' );
 
 		$this->write( $dir . '/blocked.data' );
 		$this->write( $dir . '/logs/firewall.log' );
+
+		if ( is_multisite() ) {
+			$this->write( $foreign . '/blocked.data' );
+		}
 
 		try {
 			$this->run_uninstall();
 
 			$this->assertDirectoryDoesNotExist( $dir, 'Uninstall left the WP_CONTENT_DIR fallback private directory.' );
+
+			if ( is_multisite() ) {
+				$this->assertDirectoryExists( $foreign, 'On a network, uninstall removed a wp-content fallback no site of the network owns.' );
+			}
 		} finally {
 			$this->remove_tree( $dir );
+			$this->remove_tree( $foreign );
 		}
 	}
 
@@ -320,22 +346,21 @@ final class UninstallLeftoversTest extends TestCase {
 	/**
 	 * The Redis block list and rate limit counters are deleted by prefix, and nothing else.
 	 *
-	 * Needs a Redis server. Point BASIC_FIREWALL_TEST_REDIS at one as
-	 * `host:port`; it defaults to 127.0.0.1:6379 and the test skips when
-	 * nothing answers, which is the case in the DDEV site this suite usually
-	 * runs in (ext-redis is loaded, no server is). Every key it writes carries
-	 * a random prefix, so a shared server is safe to use.
+	 * Needs a Redis server: see Test_Services::redis_server(). CI runs one;
+	 * the DDEV site this suite usually runs in has ext-redis and no server, so
+	 * it skips there unless BASIC_FIREWALL_TEST_REDIS points at one. Every key
+	 * it writes carries a random prefix, so a shared server is safe to use.
 	 */
 	public function test_redis_keys_under_the_plugins_prefixes_are_deleted(): void {
-		list( $host, $port ) = $this->redis_server();
+		$server                         = $this->redis_server();
+		list( $host, $port, $password ) = $server;
 
-		$redis  = new \Redis();
+		$redis  = $this->redis_client( $server );
 		$run    = bin2hex( random_bytes( 4 ) );
 		$block  = 'bfwtest:' . $run . ':';
 		$counts = 'bfwtest-rl:' . $run . ':';
 		$other  = 'bfwtest-foreign:' . $run;
 
-		$redis->connect( $host, $port, 1.0 );
 		$redis->set( $block . 'block:203.0.113.9', '{}' );
 		$redis->zAdd( $block . 'offense:203.0.113.9', time(), 'x' );
 		$redis->set( $counts . '203.0.113.9', '3' );
@@ -349,18 +374,20 @@ final class UninstallLeftoversTest extends TestCase {
 				'storage' => array(
 					'backend' => 'redis',
 					'redis'   => array(
-						'host'   => $host,
-						'port'   => $port,
-						'prefix' => $block,
+						'host'     => $host,
+						'port'     => $port,
+						'password' => $password,
+						'prefix'   => $block,
 					),
 				),
 				'rules'   => array(
 					$this->rate_limit_rule(
 						array(
-							'backend'    => 'redis',
-							'redis_host' => $host,
-							'redis_port' => $port,
-							'key_prefix' => $counts,
+							'backend'        => 'redis',
+							'redis_host'     => $host,
+							'redis_port'     => $port,
+							'redis_password' => $password,
+							'key_prefix'     => $counts,
 						)
 					),
 				),
@@ -431,9 +458,7 @@ final class UninstallLeftoversTest extends TestCase {
 	 * The plugin's APCu entries are deleted, and no others.
 	 */
 	public function test_apcu_entries_are_deleted(): void {
-		if ( ! function_exists( 'apcu_enabled' ) || ! apcu_enabled() ) {
-			$this->markTestSkipped( 'APCu is not enabled in this SAPI (apc.enable_cli is usually off).' );
-		}
+		$this->requires_apcu();
 
 		apcu_store( 'basic_firewall_agents:bfwtest', 'cached' );
 		apcu_store( 'bfwtest_other:bfwtest', 'cached' );
@@ -450,9 +475,7 @@ final class UninstallLeftoversTest extends TestCase {
 	 * On a network, every site is visited.
 	 */
 	public function test_every_site_of_a_network_is_uninstalled(): void {
-		if ( ! is_multisite() ) {
-			$this->markTestSkipped( 'Not a multisite install.' );
-		}
+		$this->requires_multisite();
 
 		$sites = array_map(
 			'intval',
@@ -576,38 +599,6 @@ final class UninstallLeftoversTest extends TestCase {
 		}
 
 		$this->fail( sprintf( "Uninstall left %s without saying so. It said:\n%s", $needle, implode( "\n", $notes ) ) );
-	}
-
-	/**
-	 * The Redis server to test against, or skip.
-	 *
-	 * @return array{0: string, 1: int}
-	 */
-	private function redis_server(): array {
-		if ( ! class_exists( 'Redis' ) ) {
-			$this->markTestSkipped( 'ext-redis is not loaded.' );
-		}
-
-		$spec = getenv( 'BASIC_FIREWALL_TEST_REDIS' );
-		$spec = is_string( $spec ) && '' !== $spec ? $spec : '127.0.0.1:6379';
-
-		$parts = explode( ':', $spec, 2 );
-		$host  = $parts[0];
-		$port  = isset( $parts[1] ) && (int) $parts[1] > 0 ? (int) $parts[1] : 6379;
-
-		try {
-			$probe = new \Redis();
-
-			if ( ! $probe->connect( $host, $port, 0.5 ) || ! $probe->ping() ) {
-				$this->markTestSkipped( sprintf( 'No Redis server answered at %s:%d. Set BASIC_FIREWALL_TEST_REDIS to host:port to run this.', $host, $port ) );
-			}
-
-			$probe->close();
-		} catch ( \RedisException $e ) {
-			$this->markTestSkipped( sprintf( 'No Redis server answered at %s:%d (%s). Set BASIC_FIREWALL_TEST_REDIS to host:port to run this.', $host, $port, $e->getMessage() ) );
-		}
-
-		return array( $host, $port );
 	}
 
 	/**

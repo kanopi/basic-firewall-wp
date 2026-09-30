@@ -9,6 +9,7 @@ declare( strict_types = 1 );
 
 namespace Kanopi\BasicFirewall\Tests\integration;
 
+use Kanopi\BasicFirewall\Blocked_Clients;
 use Kanopi\BasicFirewall\Plugin;
 use PHPUnit\Framework\TestCase;
 
@@ -22,6 +23,8 @@ use PHPUnit\Framework\TestCase;
  * @covers \Kanopi\BasicFirewall\Blocked_Clients
  */
 final class BlockListWriteTest extends TestCase {
+
+	use Test_Services;
 
 	/**
 	 * An address used by no real network. RFC 5737 reserves this range.
@@ -111,9 +114,29 @@ final class BlockListWriteTest extends TestCase {
 		try {
 			$values                       = $settings->all();
 			$values['storage']['backend'] = $backend;
+
+			/*
+			 * Redis against a live server, under a prefix of its own. It
+			 * stores the payload alone, as file storage does, so it is the
+			 * third backend the expiry has to survive on.
+			 */
+			if ( 'redis' === $backend ) {
+				$server                     = $this->redis_server();
+				$prefix                     = 'bfwtest-blocklist:' . bin2hex( random_bytes( 4 ) ) . ':';
+				$values['storage']['redis'] = array_merge(
+					(array) ( $values['storage']['redis'] ?? array() ),
+					array(
+						'host'     => $server[0],
+						'port'     => $server[1],
+						'password' => $server[2],
+						'prefix'   => $prefix,
+					)
+				);
+			}
+
 			$settings->replace( $values );
 
-			$blocked = Plugin::instance()->blocked();
+			$blocked = $this->fresh_block_list();
 
 			if ( ! $blocked->is_durable() ) {
 				$this->markTestSkipped( sprintf( 'The %s backend is not usable on this site.', $backend ) );
@@ -138,6 +161,122 @@ final class BlockListWriteTest extends TestCase {
 		} finally {
 			Plugin::instance()->blocked()->unblock( self::ADDRESS );
 			$settings->replace( $snapshot );
+			$this->fresh_block_list();
+
+			if ( isset( $prefix, $server ) ) {
+				$this->delete_redis_keys( $server, $prefix );
+			}
+		}
+	}
+
+	/**
+	 * A Redis-backed round trip leaves the key where the prefix says.
+	 *
+	 * The expiry test above proves the record comes back; this proves it was
+	 * the server that held it, under the configured prefix, rather than a
+	 * backend that quietly fell back to file storage.
+	 */
+	public function test_a_redis_block_is_stored_on_the_server_under_its_prefix(): void {
+		$server   = $this->redis_server();
+		$settings = Plugin::instance()->settings();
+		$snapshot = $settings->all();
+		$prefix   = 'bfwtest-blocklist:' . bin2hex( random_bytes( 4 ) ) . ':';
+		$redis    = $this->redis_client( $server );
+
+		try {
+			$values                       = $settings->all();
+			$values['storage']['backend'] = 'redis';
+			$values['storage']['redis']   = array_merge(
+				(array) ( $values['storage']['redis'] ?? array() ),
+				array(
+					'host'     => $server[0],
+					'port'     => $server[1],
+					'password' => $server[2],
+					'prefix'   => $prefix,
+				)
+			);
+			$settings->replace( $values );
+			$this->fresh_block_list();
+
+			$this->assertTrue( Plugin::instance()->blocked()->block( self::ADDRESS, 3600, 'Redis round trip' ) );
+
+			$keys = $this->redis_keys( $redis, $prefix );
+
+			$this->assertNotSame( array(), $keys, 'A block on Redis storage wrote nothing to the server under its prefix.' );
+			$this->assertTrue( Plugin::instance()->blocked()->check( self::ADDRESS )['blocked'] ?? false, 'The address blocked on Redis is not reported as blocked.' );
+
+			Plugin::instance()->blocked()->unblock( self::ADDRESS );
+
+			$this->assertFalse( Plugin::instance()->blocked()->check( self::ADDRESS )['blocked'] ?? true, 'Releasing the address on Redis did not release it.' );
+		} finally {
+			Plugin::instance()->blocked()->unblock( self::ADDRESS );
+			$settings->replace( $snapshot );
+			$this->fresh_block_list();
+			$this->delete_redis_keys( $server, $prefix );
+			$redis->close();
+		}
+	}
+
+	/**
+	 * A block list built from the settings as they are now.
+	 *
+	 * Blocked_Clients builds its storage once and keeps it, which is right for
+	 * a request and wrong for a test that changes the backend between
+	 * assertions: without this every case of the backends provider ran
+	 * against whichever backend the first test in the process happened to
+	 * build, so "every backend" was one backend three times.
+	 */
+	private function fresh_block_list(): Blocked_Clients {
+		$blocked = new Blocked_Clients();
+
+		Plugin::instance()->set_service( 'blocked', $blocked );
+
+		return $blocked;
+	}
+
+	/**
+	 * Every key under a prefix.
+	 *
+	 * @param \Redis $redis  Connected client.
+	 * @param string $prefix Key prefix, matched literally.
+	 *
+	 * @return list<string>
+	 */
+	private function redis_keys( \Redis $redis, string $prefix ): array {
+		$found    = array();
+		$iterator = null;
+		$pattern  = addcslashes( $prefix, '*?[]\\' ) . '*';
+
+		do {
+			$batch = $redis->scan( $iterator, $pattern, 100 );
+
+			if ( is_array( $batch ) ) {
+				$found = array_merge( $found, array_map( 'strval', $batch ) );
+			}
+		} while ( $iterator > 0 );
+
+		return $found;
+	}
+
+	/**
+	 * Remove what a test left under its prefix.
+	 *
+	 * @param array{0: string, 1: int, 2: string} $server From redis_server().
+	 * @param string                              $prefix Key prefix.
+	 */
+	private function delete_redis_keys( array $server, string $prefix ): void {
+		try {
+			$redis = $this->redis_client( $server );
+
+			$keys = $this->redis_keys( $redis, $prefix );
+
+			if ( array() !== $keys ) {
+				$redis->del( $keys );
+			}
+
+			$redis->close();
+		} catch ( \RedisException $e ) {
+			return;
 		}
 	}
 
@@ -150,6 +289,7 @@ final class BlockListWriteTest extends TestCase {
 		return array(
 			'file'     => array( 'file' ),
 			'database' => array( 'database' ),
+			'redis'    => array( 'redis' ),
 		);
 	}
 

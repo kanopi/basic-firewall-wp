@@ -40,6 +40,8 @@ use Symfony\Component\Yaml\Yaml;
  */
 final class CacheBackendTest extends Settings_Snapshot {
 
+	use Test_Services;
+
 	/**
 	 * A named cache directory, relative so it resolves inside the private directory.
 	 */
@@ -418,6 +420,78 @@ final class CacheBackendTest extends Settings_Snapshot {
 		$this->given_settings( array( 'cache' => array( 'backend' => 'apcu' ) ) );
 
 		$this->assertSame( 'critical', Site_Health::check( 'cache' )['status'] );
+	}
+
+	/**
+	 * With APCu enabled, the library fills it from the compiled file alone.
+	 *
+	 * The compile-time assertions above prove the class name and arguments
+	 * are written; this proves the library can build the pool from them and
+	 * write through it -- which needs APCu in the CLI, and so had never run.
+	 * Exception mode, because the library bypasses itself under the command
+	 * line in every other mode.
+	 */
+	public function test_the_library_writes_to_apcu_from_the_compiled_file(): void {
+		$this->requires_apcu();
+
+		$this->compiled_rule_metadata( array( 'backend' => 'apcu' ) );
+		( new Cache_Clearer() )->clear();
+
+		$this->assertSame( array(), $this->apcu_keys( Cache_Backend::AGENTS ), 'Clearing left APCu entries behind, so the assertion below would prove nothing.' );
+
+		$request = Request::create( '/', 'GET', array(), array(), array(), array( 'REMOTE_ADDR' => '203.0.113.7' ) );
+		$request->headers->set( 'User-Agent', 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)' );
+
+		try {
+			Firewall::create(
+				array( Plugin::instance()->paths()->compiled_file() ),
+				array(
+					'[global][mode]'       => 'exception',
+					'[global][panic_file]' => '',
+					'[storage][type]'      => Library_Map::STORAGE['memory'],
+					'[storage][config]'    => array(),
+				)
+			)->evaluate( $request );
+		} catch ( \Throwable $e ) {
+			$this->assertStringNotContainsString( 'cache', strtolower( $e->getMessage() ) );
+		}
+
+		$this->assertNotSame( array(), $this->apcu_keys( Cache_Backend::AGENTS ), 'Detection ran on the APCu backend and nothing reached APCu.' );
+
+		// And the Clear control empties it again.
+		$this->assertContains( 'apcu', ( new Cache_Clearer() )->clear() );
+		$this->assertSame( array(), $this->apcu_keys( Cache_Backend::AGENTS ), 'Clearing the cache left the APCu entries.' );
+	}
+
+	/**
+	 * With APCu enabled, choosing it is not reported as a problem.
+	 *
+	 * The counterpart of the test above it, which can only run where APCu is
+	 * absent; CI runs each in a different job.
+	 */
+	public function test_site_health_accepts_apcu_where_it_is_enabled(): void {
+		$this->requires_apcu();
+
+		$this->given_settings( array( 'cache' => array( 'backend' => 'apcu' ) ) );
+
+		$this->assertNotSame( 'critical', Site_Health::check( 'cache' )['status'] );
+	}
+
+	/**
+	 * The APCu keys under a namespace.
+	 *
+	 * @param string $name_space Pool namespace.
+	 *
+	 * @return list<string>
+	 */
+	private function apcu_keys( string $name_space ): array {
+		$keys = array();
+
+		foreach ( new \APCUIterator( '/^' . preg_quote( $name_space, '/' ) . ':/', APC_ITER_KEY ) as $entry ) {
+			$keys[] = (string) $entry['key'];
+		}
+
+		return $keys;
 	}
 
 	/**

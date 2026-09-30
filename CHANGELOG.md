@@ -118,6 +118,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - **An early path that is called and does not evaluate is logged**, at most
   once every 15 minutes per reason across every web container (a marker file in
   the private directory): `Basic Firewall [warning]: not-evaluated (early)`.
+- **Uninstall removes the runtime sidecar from a pre-existing private
+  directory** (#43). Where the `basic_firewall_private_path` filter names a
+  directory the plugin did not create, uninstall removes only the plugin's own
+  files from it, and `runtime.json` (written when the firewall is switched off
+  in the admin or its mode pinned) was missing from that list, so it outlived
+  the plugin. A directory the plugin created was always removed whole.
 
 ### Security
 

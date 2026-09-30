@@ -760,6 +760,10 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 	 * A bootstrap that cannot answer refusals itself is reported as critical.
 	 */
 	public function test_site_health_reports_refusals_the_early_path_cannot_answer(): void {
+		if ( is_multisite() ) {
+			$this->markTestSkipped( 'A single-site assertion: on a network the early path steps aside before it could refuse anything, and Site Health says so instead (MultisiteTest).' );
+		}
+
 		$this->given_settings( array( 'global' => array( 'mode' => 'exception' ) ) );
 
 		$GLOBALS['basic_firewall_early'] = array(
@@ -890,7 +894,14 @@ final class EarlyPathExceptionModeTest extends Settings_Snapshot {
 			$this->assertStringEndsWith( '/not-here/autoload.php', $response['autoloader_file'] );
 			$this->assertSame( $source, $response['autoloader_named'] );
 
-			// What the status screens make of it.
+			// What the status screens make of it -- on a single site. On a
+			// network the early path steps aside before it looks for an
+			// autoloader, so Site Health reports the snippet as doing nothing
+			// instead; MultisiteTest covers that.
+			if ( is_multisite() ) {
+				continue;
+			}
+
 			$GLOBALS['basic_firewall_early'] = array(
 				'called'      => true,
 				'credentials' => true,
