@@ -474,6 +474,129 @@ final class DiagnosticsTest extends Settings_Snapshot {
 	}
 
 	/**
+	 * #34's object-cache hypothesis: the backend does not change an exception-mode verdict.
+	 *
+	 * With `cache.backend: object_cache` the compiler writes no pool -- YAML
+	 * cannot carry an object -- and records where one goes; the runner hands
+	 * the object cache over at those paths, and the wp-config.php path, which
+	 * has no object cache, leaves the library on its file default. So the two
+	 * paths build their firewalls differently on exactly the Pantheon setup
+	 * the report came from. Both are built here the way each path builds
+	 * them, with a persistent object cache in place, and both must reach the
+	 * same verdicts as a verdict -- never a failure the paths would fail open
+	 * on.
+	 */
+	public function test_the_object_cache_backend_does_not_change_an_exception_mode_verdict(): void {
+		if ( defined( 'BASIC_FIREWALL_MODE' ) ) {
+			$this->markTestSkipped( 'BASIC_FIREWALL_MODE pins this site\'s mode.' );
+		}
+
+		$external = wp_using_ext_object_cache();
+
+		$this->given_settings(
+			array(
+				'global'    => array( 'mode' => 'exception' ),
+				'challenge' => array(
+					'provider' => 'math',
+					'secret'   => str_repeat( 'diagnostics-secret-', 3 ),
+				),
+				'storage'   => array( 'backend' => 'file' ),
+				'cache'     => array( 'backend' => 'object_cache' ),
+				'rules'     => array(
+					array(
+						'id'       => 'diagnostics_crawlers',
+						'type'     => 'user_agent',
+						'label'    => 'Crawlers',
+						'enabled'  => true,
+						'response' => 'block',
+						'weight'   => 0,
+						'record'   => 'no',
+						'settings' => array(
+							'match_type'      => 'any',
+							'cache_detection' => true,
+							'bot_source'      => 'curated',
+							'conditions'      => array(
+								array(
+									'variable' => 'bot',
+									'operator' => 'equals',
+									'value'    => 'true',
+								),
+							),
+						),
+					),
+					array(
+						'id'                 => 'diagnostics_altcha',
+						'type'               => 'url',
+						'label'              => 'Per-rule ALTCHA',
+						'enabled'            => true,
+						'response'           => 'challenge',
+						'challenge_provider' => 'altcha',
+						'weight'             => 0,
+						'record'             => 'no',
+						'settings'           => array(
+							'match_type' => 'any',
+							'conditions' => array(
+								array(
+									'variable' => 'path',
+									'operator' => 'starts_with',
+									'value'    => '/learning-resources',
+								),
+							),
+						),
+					),
+				),
+			)
+		);
+
+		wp_using_ext_object_cache( true );
+
+		try {
+			$this->assertTrue( Plugin::instance()->compiled()->rebuild()['written'] );
+			$this->assertNotSame( array(), Plugin::instance()->compiled()->cache_pool_paths(), 'The user agent rule\'s cache path was not recorded, so nothing here is handed over.' );
+
+			$compiled = Plugin::instance()->paths()->compiled_file();
+			$paths    = array(
+				'early'  => array(),
+				'runner' => \Kanopi\BasicFirewall\Cache\Cache_Backend::overrides(),
+			);
+
+			$this->assertNotSame( array(), $paths['runner'], 'The object cache was not handed over, so the runner path is not the one under test.' );
+
+			$browser = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36';
+			$crawler = 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)';
+
+			foreach ( $paths as $path => $overrides ) {
+				$firewall = \Kanopi\Firewall\Firewall::create( array( $compiled ), $overrides );
+
+				$this->assertSame( 'exception', $firewall->getMode()->value );
+				$this->assertSame( 'challenge', $this->verdict( $firewall, '/learning-resources/page/', $browser ), "The {$path} path did not challenge." );
+				$this->assertSame( 'blocked', $this->verdict( $firewall, '/', $crawler ), "The {$path} path did not refuse the crawler." );
+				$this->assertSame( 'allowed', $this->verdict( $firewall, '/', $browser ), "The {$path} path refused an unmatched request." );
+			}
+		} finally {
+			wp_using_ext_object_cache( $external );
+		}
+	}
+
+	/**
+	 * What a firewall makes of a request: a verdict kind, `allowed`, or the failure.
+	 *
+	 * @param \Kanopi\Firewall\Firewall $firewall   The firewall.
+	 * @param string                    $path       Request path.
+	 * @param string                    $user_agent User-Agent header.
+	 */
+	private function verdict( \Kanopi\Firewall\Firewall $firewall, string $path, string $user_agent ): string {
+		$request = Request::create( $path, 'GET', array(), array(), array(), array( 'REMOTE_ADDR' => '203.0.113.9' ) );
+		$request->headers->set( 'User-Agent', $user_agent );
+
+		try {
+			return $firewall->evaluate( $request ) ? 'allowed' : 'refused';
+		} catch ( \Throwable $e ) {
+			return \Kanopi\BasicFirewall\Runtime\Outcome_Responder::verdict_kind( $e ) ?? 'failure: ' . get_class( $e ) . ': ' . $e->getMessage();
+		}
+	}
+
+	/**
 	 * Exception mode with one challenge rule, compiled.
 	 */
 	private function given_exception_mode(): void {
