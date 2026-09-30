@@ -3,7 +3,7 @@
  * Plugin Name:       Basic Firewall
  * Plugin URI:        https://github.com/kanopi/basic-firewall-wp
  * Description:       Evaluates every request against a set of rules and allows, challenges or blocks it, as early in the request as WordPress can act.
- * Version:           1.0.0-rc.2
+ * Version:           1.0.0-rc.3
  * Requires at least: 6.4
  * Requires PHP:      8.1
  * Author:            Kanopi Studios
@@ -48,7 +48,7 @@ if ( defined( 'BASIC_FIREWALL_VERSION' ) ) {
 	return;
 }
 
-define( 'BASIC_FIREWALL_VERSION', '1.0.0-rc.2' );
+define( 'BASIC_FIREWALL_VERSION', '1.0.0-rc.3' );
 define( 'BASIC_FIREWALL_MIN_PHP', '8.1' );
 define( 'BASIC_FIREWALL_FILE', __FILE__ );
 define( 'BASIC_FIREWALL_DIR', plugin_dir_path( __FILE__ ) );
