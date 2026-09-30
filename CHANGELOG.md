@@ -82,6 +82,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- **Requires and bundles kanopi/firewall 2.35.1** (from 2.34.1). Several of
+  its fixes change what an existing configuration does; see *What changes on
+  upgrade* above.
+
 - **`fail-open (early|runner)` log lines are rate-limited** (#41). They were
   written on every request, so a persistent failure on a busy site logged one
   line per request. The first is still always written; after that, at most one
@@ -93,6 +97,15 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   every failure.
 
 ### Fixed
+
+- **ASN rules are compared by the library as numbers, and the plugin's
+  workarounds are gone** (refs #49). The type no longer casts a typed number
+  to an integer or strips `AS` at compile time, and a list of numbers compared
+  with *is equal to*, *is one of* or *is not equal to* is no longer compiled
+  into a digits-only `#^16509$#` pattern: the library reads both sides as a
+  number now. A list entry written `AS16509` is matched instead of skipped.
+  Stored rules need no change. (Latitude/longitude *equals* is not part of
+  this release.)
 
 - **The block list screen and WP-CLI resolve a `%env()%` Redis password**
   rather than sending the token itself as the password (#48).

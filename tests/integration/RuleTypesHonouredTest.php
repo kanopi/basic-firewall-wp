@@ -865,6 +865,64 @@ final class RuleTypesHonouredTest extends Honoured_Settings {
 	}
 
 	/**
+	 * ASN conditions however the number is written, through the compiled file.
+	 *
+	 * The plugin used to rewrite these at compile time (an integer cast, the
+	 * `AS` prefix stripped) because the library compared strictly. Since
+	 * kanopi/firewall 2.35.0 the library reads both sides as a number, so this
+	 * runs the stored condition through the whole compile-and-construct path
+	 * and asks the library itself (#49).
+	 *
+	 * @dataProvider asn_conditions
+	 *
+	 * @param string $operator The comparison.
+	 * @param string $value    As typed.
+	 * @param bool   $matches  Whether a client in AS16509 matches.
+	 */
+	public function test_asn_numbers_through_the_compiled_file( string $operator, string $value, bool $matches ): void {
+		$firewall = $this->build(
+			array(
+				'rules' => array(
+					$this->rule(
+						'net',
+						'asn',
+						array(
+							'conditions' => array( self::condition( 'asn', $operator, $value ) ),
+							'reader'     => array(
+								'source'   => 'database',
+								'database' => $this->scratch . '/GeoLite2-ASN.mmdb',
+							),
+						)
+					),
+				),
+			)
+		);
+
+		$plugin = $this->plugin_named( $firewall, 'net' );
+
+		self::set_property( $plugin, 'reader', new Fake_Geo_Reader() );
+
+		$this->assertSame( $matches, (bool) $plugin->evaluate( self::request( '/', '203.0.113.10' ) ) );
+	}
+
+	/**
+	 * ASN conditions, and whether AS16509 meets each.
+	 *
+	 * @return array<string, array{0: string, 1: string, 2: bool}>
+	 */
+	public static function asn_conditions(): array {
+		return array(
+			'digits'              => array( 'equals', '16509', true ),
+			'prefixed'            => array( 'equals', 'AS16509', true ),
+			'one of'              => array( 'in', '13335, AS16509', true ),
+			'not equal, itself'   => array( 'not_equals', '16509', false ),
+			'not equal, prefixed' => array( 'not_equals', 'AS16509', false ),
+			'not equal, another'  => array( 'not_equals', 'AS13335', true ),
+			'another network'     => array( 'equals', '13335', false ),
+		);
+	}
+
+	/**
 	 * A hand-edited option, with settings in the shape a person types them.
 	 *
 	 * Only the settings service runs each rule through its type's validator,

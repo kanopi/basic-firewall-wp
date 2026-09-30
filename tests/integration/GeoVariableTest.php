@@ -148,8 +148,10 @@ final class GeoVariableTest extends Settings_Snapshot {
 	/**
 	 * An autonomous system number matches however it is written.
 	 *
-	 * The record holds an integer and the library compares strictly, so the
-	 * string every form field produces never equalled it.
+	 * The record holds an integer and every form field produces a string. The
+	 * plugin used to cast the value and strip the prefix itself; since
+	 * kanopi/firewall 2.35.0 the library reads both sides as a number, so the
+	 * condition compiles as typed and this proves the library does the rest.
 	 *
 	 * @dataProvider asn_spellings
 	 *
@@ -169,11 +171,48 @@ final class GeoVariableTest extends Settings_Snapshot {
 	 */
 	public static function asn_spellings(): array {
 		return array(
-			'digits'           => array( 'equals', '16509' ),
-			'with the prefix'  => array( 'equals', 'AS16509' ),
-			'in a list'        => array( 'in', '13335, 16509' ),
-			'not another'      => array( 'not_equals', '13335' ),
-			'numeric compared' => array( 'gte', '16509' ),
+			'digits'                => array( 'equals', '16509' ),
+			'with the prefix'       => array( 'equals', 'AS16509' ),
+			'lower-case prefix'     => array( 'equals', 'as16509' ),
+			'in a list'             => array( 'in', '13335, 16509' ),
+			'in a list, prefixed'   => array( 'in', 'AS13335, AS16509' ),
+			'not another'           => array( 'not_equals', '13335' ),
+			'not another, prefixed' => array( 'not_equals', 'AS13335' ),
+			'numeric compared'      => array( 'gte', '16509' ),
+			'contains is text'      => array( 'contains', '650' ),
+		);
+	}
+
+	/**
+	 * An autonomous system number is not matched by a condition that excludes it.
+	 *
+	 * Before 2.35.0 `not_equals` compared the record's integer with a string,
+	 * never found them equal, and so matched every visitor, the named network
+	 * included.
+	 *
+	 * @dataProvider asn_non_matches
+	 *
+	 * @param string $operator The comparison.
+	 * @param string $value    As typed.
+	 */
+	public function test_an_asn_does_not_match_a_condition_excluding_it( string $operator, string $value ): void {
+		$entry = $this->compile( 'asn', 'asn', $operator, $value );
+
+		$this->assertFalse( $this->asn_plugin( $entry )->evaluate( $this->request() ) );
+	}
+
+	/**
+	 * Conditions that AS16509 must not meet.
+	 *
+	 * @return array<string, array{0: string, 1: string}>
+	 */
+	public static function asn_non_matches(): array {
+		return array(
+			'not equal, digits'   => array( 'not_equals', '16509' ),
+			'not equal, prefixed' => array( 'not_equals', 'AS16509' ),
+			'a prefix of it'      => array( 'equals', '1650' ),
+			'a longer number'     => array( 'equals', '165090' ),
+			'another network'     => array( 'in', '13335, AS15169' ),
 		);
 	}
 
@@ -344,11 +383,13 @@ final class GeoVariableTest extends Settings_Snapshot {
 	/**
 	 * A list of autonomous system numbers matches with equals, one of, and not equal to.
 	 *
-	 * A text list's entries are strings, the record holds an integer, and the
-	 * library compares strictly -- so a list of numbers compared with "is equal
-	 * to" matched nothing, and "is not equal to" matched everything. The list
-	 * is run through the library's own source pipeline here, the way a refresh
-	 * does, and the entries it produces are handed to the library's ASN plugin.
+	 * A text list's entries are strings and the record holds an integer. The
+	 * plugin used to compile such a list into a digits-only pattern, skipping
+	 * an entry written `AS16509`; since kanopi/firewall 2.35.0 the library
+	 * compares the substituted entry as a number, so the list compiles to a
+	 * plain equality and a prefixed entry matches. The list is run through the
+	 * library's own source pipeline here, the way a refresh does, and the
+	 * entries it produces are handed to the library's ASN plugin.
 	 *
 	 * @dataProvider asn_lists
 	 *
@@ -372,6 +413,9 @@ final class GeoVariableTest extends Settings_Snapshot {
 
 		$entry       = $this->type( 'asn' )->compile( $rule );
 		$declaration = $entry['metadata']['sources'][0];
+
+		$this->assertStringNotContainsString( 'regex', (string) wp_json_encode( $declaration ), 'A list of numbers is still compiled as a pattern.' );
+		$this->assertArrayNotHasKey( 'where', $declaration, 'A list of numbers still carries the digits-only guard.' );
 		$entries     = ( new SourceLoader( null, null, null, null, null, array(), true ) )->pipeline( SourceDefinition::fromArray( $declaration ), $body );
 
 		$entry['config'] = array_merge( (array) ( $entry['config'] ?? array() ), $entries );
@@ -394,7 +438,11 @@ final class GeoVariableTest extends Settings_Snapshot {
 			'not equal, not listed'      => array( 'not_equals', 'txt', "13335\n", true ),
 			'not equal, listed'          => array( 'not_equals', 'txt', "16509\n", false ),
 			'a pattern is not a number'  => array( 'equals', 'txt', ".*\n1.*\n", false ),
-			'the prefix is not a number' => array( 'equals', 'txt', "AS16509\n", false ),
+			'listed with the prefix'     => array( 'equals', 'txt', "AS13335\nAS16509\n", true ),
+			'prefixed, one of'           => array( 'in', 'txt', "AS16509\n", true ),
+			'not equal, listed prefixed' => array( 'not_equals', 'txt', "AS16509\n", false ),
+			'not equal, other prefixed'  => array( 'not_equals', 'txt', "AS13335\n", true ),
+			'padded entry'               => array( 'equals', 'txt', "  16509  \n", true ),
 		);
 	}
 

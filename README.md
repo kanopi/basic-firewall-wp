@@ -1165,16 +1165,12 @@ identical code, including negation and the operator names this plugin uses. Set
 as an AND group; it wins over the selects.
 
 **A list of autonomous system numbers** compared with *is equal to*, *is one of*
-or *is not equal to* is matched number by number: each entry becomes the pattern
-`^16509$` run against the visitor's number, because the library compares a
-number strictly and a text list's entries are strings — compared as written,
-such a list would match nothing. **Write each entry as digits alone.** An entry
-is admitted into that pattern only if it is nothing but digits, so a published
-list cannot smuggle in `.*`; the cost is that an entry written `AS16509` is
-skipped rather than matched, since the prefix cannot be taken off an entry the
-library fills in after the rule is compiled. The rule screen says so beside the
-list. A JSON list of integers works as it is, and for names use *contains* on
-`asn_org`.
+or *is not equal to* is matched number by number. The library reads both the
+visitor's number and each entry as a number (kanopi/firewall 2.35.0 and later),
+so an entry can be written `16509` or `AS16509`, and a JSON list of integers
+works as it is. For names, use *contains* on `asn_org`. Earlier versions of this
+plugin compiled such a list into a digits-only pattern and skipped an entry
+written `AS16509`; that workaround is gone, and a stored rule needs no change.
 
 One difference from the IP rule is worth knowing: **a relative file reference is
 resolved to an absolute path at compile time.** The library resolves
