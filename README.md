@@ -2221,6 +2221,46 @@ from**. Only the `file` processor is ever enabled, never `require`: the library
 offers both behind one switch, and `require` executes the path it is given, which
 would turn any environment-variable injection into remote code execution.
 
+### Credentials in the Advanced YAML
+
+The Advanced screen's YAML is free-form, so no declared secret path reaches
+inside it. Its credentials are recognised by the key they sit under instead, and
+shown as `[redacted]` in the box, stripped from an export, and hidden on the
+Compiled screen. Key names are compared case-insensitively, with `-` read as
+`_`, at any depth:
+
+- a name containing `password`, `passwd`, `secret` or `token` — unless it ends
+  in a suffix that makes it a description of one, such as `_name`, `_ttl`,
+  `_header`, `_cookie`, `_param`, `_field`, `_length`, `_file` or `_path`, so
+  `cookie_name` and `token_ttl` stay visible;
+- exactly `pass`, `pwd`, `auth`, `api_key`, `apikey`, `access_key`,
+  `private_key`, `secret_key` or `license_key`; everything under `auth` or
+  `credentials`, except an auth map's `type`, `header` and `username`;
+- under `headers`, a header whose name mentions `auth`, `token`, `secret`,
+  `cookie`, `password` or `api-key` (`Authorization`, `X-Api-Key`, `Cookie`);
+- in any string: the password in `scheme://user:pass@host` (or the user part
+  when it has no colon, which is how a token goes in a URL), a query parameter
+  named like a credential, and a `password=` segment of a PDO-style DSN. Only
+  that part is masked, so the host stays readable.
+
+A bare `key` is **not** a credential — it is what a rate limit counts — and
+neither are `site_key`, `public_key` or `default_key`. `%env()%` and `%file()%`
+tokens are always shown.
+
+Leave a `[redacted]` as it is and the save keeps the stored value, provided it is
+still at the same place with the same host, port or URL beside it. A placeholder
+that has moved, or whose connection changed, is refused with a message naming
+it: a stored `[redacted]` would be a credential that silently stopped working.
+The box keeps your comments and layout, except where a credential also appears
+somewhere the substitution cannot safely reach (a comment, a block scalar, an
+anchor), in which case it is shown re-written from its parsed form.
+
+An export lists each one as `advanced_yaml: <path>`. Importing it on the same
+site restores them; elsewhere a placeholder with nothing to restore from is
+dropped and named in the preview. An imported document whose Advanced YAML
+carries credentials in the clear is stored as written, and the preview names
+them.
+
 ## WP-CLI commands
 
 ```bash

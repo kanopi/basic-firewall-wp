@@ -50,6 +50,22 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   once every 15 minutes per reason across every web container (a marker file in
   the private directory): `Basic Firewall [warning]: not-evaluated (early)`.
 
+### Security
+
+- **Credentials in the Advanced YAML are no longer shown or exported** (#47).
+  The box was a free-form pass-through, outside the redaction #17 and #23
+  applied, so a Redis password, API key, token or DSN typed there went back
+  into the page and into every export in the clear. A value under a
+  credential-shaped key (`*password*`, `*secret*`, `*token*`, `auth`,
+  `api_key` and a few more; never a bare `key`), a credential header, and the
+  password in a URL are now shown as `[redacted]`, and `%env()%`/`%file()%`
+  tokens stay visible. A placeholder saved back unchanged keeps the stored
+  value; one that moved, or whose host changed beside it, refuses the save
+  rather than storing `[redacted]`. An export masks them and lists each as
+  `advanced_yaml: <path>`; an import restores them from the receiving site's
+  own block or drops and reports them, and names any credential an imported
+  block carries in the clear. The Compiled screen hides them too.
+
 ## [1.0.0-rc.4]
 
 **Fourth release candidate for 1.0.0.** Published as a GitHub pre-release, so

@@ -221,6 +221,18 @@ final class Import_Screen extends Screen {
 			);
 		}
 
+		$advanced = (array) ( $preview['summary']['advanced_credentials'] ?? array() );
+
+		if ( array() !== $advanced ) {
+			printf(
+				'<div class="bfw-warning"><p><strong>%s</strong></p><ul style="list-style:disc;margin-left:2em"><li>%s</li></ul><p>%s</p></div>',
+				esc_html__( 'The Advanced YAML in this document carries credentials in plain text, which will be stored as written:', 'basic-firewall' ),
+				wp_kses_post( implode( '</li><li>', array_map( 'esc_html', array_map( 'strval', $advanced ) ) ) ),
+				/* translators: the %env()% below is a literal token the firewall reads, not a placeholder. */
+				esc_html__( 'They are shown as [redacted] on the Advanced screen and stripped from exports. Consider replacing each with a %env(NAME)% token.', 'basic-firewall' )
+			);
+		}
+
 		$this->open_form();
 
 		printf( '<input type="hidden" name="import_action" value="apply" />' );
