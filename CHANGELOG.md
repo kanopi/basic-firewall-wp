@@ -7,6 +7,35 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed
+
+- **An `exception` mode verdict on the wp-config.php path can no longer
+  serve the page** (#34). Every route by which the early path could fail
+  open on a challenge, redirect or block now ends in a plain 503
+  "Verification required" refusal instead: the responder throwing (the
+  verdict used to be handed to the runner, which runs after a page cache, or
+  not at all), the responder returning as though the request may continue
+  (it used to return `true` straight to wp-config.php), the responder
+  missing from the plugin copy, and a verdict thrown by the other library
+  copy (scoped or unscoped), which the responder took for a firewall failure
+  and let through. Each is logged to the PHP error log at warning. The runner
+  also refuses, and reports to Site Health, any request the early path
+  recorded a verdict on and did not answer, so an older `bootstrap.php`
+  still required from wp-config.php cannot fail open silently; the mu-plugin
+  loader (now 1.2.0) loads the plugin for that case. The report's exact
+  setup, a per-rule ALTCHA challenge on a WordPress-routed page, did not
+  reproduce locally on DDEV in either the zip or a Composer install; it is
+  now covered over HTTP.
+- **Every response the plugin writes carries the full no-store set** from
+  [kanopi/firewall#418](https://github.com/kanopi/firewall/pull/418):
+  `Cache-Control: private, no-store, no-cache, must-revalidate, max-age=0`,
+  `Pragma: no-cache`, `Expires: 0`, `Surrogate-Control: no-store` and
+  `CDN-Cache-Control: no-store`, each replacing any earlier header of the
+  same name. That is the challenge interstitial, block, lockdown and redirect
+  answers, and the solved-challenge JSON and redirect. They carried only
+  `no-store` and `Pragma`, which Pantheon's edge caches anyway. The set is
+  the library's `NoStore::HEADERS` when the library has it.
+
 ## [1.0.0-rc.3]
 
 **Third release candidate for 1.0.0.** Published as a GitHub pre-release, so

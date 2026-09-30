@@ -374,10 +374,14 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 	 * the pass cookie, whose name lives in settings, which need WordPress; and
 	 * it is a POST to the challenge path, which no page cache serves. So it is
 	 * left in a global and answered by the runner at `muplugins_loaded`, before
-	 * any ordinary plugin loads. The same global carries a refusal in the one
-	 * case this path cannot answer it -- the responder missing from this copy
-	 * of the plugin -- so it is still answered, late, rather than dropped; the
-	 * bootstrap's self-report says so and Site Health calls it critical.
+	 * any ordinary plugin loads.
+	 *
+	 * **Refused, when it cannot be answered.** A verdict the responder cannot
+	 * answer -- the responder missing from this copy of the plugin, throwing,
+	 * or returning instead of ending the request -- is refused here, with a
+	 * plain 503, rather than left for the runner: the runner runs after the
+	 * page cache, and a verdict waved on to it is a page served (#34). See
+	 * basic_firewall_refuse().
 	 *
 	 * A stash nobody answers -- the plugin switched off without its
 	 * deactivation hook running -- fails open. For a solved challenge that
@@ -419,7 +423,14 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 		$responder = basic_firewall_outcome_responder( $options );
 
 		if ( null === $responder ) {
-			$GLOBALS['basic_firewall_early']['deferred'] = true;
+			/*
+			 * This copy of the plugin has no responder to answer with. The
+			 * verdict used to be left for the runner, which answers it once
+			 * WordPress loads -- after advanced-cache.php, which on a cache
+			 * hit serves the page and exits first. A refusal now, plain as it
+			 * is, never serves the page. Site Health says why it was plain.
+			 */
+			basic_firewall_refuse( $kind, 'the plugin\'s responder is missing from this copy of the plugin' );
 
 			return false;
 		}
@@ -428,18 +439,120 @@ if ( ! function_exists( 'basic_firewall_evaluate' ) ) {
 
 		try {
 			// Ends the request for every verdict it is handed.
-			return $responder->respond( $outcome, $request );
-		} catch ( \Throwable $e ) {
-			// A responder that cannot answer is not a reason for a fatal
-			// error on every refused request. Hand it to the runner instead.
-			$GLOBALS['basic_firewall_outcome']           = array(
-				'outcome' => $outcome,
-				'request' => $request,
-			);
-			$GLOBALS['basic_firewall_early']['deferred'] = true;
+			$responder->respond( $outcome, $request );
 
-			return false;
+			/*
+			 * Reaching this line means it did not: the responder took the
+			 * verdict for something that lets the request continue. #34 was
+			 * a challenge the page was served in place of, with nothing
+			 * logged, and this line returning the responder's `true` is one
+			 * way that happens. A verdict is never a reason to serve the page.
+			 */
+			$why = 'the responder returned without answering it';
+		} catch ( \Throwable $e ) {
+			/*
+			 * This used to hand the verdict to the runner, which answers it
+			 * after a page cache has had the chance to serve the page -- and
+			 * not at all where nothing loads the plugin before the cache.
+			 */
+			$why = 'the responder threw ' . get_class( $e ) . ': ' . $e->getMessage();
 		}
+
+		basic_firewall_refuse( $kind, $why );
+
+		return false;
+	}
+
+	/**
+	 * Refuse the request, without WordPress and without the responder.
+	 *
+	 * The last answer to a verdict this path could not answer properly -- no
+	 * responder, a responder that threw, or one that returned instead of
+	 * ending the request. Whatever the verdict was, the visitor gets a
+	 * temporary refusal and not the page: failing open here is what #34
+	 * reported, a challenge rule serving the page it stands in front of, with
+	 * WordPress's cache headers, to be cached at the edge and served to
+	 * everyone after.
+	 *
+	 * Written by hand because anything more capable is what just failed. The
+	 * no-store set is the library's own when it has one; see
+	 * basic_firewall_no_store_headers(). What went wrong goes to the PHP error
+	 * log at warning, the only log reachable before WordPress, and into the
+	 * bootstrap's report for anything that runs before exit.
+	 *
+	 * @param string $kind What the verdict was: `challenge`, `redirect` or `blocked`.
+	 * @param string $why  What went wrong, for the log.
+	 *
+	 * @return void Never returns: the request ends here.
+	 */
+	function basic_firewall_refuse( $kind, $why ) {
+		$GLOBALS['basic_firewall_early']['refused'] = $why;
+
+		// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- no WordPress and no firewall logger before wp-settings.php.
+		error_log( sprintf( 'Basic Firewall [warning]: a %s verdict on the wp-config.php path could not be answered (%s), so the request was refused.', $kind, $why ) );
+
+		if ( ! headers_sent() ) {
+			// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- compared against a fixed list and replaced unless it matches exactly.
+			$protocol = isset( $_SERVER['SERVER_PROTOCOL'] ) ? (string) $_SERVER['SERVER_PROTOCOL'] : 'HTTP/1.1';
+
+			if ( ! in_array( $protocol, array( 'HTTP/1.0', 'HTTP/1.1', 'HTTP/2', 'HTTP/3' ), true ) ) {
+				$protocol = 'HTTP/1.1';
+			}
+
+			header( $protocol . ' 503 Service Unavailable', true, 503 );
+
+			$headers = array( 'Content-Type' => 'text/html; charset=utf-8' )
+				+ basic_firewall_no_store_headers()
+				+ array(
+					'Retry-After'            => '60',
+					'X-Content-Type-Options' => 'nosniff',
+					'X-Robots-Tag'           => 'noindex, nofollow',
+				);
+
+			foreach ( $headers as $name => $value ) {
+				header( $name . ': ' . $value, true );
+			}
+		}
+
+		echo "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Verification required</title></head>"
+			. "<body><main><h1>Verification required</h1><p>This request needs a verification step that could not be shown. Please try again shortly.</p></main></body></html>\n";
+
+		exit;
+	}
+
+	/**
+	 * The headers that keep a response out of every cache.
+	 *
+	 * The library's `NoStore::HEADERS` (kanopi/firewall#418) from the copy
+	 * this path runs, when it has the class, so a refusal written here and
+	 * one written by the library cannot differ. The same set written out
+	 * otherwise, because this is the answer of last resort and must not
+	 * depend on anything else having loaded; Outcome_Responder carries the
+	 * same fallback for the same reason.
+	 *
+	 * @return array<string, string>
+	 */
+	function basic_firewall_no_store_headers() {
+		$fallback = array(
+			'Cache-Control'     => 'private, no-store, no-cache, must-revalidate, max-age=0',
+			'Pragma'            => 'no-cache',
+			'Expires'           => '0',
+			'Surrogate-Control' => 'no-store',
+			'CDN-Cache-Control' => 'no-store',
+		);
+
+		$prefix = basic_firewall_library_prefix();
+		$class  = null === $prefix ? null : $prefix . 'Kanopi\\Firewall\\Utility\\NoStore';
+
+		if ( null !== $class && class_exists( $class ) && defined( $class . '::HEADERS' ) ) {
+			$headers = constant( $class . '::HEADERS' );
+
+			if ( is_array( $headers ) ) {
+				return array_map( 'strval', $headers ) + $fallback;
+			}
+		}
+
+		return $fallback;
 	}
 
 	/**

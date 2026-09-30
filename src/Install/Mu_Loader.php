@@ -63,7 +63,7 @@ final class Mu_Loader {
 	 * mu-plugin/basic-firewall-loader.php; build/check-versions.sh fails when
 	 * they disagree.
 	 */
-	public const VERSION = '1.1.0';
+	public const VERSION = '1.2.0';
 
 	/**
 	 * The constant every copy of the loader defines, and so how one is recognised.

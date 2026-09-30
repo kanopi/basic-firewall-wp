@@ -77,9 +77,35 @@ switch ( $_SERVER['HTTP_X_BFW_TEST_AUTOLOADER'] ?? '' ) {
 		break;
 }
 
+/*
+ * A responder that fails to answer, standing in for the real one: see
+ * fake-responder.php. And a plugin copy with no responder at all.
+ */
+if ( in_array( $_SERVER['HTTP_X_BFW_TEST_RESPONDER'] ?? '', array( 'throws', 'returns' ), true ) ) { // phpcs:ignore WordPress.Security.ValidatedSanitizedInput -- compared against literals, in a test fixture.
+	require_once __DIR__ . '/fake-responder.php';
+}
+
+if ( 'no-responder' === ( $_SERVER['HTTP_X_BFW_TEST_PLUGIN'] ?? '' ) ) { // phpcs:ignore WordPress.Security.ValidatedSanitizedInput -- compared against a literal, in a test fixture.
+	$basic_firewall_bootstrap['plugin_path'] = (string) getenv( 'BFW_EARLY_NO_RESPONDER_PLUGIN_PATH' );
+}
+
 require_once $basic_firewall_plugin . '/bootstrap.php';
 
-basic_firewall_evaluate( $basic_firewall_bootstrap );
+if ( isset( $_SERVER['HTTP_X_BFW_TEST_FOREIGN_VERDICT'] ) ) {
+	/*
+	 * A challenge from the other library copy, handed straight to the
+	 * bootstrap's answer the way a catch around evaluate() would hand it.
+	 */
+	require_once __DIR__ . '/foreign-verdict.php';
+
+	basic_firewall_answer_outcome(
+		new \Kanopi\BasicFirewall\Vendor\Kanopi\Firewall\Exception\ChallengeRequiredException( 'Challenge required by plugin: foreign' ),
+		null,
+		basic_firewall_options( $basic_firewall_bootstrap )
+	);
+} else {
+	basic_firewall_evaluate( $basic_firewall_bootstrap );
+}
 
 // What the bootstrap left for the runner, for a test to assert on.
 header( 'X-Early-Stashed: ' . ( empty( $GLOBALS['basic_firewall_outcome'] ) ? 'no' : 'yes' ) );

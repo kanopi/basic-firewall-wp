@@ -107,6 +107,7 @@ final class Runner {
 			 */
 			$this->adopt_early_marks();
 			$this->adopt_early_failure();
+			$this->refuse_unanswered_early_verdict();
 
 			return $this->answer_early_outcome();
 		}
@@ -267,6 +268,32 @@ final class Runner {
 		unset( $GLOBALS['basic_firewall_outcome'] );
 
 		return ( new Outcome_Responder() )->respond( $early['outcome'], $early['request'] );
+	}
+
+	/**
+	 * Refuse a request the wp-config.php path reached a verdict on and let through.
+	 *
+	 * The bootstrap answers every refusal itself and ends the request, and
+	 * leaves only a solved challenge behind. So a request arriving here with
+	 * a challenge, redirect or block recorded and nothing left to answer is
+	 * one the early path failed open on -- #34, a challenge rule serving the
+	 * page it stands in front of. A bootstrap from this release refuses such
+	 * a verdict itself; this is the tripwire for everything else, an older
+	 * bootstrap.php still required from wp-config.php among them. Late, after
+	 * a page cache has had its chance, but it refuses the request, logs why,
+	 * and leaves the failure for Site Health rather than serving the page.
+	 */
+	private function refuse_unanswered_early_verdict(): void {
+		$kind = $GLOBALS['basic_firewall_early']['outcome'] ?? null;
+
+		if ( ! in_array( $kind, array( 'challenge', 'redirect', 'blocked' ), true ) || null !== self::early_outcome() ) {
+			return;
+		}
+
+		self::$failure        = 'evaluation-failed';
+		self::$failure_detail = sprintf( 'the wp-config.php path reached a %s verdict and let the request continue', $kind );
+
+		( new Outcome_Responder() )->refuse( $kind, self::$failure_detail );
 	}
 
 	/**

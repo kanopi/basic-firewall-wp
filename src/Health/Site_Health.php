@@ -1152,15 +1152,14 @@ final class Site_Health {
 			/*
 			 * The bootstrap answers `exception` mode verdicts itself, with the
 			 * plugin's own responder, because the mu-plugin runs after
-			 * advanced-cache.php. Without that responder it hands them to the
-			 * runner instead: still answered, but after a page cache has had
-			 * the chance to serve the page to a visitor the firewall refused.
-			 * That is a fail-open on cache hits, and the one kind this check
-			 * exists to say out loud.
+			 * advanced-cache.php. Without that responder it refuses each of
+			 * them with a plain 503 rather than serve the page (#34): no
+			 * challenge a visitor could solve, no redirect, no block page.
+			 * Safe, but not what the rules say, which is why it is critical.
 			 */
 			return self::critical(
-				__( 'Exception mode cannot answer refusals before a page cache on the wp-config.php path', 'basic-firewall' ),
-				'<p>' . esc_html__( 'The operating mode is exception, so the firewall hands each block, redirect and challenge to the plugin to answer rather than sending it itself. The wp-config.php bootstrap could not find the plugin\'s responder, so those answers wait until the mu-plugin loads — after advanced-cache.php, which serves cached pages to refused visitors before they are answered.', 'basic-firewall' ) . '</p>'
+				__( 'Exception mode cannot answer challenges, redirects or blocks properly on the wp-config.php path', 'basic-firewall' ),
+				'<p>' . esc_html__( 'The operating mode is exception, so the firewall hands each block, redirect and challenge to the plugin to answer rather than sending it itself. The wp-config.php bootstrap could not find the plugin\'s responder, so it refuses each of those requests with a plain "verification required" page instead: a challenged visitor has no challenge to solve, and a redirect rule sends nobody anywhere.', 'basic-firewall' ) . '</p>'
 				. '<p>' . esc_html__( 'Reinstall the plugin so src/Runtime/Outcome_Responder.php is present, or switch the operating mode to Block, where the library answers every refusal itself.', 'basic-firewall' ) . '</p>'
 			);
 		}
