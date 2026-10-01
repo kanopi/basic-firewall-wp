@@ -13,6 +13,7 @@ use Kanopi\Crs\CrsEngine;
 use Kanopi\Firewall\Challenge\ChallengeProviderInterface;
 use Kanopi\Firewall\Plugins\AbuseIpdb;
 use Kanopi\Firewall\Plugins\Crs;
+use Kanopi\Firewall\Plugins\Url;
 use Symfony\Component\HttpFoundation\Request;
 
 /**
@@ -414,6 +415,102 @@ final class Library_Capabilities {
 			'result' => 'inert',
 			'reason' => __( 'The Core Rule Set did not detect an unmistakable SQL injection payload. This release parses the rules but detects almost nothing, so enabling it would give the appearance of coverage without any. The rule type is not offered.', 'basic-firewall' ),
 		);
+	}
+
+	/**
+	 * The loose-equality probe's answer for this process, once it has run.
+	 *
+	 * @var bool|null
+	 */
+	private static ?bool $loose_numeric_equality = null;
+
+	/**
+	 * What tests use in place of the probe.
+	 *
+	 * @var array{0: bool}|null
+	 */
+	private static ?array $simulated_loose_numeric_equality = null;
+
+	/**
+	 * Whether `equals`, `not_equals` and `in` match a numeric string to an integer.
+	 *
+	 * Release 2.36.0 of kanopi/firewall compares the three strictly, so a port or a query
+	 * count -- integers to the library -- never equals the text a referenced
+	 * list substitutes in, and never fails "is not equal to" it. The rule
+	 * screen refuses that combination while this is false. kanopi/firewall#443
+	 * asks for a numeric comparison when the request value is a number; once a
+	 * release ships it, this turns true and the refusal lifts without a
+	 * plugin release.
+	 *
+	 * Asked of the library rather than inferred from a version number, for the
+	 * reason this class exists. The probe is four evaluations of the library's
+	 * own Url plugin against requests built in memory -- no I/O, nothing worth
+	 * caching beyond the process -- and it has to see every half of the fix:
+	 * a string port equal to the request's, a string not-equal that does not
+	 * match, a string count equal to the request's, and a different port that
+	 * still does not match. A library that matched everything would pass the
+	 * first and third and fail the fourth, and is not mistaken for a fixed one.
+	 */
+	public function compares_numbers_loosely(): bool {
+		if ( null !== self::$simulated_loose_numeric_equality ) {
+			return self::$simulated_loose_numeric_equality[0];
+		}
+
+		if ( null === self::$loose_numeric_equality ) {
+			self::$loose_numeric_equality = self::probe_loose_numeric_equality();
+		}
+
+		return self::$loose_numeric_equality;
+	}
+
+	/**
+	 * Run the loose-equality probe.
+	 */
+	private static function probe_loose_numeric_equality(): bool {
+		if ( ! class_exists( Url::class ) ) {
+			return false;
+		}
+
+		try {
+			$on_8443 = Request::create( 'https://example.test:8443/?f=a&f=b' );
+
+			$matches = static function ( string $variable, string $operator, string $value ) use ( $on_8443 ): bool {
+				$plugin = new Url(
+					array( 'name' => 'capability_probe' ),
+					array(
+						array(
+							'variable' => $variable,
+							'operator' => $operator,
+							'value'    => $value,
+						),
+					)
+				);
+
+				return (bool) $plugin->evaluate( $on_8443 );
+			};
+
+			return $matches( 'port', 'equals', '8443' )
+				&& ! $matches( 'port', 'not_equals', '8443' )
+				&& $matches( 'query_count.f', 'equals', '2' )
+				&& ! $matches( 'port', 'equals', '443' );
+		} catch ( \Throwable $e ) {
+			// A library that cannot answer is treated as one that compares strictly.
+			return false;
+		}
+	}
+
+	/**
+	 * Stand in for the loose-equality probe, for tests.
+	 *
+	 * The bundled library's answer is fixed for a run, and both answers need
+	 * testing. Null restores the real probe.
+	 *
+	 * @internal
+	 *
+	 * @param bool|null $loose What the probe should report.
+	 */
+	public static function simulate_loose_numeric_equality( ?bool $loose ): void {
+		self::$simulated_loose_numeric_equality = null === $loose ? null : array( $loose );
 	}
 
 	/**
