@@ -277,8 +277,15 @@ abstract class Condition_Rule_Type_Base extends Rule_Type_Base {
 			 * control characters no field produces are dropped, here as well
 			 * as on the screen, because an import or WP-CLI reaches this
 			 * without passing through the screen.
+			 *
+			 * Whitespace at either end is trimmed, as WordPress's sanitiser did
+			 * before #60. A space nobody can see is almost always one pasted
+			 * by accident, and it fails silently in the worst direction: a
+			 * block rule on `/wp-admin ` matches nothing, and nothing says so.
+			 * A rule that really means to match a leading or trailing space can
+			 * say so in a regex, where `\s` or `\x20` is visible.
 			 */
-			$value = (string) preg_replace( '/[\x00-\x08\x0A-\x1F\x7F]/', '', (string) ( $condition['value'] ?? '' ) );
+			$value = trim( (string) preg_replace( '/[\x00-\x08\x0A-\x1F\x7F]/', '', (string) ( $condition['value'] ?? '' ) ) );
 
 			if ( '' === $variable ) {
 				// An entirely blank row is a row somebody added and did not

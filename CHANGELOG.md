@@ -65,8 +65,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   value. Condition values on every condition rule type (URL, user agent,
   geolocation, ASN, edge signal), the fields of a referenced list, and
   rate-limit lines are now read as typed, with only control characters
-  removed; the rule type's validator checks them (operator, regex, UTF-8, at
-  most 4,096 characters). The pasted document on the Import and Rules
+  removed and whitespace at either end trimmed (as before, so a pasted
+  trailing space can't leave a block rule matching nothing; a regex can still
+  match a leading or trailing space with `\s`); the rule type's validator
+  checks them (operator, regex, UTF-8, at most 4,096 characters). The pasted document on the Import and Rules
   screens, the Advanced YAML box and the Test screen's path, user agent,
   headers and body are read the same way. A value that contains an entity,
   such as `&lt;`, now survives being saved again untouched.

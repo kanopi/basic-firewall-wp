@@ -189,6 +189,41 @@ final class ConditionValueRoundTripTest extends Settings_Snapshot {
 	}
 
 	/**
+	 * Whitespace at either end of a value is trimmed; whitespace inside is kept.
+	 *
+	 * Through the screen and straight through the validator, which is the
+	 * path an import and WP-CLI take, so neither can store a value whose
+	 * trailing space makes a block rule match nothing.
+	 */
+	public function test_whitespace_at_either_end_is_trimmed(): void {
+		$this->given_rule( 'spaced', 'url', array( self::condition( 'path', 'starts_with', 'placeholder' ) ) );
+
+		$this->assertTrue(
+			$this->save_as_rendered(
+				'spaced',
+				array( 'settings[conditions][0][value]' => "  /wp-admin \t " )
+			)
+		);
+
+		$this->assertSame( '/wp-admin', $this->stored_rule( 'spaced' )['settings']['conditions'][0]['value'] );
+
+		$errors = array();
+		$clean  = ( new \Kanopi\BasicFirewall\RuleType\Types\Url() )->validate_settings(
+			array(
+				'conditions' => array(
+					self::condition( 'path', 'starts_with', ' /wp-login.php ' ),
+					self::condition( 'header.x-probe', 'contains', ' a  b ' ),
+				),
+			),
+			$errors
+		);
+
+		$this->assertSame( array(), $errors );
+		$this->assertSame( '/wp-login.php', $clean['conditions'][0]['value'] );
+		$this->assertSame( 'a  b', $clean['conditions'][1]['value'], 'Whitespace inside a value is part of it.' );
+	}
+
+	/**
 	 * The validator still decides: an invalid pattern and an overlong value are refused.
 	 */
 	public function test_the_validator_still_refuses_what_it_should(): void {
