@@ -90,6 +90,8 @@ final class VariableNameTest extends TestCase {
 			'a header'          => array( 'header', 'x-api-key', 'header.x-api-key' ),
 			'a cookie'          => array( 'cookie', 'wordpress_logged_in', 'cookie.wordpress_logged_in' ),
 			'a posted field'    => array( 'post', 'log', 'post.log' ),
+			'a query count'     => array( 'query_count', 'f', 'query_count.f' ),
+			'a cased count'     => array( 'query_count', 'Facet', 'query_count.Facet' ),
 		);
 	}
 
@@ -193,5 +195,179 @@ final class VariableNameTest extends TestCase {
 		);
 
 		$this->assertSame( 'query.test', $entry['config'][0]['variable'] );
+	}
+
+	/**
+	 * `query_count` is a family and a variable in its own right.
+	 *
+	 * With no name it counts every parameter the client sent, so the bare name
+	 * is stored as it is -- unlike `query`, which reads nothing on its own.
+	 */
+	public function test_a_bare_query_count_is_accepted(): void {
+		$errors = array();
+
+		$this->assertSame(
+			'query_count',
+			$this->stored(
+				array(
+					'variable'      => 'query_count',
+					'variable_name' => '',
+					'operator'      => 'gt',
+					'value'         => '20',
+				),
+				$errors
+			)
+		);
+		$this->assertSame( array(), $errors );
+	}
+
+	/**
+	 * A query count with a dot and no name is refused.
+	 *
+	 * How a blank name arrives from WP-CLI or an imported document. It is not
+	 * the bare count, and the library would read it as a parameter called
+	 * nothing, which no request sends.
+	 *
+	 * @dataProvider nameless_families
+	 *
+	 * @param string $variable As written.
+	 */
+	public function test_a_family_with_an_empty_name_after_the_dot_is_refused( string $variable ): void {
+		$errors = array();
+
+		$this->assertNull( $this->stored( array( 'variable' => $variable ), $errors ) );
+		$this->assertArrayHasKey( 'conditions.0.variable', $errors );
+		$this->assertStringContainsString( 'needs a name', $errors['conditions.0.variable'] );
+	}
+
+	/**
+	 * Families written with a trailing dot.
+	 *
+	 * @return array<string, array{0: string}>
+	 */
+	public static function nameless_families(): array {
+		return array(
+			'query_count.' => array( 'query_count.' ),
+			'query.'       => array( 'query.' ),
+			'header.'      => array( 'header.' ),
+		);
+	}
+
+	/**
+	 * A count compared with a value that is not a whole number is refused.
+	 *
+	 * The library compares a count strictly as an integer, so `four` or `4.5`
+	 * would compile to a condition that never matches.
+	 *
+	 * @dataProvider uncountable_values
+	 *
+	 * @param string $variable The count.
+	 * @param string $operator The comparison.
+	 * @param string $value    As typed.
+	 */
+	public function test_a_count_needs_a_whole_number( string $variable, string $operator, string $value ): void {
+		$errors = array();
+
+		$this->assertNull(
+			$this->stored(
+				array(
+					'variable' => $variable,
+					'operator' => $operator,
+					'value'    => $value,
+				),
+				$errors
+			)
+		);
+		$this->assertArrayHasKey( 'conditions.0.value', $errors );
+	}
+
+	/**
+	 * Values a count cannot equal.
+	 *
+	 * @return array<string, array{0: string, 1: string, 2: string}>
+	 */
+	public static function uncountable_values(): array {
+		return array(
+			'a word'             => array( 'query_count.f', 'equals', 'four' ),
+			'a fraction'         => array( 'query_count.f', 'equals', '4.5' ),
+			'a negative'         => array( 'query_count.f', 'not_equals', '-1' ),
+			'a range'            => array( 'query_count', 'equals', '3-5' ),
+			'one bad list entry' => array( 'query_count.f', 'in', '4, five' ),
+			'a word, greater'    => array( 'query_count.f', 'gt', 'three' ),
+		);
+	}
+
+	/**
+	 * A whole number is accepted, and other operators are left alone.
+	 *
+	 * @dataProvider countable_values
+	 *
+	 * @param string $variable The count.
+	 * @param string $operator The comparison.
+	 * @param string $value    As typed.
+	 */
+	public function test_a_count_accepts_a_whole_number( string $variable, string $operator, string $value ): void {
+		$errors = array();
+
+		$this->assertSame(
+			$variable,
+			$this->stored(
+				array(
+					'variable' => $variable,
+					'operator' => $operator,
+					'value'    => $value,
+				),
+				$errors
+			)
+		);
+		$this->assertSame( array(), $errors );
+	}
+
+	/**
+	 * Values a count can be compared with.
+	 *
+	 * @return array<string, array{0: string, 1: string, 2: string}>
+	 */
+	public static function countable_values(): array {
+		return array(
+			'equals'           => array( 'query_count.f', 'equals', '4' ),
+			'one of'           => array( 'query_count.f', 'in', '4, 5' ),
+			'greater than'     => array( 'query_count.f', 'gt', '3' ),
+			'zero'             => array( 'query_count', 'equals', '0' ),
+			'regex, untouched' => array( 'query_count.f', 'regex', '^[4-9]$' ),
+		);
+	}
+
+	/**
+	 * A count compiles as an integer for the operators that compare one.
+	 */
+	public function test_a_count_compiles_as_an_integer(): void {
+		$compile = static function ( string $operator, string $value ) {
+			$entry = ( new Url() )->compile(
+				array(
+					'id'       => 'r',
+					'response' => 'challenge',
+					'settings' => array(
+						'match_type' => 'any',
+						'sources'    => array(),
+						'conditions' => array(
+							array(
+								'variable' => 'query_count.f',
+								'operator' => $operator,
+								'value'    => $value,
+							),
+						),
+					),
+				)
+			);
+
+			return $entry['config'][0]['value'];
+		};
+
+		$this->assertSame( 4, $compile( 'equals', '4' ) );
+		$this->assertSame( 4, $compile( 'not_equals', '4' ) );
+		$this->assertSame( array( 4, 5 ), $compile( 'in', '4, 5' ) );
+		$this->assertSame( 3, $compile( 'gt', '3' ) );
+		$this->assertSame( '4', $compile( 'contains', '4' ), 'A string operator keeps its string.' );
 	}
 }

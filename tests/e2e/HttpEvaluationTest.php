@@ -534,6 +534,63 @@ final class HttpEvaluationTest extends TestCase {
 	}
 
 	/**
+	 * A facet count is read off the query string the web server actually passed.
+	 *
+	 * The integration tests set QUERY_STRING by hand; this is the check that a
+	 * real server hands PHP the raw string the library counts, so a repeated
+	 * `f=` and encoded brackets count over HTTP as they do there. Record is
+	 * off, so a refused request does not ban the address the later requests
+	 * come from.
+	 */
+	public function test_a_facet_count_is_honoured_over_http(): void {
+		if ( ! ( new Library_Capabilities() )->has_record_control() ) {
+			$this->markTestSkipped( 'The installed library always records a block.' );
+		}
+
+		$this->given_rules(
+			array(
+				array(
+					'id'       => 'e2e_facets',
+					'type'     => 'url',
+					'label'    => 'End-to-end facet crawling',
+					'enabled'  => true,
+					'response' => 'block',
+					'weight'   => 0,
+					'record'   => 'no',
+					'settings' => array(
+						'match_type' => 'all',
+						'conditions' => array(
+							array(
+								'variable' => 'path',
+								'operator' => 'starts_with',
+								'value'    => '/bfw-e2e-search',
+							),
+							array(
+								'variable' => 'query_count.f',
+								'operator' => 'gt',
+								'value'    => '3',
+							),
+						),
+					),
+				),
+			)
+		);
+
+		$this->assertNotSame( 403, $this->request( '/bfw-e2e-search?f[0]=a&f[1]=b&f[2]=c' )['status'], 'Three facets were refused under a cap of three.' );
+
+		foreach ( array(
+			'f[0]=a&f[1]=b&f[2]=c&f[3]=d',
+			'f=a&f=b&f=c&f=d',
+			'f%5B0%5D=a&f%5B1%5D=b&f%5B2%5D=c&f%5B3%5D=d',
+			'f[]=a&q=x&f[7]=b&f=c&f[x]=d',
+		) as $query ) {
+			$this->assertSame( 403, $this->request( '/bfw-e2e-search?' . $query )['status'], "Four facets sent as ?$query were not refused." );
+		}
+
+		$this->assertSame( 0, count( Plugin::instance()->blocked()->all()['clients'] ), 'A rule with record off wrote the client to the block list.' );
+	}
+
+	/**
 	 * A member of an exempt role is let through, and nobody else is.
 	 *
 	 * Over HTTP because the whole point is where each request is decided: a

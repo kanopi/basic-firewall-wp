@@ -52,13 +52,22 @@ final class Rate_Limit extends Rule_Type_Base {
 	 * `client_ip` and `rule_pattern` are the library's own default pair; the
 	 * rest is the vocabulary the Request / URL rule already reads, because that
 	 * is the vocabulary the library resolves them with.
+	 *
+	 * `query_count` (kanopi/firewall 2.36.0) is both an atom and a prefix, as
+	 * in the URL rule: alone it is the number of parameters the request sent,
+	 * and `query_count.f` the number of values of `f`. A bare `query_count.`
+	 * is neither, and is refused like any other prefix with no name.
 	 */
-	public const KEY_ATOMS = array( 'client_ip', 'rule_pattern', 'path', 'method', 'host', 'scheme', 'port', 'query' );
+	public const KEY_ATOMS = array( 'client_ip', 'rule_pattern', 'path', 'method', 'host', 'scheme', 'port', 'query', 'query_count' );
 
 	/**
 	 * Key components that take a name after a dot.
+	 *
+	 * Every name but a header's keeps its case (see normalise_key_component()),
+	 * and `query_count.<name>` is no exception: the library counts the
+	 * parameter as the client spelled it.
 	 */
-	public const KEY_PREFIXES = array( 'header', 'post', 'cookie', 'query' );
+	public const KEY_PREFIXES = array( 'header', 'post', 'cookie', 'query', 'query_count' );
 
 	/**
 	 * {@inheritDoc}
@@ -166,7 +175,7 @@ final class Rate_Limit extends Rule_Type_Base {
 				 */
 				'verbatim'    => true,
 				'description' => wp_kses_post(
-					__( 'One per line, as <code>pattern requests seconds</code> — <code>/wp-login.php 5 300</code> is five attempts in five minutes.<br><br>A fourth field names <strong>what to count</strong>, comma separated. Left off, the firewall counts the client address and the pattern, which is what it has always done. <code>/wp-login.php 5 300 post.log</code> counts the account being tried rather than the address trying it, so a credential-stuffing run spread over a thousand addresses still hits one limit. <code>/api/* 100 60 client_ip,path</code> counts each endpoint separately rather than the API as a whole. A header name is read in any case; a form field, cookie or query name exactly as written, so <code>post.userName</code> and <code>post.username</code> are different fields.<br><br><strong>A limit that counts an account is not a replacement for one that counts the address.</strong> The two catch opposite attacks — an account key misses one client walking a list of usernames, which gets a fresh budget per name — and a limit without <code>client_ip</code> in its key refuses but never bans. Keep an address-keyed limit on the same pattern, <em>in a separate rate limit rule</em>: within one rule only the first line whose pattern matches is ever used.', 'basic-firewall' )
+					__( 'One per line, as <code>pattern requests seconds</code> — <code>/wp-login.php 5 300</code> is five attempts in five minutes.<br><br>A fourth field names <strong>what to count</strong>, comma separated. Left off, the firewall counts the client address and the pattern, which is what it has always done. <code>/wp-login.php 5 300 post.log</code> counts the account being tried rather than the address trying it, so a credential-stuffing run spread over a thousand addresses still hits one limit. <code>/api/* 100 60 client_ip,path</code> counts each endpoint separately rather than the API as a whole. <code>query_count.f</code> is how many values of <code>f</code> the request sent, so <code>/search 30 60 client_ip,query_count.f</code> gives each depth of faceting its own budget. A header name is read in any case; a form field, cookie, query or query_count name exactly as written, so <code>post.userName</code> and <code>post.username</code> are different fields.<br><br><strong>A limit that counts an account is not a replacement for one that counts the address.</strong> The two catch opposite attacks — an account key misses one client walking a list of usernames, which gets a fresh budget per name — and a limit without <code>client_ip</code> in its key refuses but never bans. Keep an address-keyed limit on the same pattern, <em>in a separate rate limit rule</em>: within one rule only the first line whose pattern matches is ever used.', 'basic-firewall' )
 				),
 			),
 			'storage' => array(
@@ -328,7 +337,7 @@ final class Rate_Limit extends Rule_Type_Base {
 			if ( array() !== $unknown ) {
 				$errors['paths'] = sprintf(
 					/* translators: 1: the rejected components, 2: the pattern. */
-					__( '%1$s is not something a limit can count by, on %2$s. Every request would share one count, so one visitor could spend the allowance for everybody. Use client_ip, rule_pattern, path, method, host, scheme, port or query, or header., post., cookie. or query. followed by a name.', 'basic-firewall' ),
+					__( '%1$s is not something a limit can count by, on %2$s. Every request would share one count, so one visitor could spend the allowance for everybody. Use client_ip, rule_pattern, path, method, host, scheme, port, query or query_count, or header., post., cookie., query. or query_count. followed by a name.', 'basic-firewall' ),
 					implode( ', ', $unknown ),
 					$pattern
 				);

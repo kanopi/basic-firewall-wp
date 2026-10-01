@@ -78,7 +78,7 @@ final class RateLimitSettingsTest extends Settings_Snapshot {
 
 		$fields = $this->rendered_fields( 'login-limit' );
 
-		$this->assertSame( "/wp-login.php 5 300\n/xmlrpc.php 10 60 client_ip,header.x-api-key", $fields['settings[paths]'] ?? null );
+		$this->assertSame( "/wp-login.php 5 300\n/xmlrpc.php 10 60 client_ip,header.x-api-key\n/search 30 60 client_ip,query_count.Facet", $fields['settings[paths]'] ?? null );
 		$this->assertSame( 'redis', $fields['settings[storage][backend]'] ?? null );
 		$this->assertSame( '10.0.0.5', $fields['settings[storage][redis_host]'] ?? null );
 		$this->assertSame( '6380', $fields['settings[storage][redis_port]'] ?? null );
@@ -230,7 +230,7 @@ final class RateLimitSettingsTest extends Settings_Snapshot {
 	 */
 	private function settings(): array {
 		return array(
-			'paths'                => "/wp-login.php 5 300\n/xmlrpc.php 10 60 client_ip,header.x-api-key",
+			'paths'                => "/wp-login.php 5 300\n/xmlrpc.php 10 60 client_ip,header.x-api-key\n/search 30 60 client_ip,query_count.Facet",
 			'default_limit'        => 120,
 			'default_window'       => 30,
 			'limit_unlisted_paths' => false,

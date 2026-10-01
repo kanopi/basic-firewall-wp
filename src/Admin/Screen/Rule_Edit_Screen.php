@@ -2043,10 +2043,11 @@ final class Rule_Edit_Screen extends Screen {
 		$reflector->setAccessible( true );
 
 		$described = array(
-			'query'  => __( 'A query parameter — name it alongside', 'basic-firewall' ),
-			'header' => __( 'A request header — name it alongside', 'basic-firewall' ),
-			'cookie' => __( 'A cookie — name it alongside', 'basic-firewall' ),
-			'post'   => __( 'A posted field — name it alongside', 'basic-firewall' ),
+			'query'       => __( 'A query parameter — name it alongside', 'basic-firewall' ),
+			'query_count' => __( 'How many values of a query parameter — name it alongside, or leave the name blank to count every parameter', 'basic-firewall' ),
+			'header'      => __( 'A request header — name it alongside', 'basic-firewall' ),
+			'cookie'      => __( 'A cookie — name it alongside', 'basic-firewall' ),
+			'post'        => __( 'A posted field — name it alongside', 'basic-firewall' ),
 		);
 
 		$families = array();

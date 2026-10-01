@@ -303,11 +303,23 @@ abstract class Condition_Rule_Type_Base extends Rule_Type_Base {
 				continue;
 			}
 
-			if ( in_array( $variable, $this->variable_prefixes(), true ) ) {
+			/*
+			 * A family is refused on its own, and so is a family followed by a
+			 * dot and nothing else, which is how a blank name arrives from
+			 * WP-CLI or an imported document.
+			 *
+			 * A family that is also a variable in its own right is the one
+			 * exception: `query_count` alone counts every parameter, and
+			 * `query_count.f` counts one. The bare name is offered, so it is
+			 * accepted; `query_count.` with no name after the dot is not.
+			 */
+			$family = '.' === substr( $variable, -1 ) ? substr( $variable, 0, -1 ) : $variable;
+
+			if ( in_array( $family, $this->variable_prefixes(), true ) && ( $family !== $variable || ! isset( $this->variable_options()[ $variable ] ) ) ) {
 				$errors[ "conditions.$index.variable" ] = sprintf(
 					/* translators: %s: the family name, such as query or header. */
 					__( '%s needs a name beside it. The family on its own reads nothing — a condition on it would match nothing at all.', 'basic-firewall' ),
-					$variable
+					$family
 				);
 
 				continue;
@@ -343,6 +355,13 @@ abstract class Condition_Rule_Type_Base extends Rule_Type_Base {
 					__( 'This value is longer than %d characters. Split it across several conditions, or reference a list instead.', 'basic-firewall' ),
 					self::MAX_VALUE_LENGTH
 				);
+				continue;
+			}
+
+			$problem = $this->value_problem( $variable, $operator, $value );
+
+			if ( null !== $problem ) {
+				$errors[ "conditions.$index.value" ] = $problem;
 				continue;
 			}
 
@@ -414,6 +433,23 @@ abstract class Condition_Rule_Type_Base extends Rule_Type_Base {
 		}
 
 		return $clean;
+	}
+
+	/**
+	 * Why a value cannot work for this variable and operator, if it cannot.
+	 *
+	 * For what a type knows about its own variables that the shared checks do
+	 * not: a variable the library reads as a number, compared with an operator
+	 * that never matches anything else. Null when the value is fine.
+	 *
+	 * @param string $variable The library's variable name.
+	 * @param string $operator The screen's operator.
+	 * @param string $value    The value, trimmed.
+	 */
+	protected function value_problem( string $variable, string $operator, string $value ): ?string {
+		unset( $variable, $operator, $value );
+
+		return null;
 	}
 
 	/**
