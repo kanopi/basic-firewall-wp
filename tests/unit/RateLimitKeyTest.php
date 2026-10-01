@@ -53,7 +53,7 @@ final class RateLimitKeyTest extends TestCase {
 		$this->assertSame(
 			array(),
 			Rate_Limit::unknown_key_components(
-				array( 'client_ip', 'rule_pattern', 'path', 'method', 'host', 'scheme', 'port', 'query', 'header.x-api-key', 'post.log', 'cookie.session', 'query.q' )
+				array( 'client_ip', 'rule_pattern', 'path', 'method', 'host', 'scheme', 'port', 'query', 'header.x-api-key', 'post.log', 'cookie.session', 'query.q', 'query_count', 'query_count.f', 'query_count.Facet' )
 			)
 		);
 	}
@@ -66,8 +66,8 @@ final class RateLimitKeyTest extends TestCase {
 	 */
 	public function test_an_unresolvable_component_is_named(): void {
 		$this->assertSame(
-			array( 'pots.log', 'post', 'header.', 'ip' ),
-			Rate_Limit::unknown_key_components( array( 'post.log', 'pots.log', 'post', 'header.', 'ip' ) )
+			array( 'pots.log', 'post', 'header.', 'ip', 'query_count.', 'querycount.f' ),
+			Rate_Limit::unknown_key_components( array( 'post.log', 'pots.log', 'post', 'header.', 'ip', 'query_count', 'query_count.', 'querycount.f' ) )
 		);
 	}
 
@@ -80,8 +80,8 @@ final class RateLimitKeyTest extends TestCase {
 	 */
 	public function test_a_case_sensitive_name_keeps_its_case(): void {
 		$this->assertSame(
-			array( 'post.userName', 'cookie.Session', 'query.Q', 'header.x-api-key', 'post.log', 'post.x', 'client_ip', 'query' ),
-			Rate_Limit::parse_key( ' post.userName, cookie.Session ,query.Q, header.X-Api-Key, POST.log, Post.x, CLIENT_IP, Query, ' )
+			array( 'post.userName', 'cookie.Session', 'query.Q', 'header.x-api-key', 'post.log', 'post.x', 'client_ip', 'query', 'query_count.Facet', 'query_count' ),
+			Rate_Limit::parse_key( ' post.userName, cookie.Session ,query.Q, header.X-Api-Key, POST.log, Post.x, CLIENT_IP, Query, Query_Count.Facet, QUERY_COUNT, ' )
 		);
 	}
 
@@ -94,7 +94,7 @@ final class RateLimitKeyTest extends TestCase {
 	 * it always was, which is why no stored key moves to a different counter.
 	 */
 	public function test_components_match_the_library(): void {
-		$typed = array( 'post.userName', 'cookie.Session', 'query.Q', 'header.User-Agent', 'POST.x', 'Cookie.sid', 'CLIENT_IP', 'rule_pattern', 'Path', 'post.log', 'header.x-api-key' );
+		$typed = array( 'post.userName', 'cookie.Session', 'query.Q', 'header.User-Agent', 'POST.x', 'Cookie.sid', 'CLIENT_IP', 'rule_pattern', 'Path', 'post.log', 'header.x-api-key', 'query_count.f', 'Query_Count.Facet', 'QUERY_COUNT' );
 
 		$library = ( new \ReflectionClass( \Kanopi\Firewall\Plugins\RateLimit::class ) )->newInstanceWithoutConstructor();
 		$method  = new \ReflectionMethod( $library, 'keyComponents' );

@@ -1521,6 +1521,56 @@ final class RuleTypesHonouredTest extends Honoured_Settings {
 	}
 
 	/**
+	 * A limit keyed on a facet count counts each count separately, as the library does.
+	 *
+	 * Four facets written four different ways are one count of four, so they
+	 * share a budget; one facet is a different count with a budget of its
+	 * own. The name keeps its case on the way to the library, because the
+	 * library counts the parameter as the client spelled it.
+	 */
+	public function test_rate_limit_keyed_on_a_query_count(): void {
+		$firewall = $this->build(
+			array(
+				'rules' => array(
+					$this->rule(
+						'facet-depth',
+						'rate_limit',
+						array(
+							'paths'   => array( '/rl-facets 2 60 query_count.f', '/rl-cased 2 60 Query_Count.Facet' ),
+							'storage' => array(
+								'backend' => 'file',
+								'file'    => $this->scratch . '/ratelimit-facets.data',
+							),
+						)
+					),
+				),
+			)
+		);
+
+		$plugin = $this->plugin_named( $firewall, 'facet-depth' );
+		$config = (array) self::property( $plugin, 'config' );
+
+		$this->assertSame( array( 'query_count.f' ), self::invoke( $plugin, 'keyComponents', $config[0] ) );
+		$this->assertSame( array( 'query_count.Facet' ), self::invoke( $plugin, 'keyComponents', $config[1] ), 'The library reads the name with its case.' );
+		$this->assertSame( array( 'query_count.Facet' ), $config[1]['key'], 'The plugin stored the name in a different case from the one the library reads.' );
+
+		$this->assertSame( '4', self::invoke( $plugin, 'keyComponentValue', self::raw_query_request( '/rl-facets', 'f=a&f=b&f=c&f=d' ), $config[0], 'query_count.f' ) );
+
+		$results = array();
+
+		foreach ( array(
+			array( 'f[0]=a&f[1]=b&f[2]=c&f[3]=d', '203.0.113.81' ),
+			array( 'f=a&f=b&f=c&f=d', '203.0.113.82' ),
+			array( 'f[]=a&q=x', '203.0.113.83' ),
+			array( 'f%5B0%5D=a&f%5B1%5D=b&f%5B2%5D=c&f%5B3%5D=d', '203.0.113.84' ),
+		) as list( $query, $ip ) ) {
+			$results[] = (bool) $plugin->evaluate( self::raw_query_request( '/rl-facets', $query, $ip ) );
+		}
+
+		$this->assertSame( array( false, false, false, true ), $results, 'Four facets, however written, are one count of four with a budget of two; one facet is a count of its own.' );
+	}
+
+	/**
 	 * Counters go to the table the plugin means, and to Redis where asked.
 	 *
 	 * The compiler wrote `storage-table`. The library reads `storage_table`, so
