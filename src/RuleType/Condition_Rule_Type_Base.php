@@ -68,6 +68,15 @@ abstract class Condition_Rule_Type_Base extends Rule_Type_Base {
 	protected const VALUELESS_OPERATORS = array( 'exists' );
 
 	/**
+	 * The longest condition value accepted, in characters.
+	 *
+	 * Generous -- a long user agent or a long alternation is a few hundred --
+	 * and there so that a pasted document is not evaluated on every request
+	 * against a value nobody meant to write.
+	 */
+	public const MAX_VALUE_LENGTH = 4096;
+
+	/**
 	 * The variables this type can match on.
 	 *
 	 * @return array<string, string> Variable name to human description.
@@ -261,7 +270,15 @@ abstract class Condition_Rule_Type_Base extends Rule_Type_Base {
 				)
 			);
 			$operator = (string) ( $condition['operator'] ?? 'equals' );
-			$value    = (string) ( $condition['value'] ?? '' );
+
+			/*
+			 * Kept as written -- `<`, `%2e`, quotes and all, which is what a
+			 * rule on an attack payload has to be able to say (#60). Only the
+			 * control characters no field produces are dropped, here as well
+			 * as on the screen, because an import or WP-CLI reaches this
+			 * without passing through the screen.
+			 */
+			$value = (string) preg_replace( '/[\x00-\x08\x0A-\x1F\x7F]/', '', (string) ( $condition['value'] ?? '' ) );
 
 			if ( '' === $variable ) {
 				// An entirely blank row is a row somebody added and did not
@@ -300,6 +317,25 @@ abstract class Condition_Rule_Type_Base extends Rule_Type_Base {
 
 			if ( '' === trim( $value ) && ! in_array( $operator, self::VALUELESS_OPERATORS, true ) ) {
 				$errors[ "conditions.$index.value" ] = __( 'This comparison needs a value.', 'basic-firewall' );
+				continue;
+			}
+
+			/*
+			 * Refused rather than stored: the export writes YAML, which cannot
+			 * carry it, and a byte sequence no browser would send is a value
+			 * that arrived damaged, not one somebody typed.
+			 */
+			if ( 1 !== preg_match( '//u', $value ) ) {
+				$errors[ "conditions.$index.value" ] = __( 'This value is not valid UTF-8 text, so it could never match anything.', 'basic-firewall' );
+				continue;
+			}
+
+			if ( mb_strlen( $value, 'UTF-8' ) > self::MAX_VALUE_LENGTH ) {
+				$errors[ "conditions.$index.value" ] = sprintf(
+					/* translators: %d: the limit in characters. */
+					__( 'This value is longer than %d characters. Split it across several conditions, or reference a list instead.', 'basic-firewall' ),
+					self::MAX_VALUE_LENGTH
+				);
 				continue;
 			}
 

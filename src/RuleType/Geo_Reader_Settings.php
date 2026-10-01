@@ -30,7 +30,14 @@ use Kanopi\Firewall\Utility\GeoHeaderMap;
  * against a City database stops matching.
  *
  * The reader configuration is kept when the source is switched, so switching
- * back does not lose a database path or a license key.
+ * back does not lose a database path.
+ *
+ * There is no license key. One used to be stored here "for whatever downloads
+ * the database", and nothing ever read it: the library opens a local file and
+ * never downloads one, and its only use for a key is the MaxMind web-service
+ * client, which this plugin does not configure. A credential nothing reads is
+ * only a liability, so the field went and routine 13 deleted every stored
+ * one (#54).
  */
 trait Geo_Reader_Settings {
 
@@ -75,7 +82,7 @@ trait Geo_Reader_Settings {
 		$source = 'settings[reader][source]';
 
 		$fields = array(
-			'source'      => array(
+			'source'   => array(
 				'label'       => __( 'Where the answer comes from', 'basic-firewall' ),
 				'choices'     => array(
 					'database' => __( 'A MaxMind database, looked up here', 'basic-firewall' ),
@@ -83,25 +90,18 @@ trait Geo_Reader_Settings {
 				),
 				'description' => __( '<strong>A geo header is a claim, not a fact.</strong> Anything that can reach the site directly can send <code>CF-IPCountry: US</code> and pick its own country, so the firewall believes these headers only from a trusted proxy — answer the proxy question on the General screen, or this rule matches nothing.', 'basic-firewall' ),
 			),
-			'database'    => array(
+			'database' => array(
 				'label'       => __( 'MaxMind database', 'basic-firewall' ),
 				'description' => __( 'The path to the <code>.mmdb</code> file. A relative path resolves inside the firewall\'s private directory; an absolute one is used as given. MaxMind databases cannot be redistributed, so the plugin never ships one. A path to a file that is not there yet is saved with a warning — the download job may not have run.', 'basic-firewall' ),
 				'show_when'   => $source . ':database',
 			),
-			'license_key' => array(
-				'label'       => __( 'MaxMind license key', 'basic-firewall' ),
-				// Typed, never shown: see Rule_Edit_Screen::render_secret_row().
-				'secret'      => true,
-				'description' => __( 'Kept with the rule for whatever downloads the database. The firewall itself reads only the file.', 'basic-firewall' ),
-				'show_when'   => $source . ':database',
-			),
-			'edge'        => array(
+			'edge'     => array(
 				'label'       => __( 'CDN', 'basic-firewall' ),
 				'choices'     => self::known_edges(),
 				'description' => __( 'Only Cloudflare sends anything without being asked, and only the country. Every other field on every other CDN is opt-in at the edge — a field it did not send matches nothing rather than matching wrongly.', 'basic-firewall' ),
 				'show_when'   => $source . ':edge',
 			),
-			'headers'     => array(
+			'headers'  => array(
 				'label'       => __( 'Header mapping', 'basic-firewall' ),
 				'description' => sprintf(
 					/* translators: %s: the field names the library accepts. */
@@ -113,7 +113,7 @@ trait Geo_Reader_Settings {
 		);
 
 		if ( ! $this->reader_reads_edge() ) {
-			unset( $fields['source'], $fields['edge'], $fields['headers'], $fields['database']['show_when'], $fields['license_key']['show_when'] );
+			unset( $fields['source'], $fields['edge'], $fields['headers'], $fields['database']['show_when'] );
 		}
 
 		return array(
@@ -145,11 +145,10 @@ trait Geo_Reader_Settings {
 	protected function reader_defaults(): array {
 		return array(
 			'reader' => array(
-				'source'      => 'database',
-				'database'    => '',
-				'license_key' => '',
-				'edge'        => 'cloudflare',
-				'headers'     => array(),
+				'source'   => 'database',
+				'database' => '',
+				'edge'     => 'cloudflare',
+				'headers'  => array(),
 			),
 		);
 	}
@@ -175,13 +174,16 @@ trait Geo_Reader_Settings {
 			$source = 'database';
 		}
 
+		/*
+		 * Built from the keys it knows, so a `license_key` an older version
+		 * stored, or a document still carries, is not kept (#54).
+		 */
 		$reader = array(
-			'source'      => in_array( $source, array( 'database', 'edge' ), true ) ? $source : 'database',
+			'source'   => in_array( $source, array( 'database', 'edge' ), true ) ? $source : 'database',
 			// Kept whichever source is chosen, so switching back loses nothing.
-			'database'    => trim( (string) ( $raw['database'] ?? '' ) ),
-			'license_key' => trim( (string) ( $raw['license_key'] ?? '' ) ),
-			'edge'        => (string) ( $raw['edge'] ?? 'cloudflare' ),
-			'headers'     => array(),
+			'database' => trim( (string) ( $raw['database'] ?? '' ) ),
+			'edge'     => (string) ( $raw['edge'] ?? 'cloudflare' ),
+			'headers'  => array(),
 		);
 
 		if ( ! isset( self::known_edges()[ $reader['edge'] ] ) ) {
@@ -296,9 +298,7 @@ trait Geo_Reader_Settings {
 		 * No reader at all when there is no path, rather than a reader naming
 		 * nothing: the library treats an absent reader as "not configured" and
 		 * skips the rule, and a configured one it cannot open as a failure it
-		 * fails closed on. The license key is not written. Nothing in the
-		 * library reads it for a local database, and a credential in the
-		 * compiled file that nothing reads is only a liability.
+		 * fails closed on.
 		 */
 		if ( '' !== $database ) {
 			$metadata['reader'] = array(

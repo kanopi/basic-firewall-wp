@@ -38,6 +38,13 @@ final class Importer {
 	private array $problems = array();
 
 	/**
+	 * Settings the document carried that this version no longer stores, and why.
+	 *
+	 * @var list<string>
+	 */
+	private array $dropped = array();
+
+	/**
 	 * Stored credentials an import did not carry across, and why.
 	 *
 	 * @var list<string>
@@ -115,6 +122,8 @@ final class Importer {
 
 		$current  = Plugin::instance()->settings()->all();
 		$incoming = $parsed['settings'];
+
+		$this->dropped = array();
 
 		$result = $this->apply_to( $current, $incoming, $mode );
 
@@ -316,6 +325,8 @@ final class Importer {
 				continue;
 			}
 
+			$rule = $this->drop_retired_settings( $rule );
+
 			/*
 			 * An incoming rule is merged over the site's existing rule of the
 			 * same id, not substituted for it -- which is what carries a local
@@ -329,6 +340,41 @@ final class Importer {
 		}
 
 		return array_values( $by_id );
+	}
+
+	/**
+	 * Take out of an incoming rule a setting this version no longer has, and say so.
+	 *
+	 * The geolocation and ASN license key (#54): stored for years, read by
+	 * nothing, and removed along with every stored copy. A document exported
+	 * before that still carries it -- usually empty, since exports strip
+	 * credentials, but a hand-written one may hold a real key. The import
+	 * goes ahead without it rather than failing over a value that would
+	 * never have been used, and the preview names each rule it came out of
+	 * so the key is not believed to have been kept.
+	 *
+	 * @param array<string, mixed> $rule One incoming rule.
+	 *
+	 * @return array<string, mixed>
+	 */
+	private function drop_retired_settings( array $rule ): array {
+		if ( ! in_array( (string) ( $rule['type'] ?? '' ), array( 'geolocation', 'asn' ), true ) ) {
+			return $rule;
+		}
+
+		if ( ! is_array( $rule['settings']['reader'] ?? null ) || ! array_key_exists( 'license_key', $rule['settings']['reader'] ) ) {
+			return $rule;
+		}
+
+		unset( $rule['settings']['reader']['license_key'] );
+
+		$this->dropped[] = sprintf(
+			/* translators: %s: the rule identifier. */
+			__( 'rules.%s.settings.reader.license_key: the MaxMind license key is no longer stored. Nothing ever read it -- the firewall opens the database file and never downloads one -- so the rule is imported without it.', 'basic-firewall' ),
+			(string) ( $rule['id'] ?? '' )
+		);
+
+		return $rule;
 	}
 
 	/**
@@ -634,6 +680,7 @@ final class Importer {
 			'rules_removed'        => array_values( array_diff( $current_ids, $result_ids ) ),
 			'sections_changed'     => $sections,
 			'credentials_withheld' => $this->withheld,
+			'settings_dropped'     => $this->dropped,
 
 			/*
 			 * Credentials the document's advanced YAML carries in the clear.

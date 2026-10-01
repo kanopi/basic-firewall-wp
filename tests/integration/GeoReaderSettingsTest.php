@@ -10,6 +10,7 @@ declare( strict_types = 1 );
 namespace Kanopi\BasicFirewall\Tests\integration;
 
 use Kanopi\BasicFirewall\Plugin;
+use Kanopi\BasicFirewall\Transfer\Importer;
 use Kanopi\Firewall\Firewall;
 use Symfony\Component\Yaml\Yaml;
 
@@ -71,11 +72,10 @@ final class GeoReaderSettingsTest extends Settings_Snapshot {
 	}
 
 	/**
-	 * A database reader is on the edit screen, with what is stored -- except the license key.
+	 * A database reader is on the edit screen, with what is stored.
 	 *
-	 * The key is a credential, so its field is rendered empty with a box to
-	 * remove the stored one, and the key itself is nowhere in the page. It
-	 * used to be pre-filled.
+	 * And no license key field: nothing ever read the key, so it is gone
+	 * (#54) -- from the screen, and from storage.
 	 */
 	public function test_the_edit_screen_renders_the_reader(): void {
 		$this->given_rule( $this->rule( 'geolocation', $this->database_reader() ) );
@@ -84,9 +84,9 @@ final class GeoReaderSettingsTest extends Settings_Snapshot {
 
 		$this->assertSame( 'database', $fields['settings[reader][source]'] ?? null );
 		$this->assertSame( 'geoip/GeoLite2-City.mmdb', $fields['settings[reader][database]'] ?? null );
-		$this->assertSame( '', $fields['settings[reader][license_key]'] ?? null, 'The license key field was filled in.' );
-		$this->assertStringNotContainsString( 'LICENSE-KEY', $this->rendered_html, 'The license key is in the page.' );
-		$this->assertStringContainsString( 'name="clear_secret[reader][license_key]"', $this->rendered_html );
+		$this->assertArrayNotHasKey( 'settings[reader][license_key]', $fields, 'The license key field is still on the screen.' );
+		$this->assertStringNotContainsString( 'license_key', $this->rendered_html );
+		$this->assertStringNotContainsString( 'MaxMind license key', $this->rendered_html );
 	}
 
 	/**
@@ -111,11 +111,10 @@ final class GeoReaderSettingsTest extends Settings_Snapshot {
 	 */
 	public function test_saving_through_the_screen_keeps_an_edge_reader(): void {
 		$reader = array(
-			'source'      => 'edge',
-			'database'    => 'geoip/kept-for-later.mmdb',
-			'license_key' => '',
-			'edge'        => 'custom',
-			'headers'     => array(
+			'source'   => 'edge',
+			'database' => 'geoip/kept-for-later.mmdb',
+			'edge'     => 'custom',
+			'headers'  => array(
 				'country'           => 'X-Geo-Country',
 				'location.latitude' => 'X-Geo-Lat',
 			),
@@ -298,17 +297,79 @@ final class GeoReaderSettingsTest extends Settings_Snapshot {
 	}
 
 	/**
+	 * An imported document that still carries a license key is imported without it, and says so (#54).
+	 *
+	 * A document exported before the key was removed, or one written by hand,
+	 * is not refused over a value nothing would ever have read.
+	 */
+	public function test_an_import_drops_a_license_key_with_a_note(): void {
+		$this->given_settings( array( 'enabled' => true ) );
+
+		$geo                                      = $this->rule( 'geolocation', $this->database_reader() );
+		$geo['settings']['reader']['license_key'] = 'IMPORTED-KEY-0b7d';
+		$net                                      = $this->rule( 'asn', $this->database_reader() );
+		$net['id']                                = 'net';
+		$net['settings']['reader']['license_key'] = '';
+		$document                                 = Yaml::dump( array( 'rules' => array( $geo, $net ) ), 8, 2 );
+
+		$importer = new Importer();
+		$preview  = $importer->preview( $document, 'merge' );
+
+		$this->assertTrue( $preview['ok'], (string) $preview['error'] );
+
+		$dropped = implode( "\n", (array) $preview['summary']['settings_dropped'] );
+
+		$this->assertStringContainsString( 'rules.geo.settings.reader.license_key', $dropped );
+		$this->assertStringContainsString( 'rules.net.settings.reader.license_key', $dropped, 'An empty key is still a key the document asked for.' );
+		$this->assertStringNotContainsString( 'IMPORTED-KEY-0b7d', $dropped, 'The note repeats the key.' );
+
+		$result = $importer->import( $document, 'merge' );
+
+		$this->assertTrue( $result['ok'], (string) $result['error'] );
+		$this->assertSame( array(), $result['problems'] );
+
+		Plugin::instance()->settings()->flush();
+
+		$stored = array_column( (array) Plugin::instance()->settings()->get( 'rules', array() ), null, 'id' );
+
+		$this->assertSame( $this->database_reader(), $stored['geo']['settings']['reader'] ?? null );
+		$this->assertSame( $this->database_reader(), $stored['net']['settings']['reader'] ?? null );
+		$this->assertStringNotContainsString( 'IMPORTED-KEY-0b7d', (string) wp_json_encode( get_option( 'basic_firewall_settings' ) ) );
+	}
+
+	/**
+	 * A document without the key gets no note.
+	 */
+	public function test_an_import_without_a_license_key_has_no_note(): void {
+		$this->given_settings( array( 'enabled' => true ) );
+
+		$preview = ( new Importer() )->preview( Yaml::dump( array( 'rules' => array( $this->rule( 'geolocation', $this->database_reader() ) ) ), 8, 2 ), 'merge' );
+
+		$this->assertTrue( $preview['ok'] );
+		$this->assertSame( array(), $preview['summary']['settings_dropped'] );
+	}
+
+	/**
+	 * The license key is no longer a credential the type declares, so the export has nothing to say about it.
+	 */
+	public function test_the_license_key_is_not_a_declared_credential(): void {
+		foreach ( array( 'geolocation', 'asn' ) as $type ) {
+			$this->assertNotContains( 'reader.license_key', Plugin::instance()->rule_types()->get( $type )->secret_settings() );
+			$this->assertArrayNotHasKey( 'license_key', Plugin::instance()->rule_types()->get( $type )->default_settings()['reader'] );
+		}
+	}
+
+	/**
 	 * A reader on a local database, as stored.
 	 *
 	 * @return array<string, mixed>
 	 */
 	private function database_reader(): array {
 		return array(
-			'source'      => 'database',
-			'database'    => 'geoip/GeoLite2-City.mmdb',
-			'license_key' => 'LICENSE-KEY',
-			'edge'        => 'cloudflare',
-			'headers'     => array(),
+			'source'   => 'database',
+			'database' => 'geoip/GeoLite2-City.mmdb',
+			'edge'     => 'cloudflare',
+			'headers'  => array(),
 		);
 	}
 

@@ -50,7 +50,7 @@ final class Advanced_Screen extends Screen {
 			return;
 		}
 
-		$yaml = $this->posted_textarea( 'advanced_yaml' );
+		$yaml = $this->posted_typed_textarea( 'advanced_yaml' );
 
 		if ( '' !== trim( $yaml ) ) {
 			try {

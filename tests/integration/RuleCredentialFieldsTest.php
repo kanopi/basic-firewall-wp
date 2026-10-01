@@ -16,13 +16,13 @@ use Kanopi\Firewall\Plugins\Url as LibraryUrl;
 /**
  * Render, post exactly what was rendered, and the stored key is unchanged and never in the page.
  *
- * The geolocation and ASN license key and the AbuseIPDB API key were rendered
- * into their fields with their values, so they sat in the page source, the
- * browser's form cache and every screenshot. They are now `secret` fields: an
- * empty password input, blank keeps what is stored, a box removes it.
+ * The AbuseIPDB API key (and the geolocation and ASN license key, since
+ * removed: #54) was rendered into its field with its value, so it sat in the
+ * page source, the browser's form cache and every screenshot. It is now a
+ * `secret` field: an empty password input, blank keeps what is stored, a box
+ * removes it.
  *
  * @covers \Kanopi\BasicFirewall\Admin\Screen\Rule_Edit_Screen
- * @covers \Kanopi\BasicFirewall\RuleType\Geo_Reader_Settings
  * @covers \Kanopi\BasicFirewall\RuleType\Types\Abuse_Ipdb
  */
 final class RuleCredentialFieldsTest extends Settings_Snapshot {
@@ -80,9 +80,7 @@ final class RuleCredentialFieldsTest extends Settings_Snapshot {
 	 */
 	public static function credentials(): array {
 		return array(
-			'geolocation license key' => array( 'geolocation', 'settings[reader][license_key]', array( 'reader', 'license_key' ) ),
-			'ASN license key'         => array( 'asn', 'settings[reader][license_key]', array( 'reader', 'license_key' ) ),
-			'AbuseIPDB API key'       => array( 'abuse_ipdb', 'settings[api_key]', array( 'api_key' ) ),
+			'AbuseIPDB API key' => array( 'abuse_ipdb', 'settings[api_key]', array( 'api_key' ) ),
 		);
 	}
 
@@ -145,16 +143,6 @@ final class RuleCredentialFieldsTest extends Settings_Snapshot {
 
 		$this->assertTrue( $this->save_as_rendered( 'credential', array( $control => '%env(ROTATED_KEY)%' ) ) );
 		$this->assertSame( '%env(ROTATED_KEY)%', $this->stored_key( $path ) );
-	}
-
-	/**
-	 * The box removes a license key, which nothing requires.
-	 */
-	public function test_the_box_removes_a_license_key(): void {
-		$this->given_rule( 'geolocation' );
-
-		$this->assertTrue( $this->save_as_rendered( 'credential', array( 'clear_secret[reader][license_key]' => '1' ) ) );
-		$this->assertSame( '', $this->stored_key( array( 'reader', 'license_key' ) ) );
 	}
 
 	/**
@@ -277,27 +265,11 @@ final class RuleCredentialFieldsTest extends Settings_Snapshot {
 	private function given_rule( string $type ): void {
 		$settings = Plugin::instance()->rule_types()->get( $type )?->default_settings() ?? array();
 
-		if ( 'abuse_ipdb' === $type ) {
-			$settings['api_key'] = self::KEY;
-		} else {
-			$settings['reader']['database']    = 'geoip/' . ( 'asn' === $type ? 'GeoLite2-ASN' : 'GeoLite2-City' ) . '.mmdb';
-			$settings['reader']['license_key'] = self::KEY;
-		}
-
-		if ( 'abuse_ipdb' !== $type ) {
-			$settings['conditions'] = array(
-				array(
-					'variable' => 'asn' === $type ? 'asn' : 'country.iso_code',
-					'operator' => 'equals',
-					'value'    => 'asn' === $type ? '64500' : 'ZZ',
-					'negate'   => false,
-				),
-			);
-		}
+		$settings['api_key'] = self::KEY;
 
 		$this->store_rule( $type, $settings );
 
-		$this->assertSame( self::KEY, $this->stored_key( 'abuse_ipdb' === $type ? array( 'api_key' ) : array( 'reader', 'license_key' ) ), 'The fixture did not store the key as given.' );
+		$this->assertSame( self::KEY, $this->stored_key( array( 'api_key' ) ), 'The fixture did not store the key as given.' );
 	}
 
 	/**

@@ -98,7 +98,7 @@ final class Rules_Screen extends Screen {
 		$yaml = $this->uploaded_document();
 
 		if ( '' === trim( $yaml ) ) {
-			$yaml = $this->posted_textarea( 'document' );
+			$yaml = $this->posted_typed_textarea( 'document' );
 		}
 
 		if ( '' === trim( $yaml ) ) {
