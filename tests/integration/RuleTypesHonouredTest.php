@@ -603,6 +603,8 @@ final class RuleTypesHonouredTest extends Honoured_Settings {
 		'post.log'       => array( 'equals', 'admin' ),
 		'header.referer' => array( 'contains', 'evil.test' ),
 		'cookie.session' => array( 'equals', 'abc123' ),
+		'query_count'    => array( 'equals', '2' ),
+		'query_count.x'  => array( 'equals', '1' ),
 	);
 
 	/**
@@ -817,6 +819,128 @@ final class RuleTypesHonouredTest extends Honoured_Settings {
 			'not one of'        => array( 'in', '80, 443', false ),
 			'greater than'      => array( 'gt', '8000', true ),
 		);
+	}
+
+	/**
+	 * A request carrying exactly this query string, as a web server passes it.
+	 *
+	 * Request::create() rebuilds the query through parse_str(), which keeps
+	 * only the last of `f=a&f=b` and decodes `f%5B0%5D` -- the very shapes the
+	 * count has to see. A server hands PHP the raw string in QUERY_STRING, and
+	 * that is what the library counts, so that is what is set here.
+	 *
+	 * @param string $path  Path.
+	 * @param string $query Raw query string, without the question mark.
+	 * @param string $ip    Client address.
+	 */
+	private static function raw_query_request( string $path, string $query, string $ip = '203.0.113.200' ): Request {
+		$request = self::request( '' === $query ? $path : $path . '?' . $query, $ip );
+
+		$request->server->set( 'QUERY_STRING', $query );
+
+		return $request;
+	}
+
+	/**
+	 * Every way the release notes say a client can send four facets.
+	 *
+	 * @return array<string, array{0: string, 1: int}> Raw query, and how many values of f it holds.
+	 */
+	public static function facet_queries(): array {
+		return array(
+			'indexed keys'       => array( 'f[0]=type:article&f[1]=tag:a&f[2]=tag:b&f[3]=year:2026', 4 ),
+			'empty brackets'     => array( 'f[]=a&f[]=b&f[]=c&f[]=d', 4 ),
+			'sparse keys'        => array( 'f[0]=a&f[7]=b&f[19]=c&f[400]=d', 4 ),
+			'named keys'         => array( 'f[type]=a&f[tag]=b&f[year]=c&f[lang]=d', 4 ),
+			'repeated name'      => array( 'f=a&f=b&f=c&f=d', 4 ),
+			'encoded brackets'   => array( 'f%5B0%5D=a&f%5B1%5D=b&f%5B2%5D=c&f%5B3%5D=d', 4 ),
+			'mixed, with a q'    => array( 'f[0]=a&q=search&f[]=b&f=c&f%5B9%5D=d', 4 ),
+			'three facets'       => array( 'f[0]=a&f[1]=b&f[2]=c', 3 ),
+			'a cased F is not f' => array( 'F[0]=a&F[1]=b&F[2]=c&F[3]=d', 0 ),
+			'no f at all'        => array( 'q=search&page=2', 0 ),
+			'no query string'    => array( '', 0 ),
+		);
+	}
+
+	/**
+	 * A facet count is compared as the library counts it, however the facets are written.
+	 *
+	 * Each condition is saved through the settings, compiled, loaded by the
+	 * library and evaluated -- so `equals 4` matching proves the value reached
+	 * the library as the integer the count is compared with strictly, and the
+	 * shapes prove nothing in between normalised the query first.
+	 *
+	 * @dataProvider facet_queries
+	 *
+	 * @param string $query Raw query string.
+	 * @param int    $count Values of f it holds.
+	 */
+	public function test_a_query_count_counts_every_way_of_sending_a_facet( string $query, int $count ): void {
+		$conditions = array(
+			'gt-3'     => array( 'gt', '3', $count > 3 ),
+			'equals-4' => array( 'equals', '4', 4 === $count ),
+			'not-4'    => array( 'not_equals', '4', 4 !== $count ),
+			'in-4-5'   => array( 'in', '4, 5', in_array( $count, array( 4, 5 ), true ) ),
+			'lte-3'    => array( 'lte', '3', $count <= 3 ),
+			'equals-0' => array( 'equals', '0', 0 === $count ),
+		);
+
+		$rules = array();
+
+		foreach ( $conditions as $id => list( $operator, $value ) ) {
+			$rules[] = $this->rule(
+				'facets-' . $id,
+				'url',
+				array(
+					'match_type' => 'all',
+					'conditions' => array(
+						self::condition( 'path', 'starts_with', '/search' ),
+						self::condition( 'query_count.f', $operator, $value ),
+					),
+				),
+				array( 'response' => 'challenge' )
+			);
+		}
+
+		$firewall = $this->build( array( 'rules' => $rules ) );
+
+		foreach ( $conditions as $id => list( $operator, $value, $matches ) ) {
+			$plugin = $this->plugin_named( $firewall, 'facets-' . $id );
+
+			$this->assertSame( $matches, (bool) $plugin->evaluate( self::raw_query_request( '/search', $query ) ), "query_count.f $operator $value on ?$query (count $count)." );
+			$this->assertFalse( (bool) $plugin->evaluate( self::raw_query_request( '/about', $query ) ), "query_count.f $operator $value matched off the search path." );
+		}
+
+		$compiled = $this->compiled_rule( 'facets-equals-4' );
+
+		$this->assertSame( 4, $compiled['config'][0]['rules'][1]['value'], 'An equality count reached the library as a string, which it never equals.' );
+		$this->assertSame( array( 4, 5 ), $this->compiled_rule( 'facets-in-4-5' )['config'][0]['rules'][1]['value'] );
+	}
+
+	/**
+	 * `query_count` with no name counts every parameter the client sent.
+	 */
+	public function test_a_bare_query_count_counts_every_parameter(): void {
+		$firewall = $this->build(
+			array(
+				'rules' => array(
+					$this->rule( 'params-gt-3', 'url', array( 'conditions' => array( self::condition( 'query_count', 'gt', '3' ) ) ) ),
+					$this->rule( 'params-equals-4', 'url', array( 'conditions' => array( self::condition( 'query_count', 'equals', '4' ) ) ) ),
+				),
+			)
+		);
+
+		$gt     = $this->plugin_named( $firewall, 'params-gt-3' );
+		$equals = $this->plugin_named( $firewall, 'params-equals-4' );
+
+		$four = self::raw_query_request( '/', 'a=1&b=2&f[]=x&f=y' );
+		$two  = self::raw_query_request( '/', 'a=1&b=2' );
+
+		$this->assertTrue( (bool) $gt->evaluate( $four ) );
+		$this->assertTrue( (bool) $equals->evaluate( $four ) );
+		$this->assertFalse( (bool) $gt->evaluate( $two ) );
+		$this->assertFalse( (bool) $equals->evaluate( $two ) );
+		$this->assertFalse( (bool) $gt->evaluate( self::raw_query_request( '/', '' ) ) );
 	}
 
 	/**

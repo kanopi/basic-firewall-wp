@@ -122,6 +122,102 @@ final class ScreenRoundTripTest extends Settings_Snapshot {
 	}
 
 	/**
+	 * A query count keeps its name, its case and its bare form through the rule screen.
+	 *
+	 * `query_count` is the one family that is also a variable on its own, so
+	 * the screen renders it as the family with the name in the second column,
+	 * or with that column blank -- and a blank name must save as the bare
+	 * count, not be refused as a family without a name.
+	 */
+	public function test_a_query_count_rule_saves_unchanged(): void {
+		$conditions = array(
+			array(
+				'variable'       => 'path',
+				'operator'       => 'starts_with',
+				'value'          => '/search',
+				'negate'         => false,
+				'case_sensitive' => false,
+			),
+			array(
+				'variable'       => 'query_count.f',
+				'operator'       => 'gt',
+				'value'          => '3',
+				'negate'         => false,
+				'case_sensitive' => false,
+			),
+			array(
+				'variable'       => 'query_count.Facet',
+				'operator'       => 'in',
+				'value'          => '4, 5',
+				'negate'         => false,
+				'case_sensitive' => false,
+			),
+			array(
+				'variable'       => 'query_count',
+				'operator'       => 'equals',
+				'value'          => '4',
+				'negate'         => false,
+				'case_sensitive' => false,
+			),
+		);
+
+		$this->given_settings( array( 'enabled' => true ) );
+		Plugin::instance()->settings()->set(
+			'rules',
+			array(
+				array(
+					'id'       => 'facets',
+					'type'     => 'url',
+					'label'    => 'Facets',
+					'enabled'  => true,
+					'response' => 'challenge',
+					'settings' => array(
+						'match_type' => 'all',
+						'conditions' => $conditions,
+						'sources'    => array(),
+					),
+				),
+			)
+		);
+
+		$fields = $this->rendered_fields( 'facets' );
+
+		$this->assertSame( 'query_count', $fields['settings[conditions][1][variable]'] ?? null, 'The count was not rendered as its family.' );
+		$this->assertSame( 'f', $fields['settings[conditions][1][variable_name]'] ?? null );
+		$this->assertSame( 'Facet', $fields['settings[conditions][2][variable_name]'] ?? null, 'The name lost its case on the screen.' );
+		$this->assertSame( 'query_count', $fields['settings[conditions][3][variable]'] ?? null );
+		$this->assertSame( '', $fields['settings[conditions][3][variable_name]'] ?? null, 'The bare count was rendered with a name.' );
+
+		for ( $save = 0; $save < 2; $save++ ) {
+			$this->assertTrue( $this->save_as_rendered( 'facets' ), 'The screen refused its own rendering of the rule.' );
+
+			Plugin::instance()->settings()->flush();
+
+			$rules = (array) Plugin::instance()->settings()->get( 'rules', array() );
+
+			$this->assertSame( $conditions, $rules[0]['settings']['conditions'] );
+		}
+
+		// Choosing the count and naming a parameter, as a person would.
+		$this->assertTrue(
+			$this->save_as_rendered(
+				'facets',
+				array(
+					'settings[conditions][3][variable_name]' => 'tag',
+					'settings[conditions][3][value]' => '2',
+				)
+			)
+		);
+
+		Plugin::instance()->settings()->flush();
+
+		$rules = (array) Plugin::instance()->settings()->get( 'rules', array() );
+
+		$this->assertSame( 'query_count.tag', $rules[0]['settings']['conditions'][3]['variable'] );
+		$this->assertSame( '2', $rules[0]['settings']['conditions'][3]['value'] );
+	}
+
+	/**
 	 * A vulnerability score rule saves through its screen unchanged.
 	 *
 	 * Every field is a textarea or a text box over a structure -- levels and
