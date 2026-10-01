@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "c429809922b88b4d7fde8a3c44501673",
+    "content-hash": "032f677f269b22b6096447811d86c3b1",
     "packages": [
         {
             "name": "composer/ca-bundle",
@@ -549,16 +549,16 @@
         },
         {
             "name": "kanopi/firewall",
-            "version": "v2.35.1",
+            "version": "v2.36.0",
             "source": {
                 "type": "git",
                 "url": "https://github.com/kanopi/firewall.git",
-                "reference": "ed3dd39566a42422e63aa11ac67854fe59592cda"
+                "reference": "ecb0991908bddc0287ce19661c4ecd5bc40b384a"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/kanopi/firewall/zipball/ed3dd39566a42422e63aa11ac67854fe59592cda",
-                "reference": "ed3dd39566a42422e63aa11ac67854fe59592cda",
+                "url": "https://api.github.com/repos/kanopi/firewall/zipball/ecb0991908bddc0287ce19661c4ecd5bc40b384a",
+                "reference": "ecb0991908bddc0287ce19661c4ecd5bc40b384a",
                 "shasum": ""
             },
             "require": {
@@ -626,9 +626,9 @@
             "description": "Evaluate the requests for malicious items.",
             "support": {
                 "issues": "https://github.com/kanopi/firewall/issues",
-                "source": "https://github.com/kanopi/firewall/tree/v2.35.1"
+                "source": "https://github.com/kanopi/firewall/tree/v2.36.0"
             },
-            "time": "2026-09-30T19:34:11+00:00"
+            "time": "2026-10-01T05:12:19+00:00"
         },
         {
             "name": "matomo/device-detector",
