@@ -7,6 +7,17 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.0.0-rc.6]
+
+**Sixth release candidate for 1.0.0.** Published as a GitHub pre-release, so
+the `releases/latest/download` URL does not serve it; install it by its own URL.
+The vulnerability score rule type is back, rebuilt on the library's own
+scoring model (#52); latitude/longitude equality matches against a database
+(#49); condition values are stored as typed, so `<` and `%xx` survive a save
+(#60); and the unused geolocation license key is removed (#54). Read *What
+changes on upgrade* for the two settings rewrites. What changed since
+1.0.0-rc.5 is below.
+
 ### What changes on upgrade
 
 - **Vulnerability score rules saved by a pre-release build are translated**
