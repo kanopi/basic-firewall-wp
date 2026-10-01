@@ -4,7 +4,7 @@ Tags: security, firewall, rate limiting, bot protection, waf
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 1.0.0-rc.6
+Stable tag: 1.0.0-rc.7
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -134,6 +134,11 @@ proxy too.
 4. Blocked clients, with an address lookup that works on every backend.
 
 == Changelog ==
+
+= 1.0.0-rc.7 =
+* Bundles kanopi/firewall 2.36.1.
+* Request / URL rules can count query parameters: query_count.<name> (how many values a parameter was sent with) and query_count (all parameters), for capping facet crawling; also usable as a rate-limit key.
+* Equality on a number compares as a number, so a referenced list compared with port or query_count works as written; on an older library the plugin refuses such a rule rather than letting it fail silently.
 
 = 1.0.0-rc.6 =
 * The vulnerability score rule type is back, rebuilt on the library's risk levels and scoring signals; rules saved by a pre-release build are translated where they can be and switched off where they cannot.

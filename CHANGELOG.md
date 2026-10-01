@@ -7,6 +7,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.0.0-rc.7]
+
+**Seventh release candidate for 1.0.0.** Published as a GitHub pre-release, so
+the `releases/latest/download` URL does not serve it; install it by its own URL.
+It bundles kanopi/firewall 2.36.1: Request / URL rules can count query
+parameters with `query_count` (for capping facet crawling), and equality on a
+number compares as a number, so a referenced list on `port` or `query_count`
+works as written. Read *What changes on upgrade*. What changed since
+1.0.0-rc.6 is below.
+
 ### What changes on upgrade
 
 - **Equality on a number from a referenced list starts working.** kanopi/firewall
