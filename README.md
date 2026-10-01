@@ -686,9 +686,10 @@ rebuilt on the library's own scoring model; see
 
 ### What a Request / URL condition reads
 
-`method`, `host`, `path`, `scheme` and `port`, and a member of a family named in
-the second column: `query.<parameter>`, `post.<field>`, `header.<name>` and
-`cookie.<name>`. Those are what the library resolves; anything else resolves to
+`method`, `host`, `path`, `scheme`, `port` and `query_count`, and a member of a
+family named in the second column: `query.<parameter>`,
+`query_count.<parameter>`, `post.<field>`, `header.<name>` and `cookie.<name>`.
+Those are what the library resolves; anything else resolves to
 nothing, and a condition comparing against nothing never matches — or, negated,
 always does, which on a block rule is every visitor.
 
@@ -703,6 +704,48 @@ always does, which on a block rule is every visitor.
   on the rule, on the Status screen and in Site Health until you edit it out.
 - **`port` compares as a number** with *is equal to*, *is not equal to* and *is
   one of*, because the library holds it as one and compares strictly.
+- **`query_count.<parameter>` is how many values the client sent** for one query
+  parameter, and `query_count` with the Name left blank is how many parameters
+  in all (`kanopi/firewall` 2.36.0). It is counted from the raw query string, so
+  every way of sending a value counts the same:
+
+  | Query | `query_count.f` |
+  |---|---|
+  | `f[0]=…&f[1]=…&f[2]=…&f[3]=…` | 4 |
+  | `f[]=` ×4, sparse keys `f[0]`/`f[7]`/…, named keys `f[x]`/… | 4 |
+  | `f=a&f=b&f=c&f=d` (PHP itself keeps only one) | 4 |
+  | `f%5B0%5D=…` ×4 (encoded brackets) | 4 |
+  | no `f` | 0 |
+
+  `query.f` cannot do this: it resolves to nothing once `f` arrives as a list.
+  The name is case-sensitive, as the application reads it. A count is compiled
+  as a whole number for *is equal to*, *is not equal to*, *is one of* and the
+  greater/less-than comparisons, since the library compares equality strictly,
+  and a value that is not a whole number is refused on save.
+
+#### Stop facet crawling
+
+Bots walk search and listing pages through every combination of facets —
+`?f[0]=type:article&f[1]=tag:a&f[2]=tag:b&f[3]=year:2026` — and each combination
+is an uncacheable search. People rarely apply more than two or three. A Request /
+URL rule, match **all**, response **challenge**:
+
+| Look at | Name | Comparison | Value |
+|---|---|---|---|
+| `path` | | starts with | `/search` |
+| `query_count` | `f` | is greater than | `3` |
+
+- **Use challenge, not block.** A block also records the client and bans the
+  address, so a person who really did apply four facets is shut out for the ban
+  period. Somebody with five facets can pass a challenge. If you do use
+  **block**, set **Record the client** to **No**, so the request is refused
+  without a ban.
+- **Pair it with an address-keyed rate limit on the search path**, such as
+  `/search* 60 60` in a rate limit rule, for crawlers that stay under the cap
+  and request thousands of combinations instead.
+- Drupal's Search API names its facets `f`; use whatever your search plugin
+  names its parameter. Facets packed into one value (`filter_color=red,blue`)
+  are one parameter; match those with a regular expression on `query.<name>`.
 
 #### `path` is the file the web server ran
 
@@ -1237,11 +1280,13 @@ split the Drupal module uses:
 | `header` | `x-api-key` | the `X-Api-Key` request header |
 | `cookie` | `wordpress_logged_in` | that cookie |
 | `post` | `log` | that posted field |
-| `server` | `request_method` | that server variable |
+| `query_count` | `f` | how many values of `f` were sent; blank, how many parameters |
 
-The Name column appears only for those five families, and a family without a
-name is refused — `query` on its own reads nothing, so a condition on it would
-save, report itself active, and match nothing.
+The Name column appears only for those families, and a family without a name
+is refused — `query` on its own reads nothing, so a condition on it would save,
+report itself active, and match nothing. `query_count` is the exception: blank,
+it counts every parameter, so the bare name is stored as it is. A name written
+with nothing after the dot (`query_count.` from WP-CLI or an import) is refused.
 
 Stored as one string, `query.test`, which is what the library reads and what
 every export, import and CLI command already carries; the two columns are a
@@ -1524,21 +1569,26 @@ rejects the ambiguous form.
 #### Counting something other than the address
 
 A fourth field on a limit line names what to count, comma separated, using the
-vocabulary the Request / URL rule uses — `path`, `method`, `host`, `header.x`,
-`post.y`, `cookie.z`, `query.q` — plus `client_ip` and `rule_pattern`, which are
-what a line without one counts:
+vocabulary the Request / URL rule uses — `path`, `method`, `host`, `scheme`,
+`port`, `query`, `query_count`, `header.x`, `post.y`, `cookie.z`, `query.q`,
+`query_count.q` — plus `client_ip` and `rule_pattern`, which are what a line
+without one counts:
 
 ```
-/wp-login.php 5 300 post.log        # the account being tried, from anywhere
-/wp-json/* 100 60 client_ip,path    # each endpoint, rather than the API as a whole
+/wp-login.php 5 300 post.log                  # the account being tried, from anywhere
+/wp-json/* 100 60 client_ip,path              # each endpoint, rather than the API as a whole
+/search* 30 60 client_ip,query_count.f        # each address, per number of facets applied
 ```
+
+`query_count.f` is the number of values of `f` the request sent, counted as the
+URL rule counts it (`kanopi/firewall` 2.36.0).
 
 `log` is the username field on WordPress's own login form. Arrived in
 `kanopi/firewall` 2.27.0, which the plugin's ^2.34.1 requirement covers.
 
 The prefix (`post`, `POST`) and a header name are read in any case: headers are
 case-insensitive, so `header.User-Agent` and `header.user-agent` are the same
-count. A form field, cookie or query name is **case-sensitive** and is read
+count. A form field, cookie, query or query count name is **case-sensitive** and is read
 exactly as written — `post.userName` counts the field `userName`, not
 `username` — because that is how the form, the browser and PHP all name it.
 That needs `kanopi/firewall` 2.33.2; before it the library lower-cased every

@@ -7,6 +7,29 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed
+
+- **Requires and bundles kanopi/firewall 2.36.0** (from 2.35.1). Its one
+  addition, the `query_count` variable, is opt-in: nothing changes for a
+  configuration that does not use it.
+
+### Added
+
+- **`query_count.<name>` and `query_count` in Request / URL rules.** How many
+  values the client sent for one query parameter, or with the Name left
+  blank, how many parameters in all — counted from the raw query string, so
+  `f[0]=`, `f[]=`, sparse or named keys, a repeated `f=` and encoded brackets
+  all count the same. Offered on the rule screen as one family with an
+  optional name; `query_count.` with nothing after the dot is refused. The
+  library compares equality strictly, so a count is compiled as an integer
+  for *is equal to*, *is not equal to* and *is one of* (each entry), and for
+  the greater/less-than comparisons too; a value that is not a whole number is
+  refused on save. The README has a *Stop facet crawling* example
+  (`path` starts with `/search` and `query_count` / `f` is greater than 3,
+  response **challenge**).
+- **`query_count` and `query_count.<name>` as rate-limit key components**,
+  the name kept in the case it was written, as the library reads it.
+
 ## [1.0.0-rc.6]
 
 **Sixth release candidate for 1.0.0.** Published as a GitHub pre-release, so
