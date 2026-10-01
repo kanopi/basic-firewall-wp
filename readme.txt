@@ -4,7 +4,7 @@ Tags: security, firewall, rate limiting, bot protection, waf
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 1.0.0-rc.5
+Stable tag: 1.0.0-rc.6
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -134,6 +134,12 @@ proxy too.
 4. Blocked clients, with an address lookup that works on every backend.
 
 == Changelog ==
+
+= 1.0.0-rc.6 =
+* The vulnerability score rule type is back, rebuilt on the library's risk levels and scoring signals; rules saved by a pre-release build are translated where they can be and switched off where they cannot.
+* Latitude/longitude equality conditions now match against a MaxMind database.
+* Condition values are stored as typed: < and percent-encoded characters survive a save, with whitespace at either end trimmed.
+* The unused geolocation license key field is removed, and any stored value is deleted on upgrade.
 
 = 1.0.0-rc.5 =
 * Diagnostics for the wp-config.php early path: the last web request's report and the last anomaly (including failed rules and mode or compiled-file mismatches) in wp basic-firewall status, the new wp basic-firewall early-report and Site Health.
