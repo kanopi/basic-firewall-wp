@@ -20,6 +20,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - **Latitude/longitude *is equal to*, *is not equal to* and *is one of*
   start working against a MaxMind database** (#49). *Is not equal to* stops
   matching every visitor.
+- **The geolocation and ASN license key is deleted** (schema 13, #54). Every
+  stored copy is removed from the rules that held one; nothing read it, so no
+  rule changes what it matches.
 
 ### Added
 
@@ -53,6 +56,28 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   screen.** The textarea sanitiser stripped both from the vulnerability
   score's patterns on every save; fields a type marks `verbatim` are now
   read as typed, and still checked by the type's validator.
+
+- **Condition values are stored as typed** (fixes #60). The rule screen put
+  every condition value through the textarea sanitiser, which turns `<` into
+  `&lt;` or strips it with whatever follows, and deletes every `%xx`
+  sequence, so a URL rule on `query.q contains %3Cscript` was stored as a
+  rule on `script` and one on `path contains %2e` was refused for having no
+  value. Condition values on every condition rule type (URL, user agent,
+  geolocation, ASN, edge signal), the fields of a referenced list, and
+  rate-limit lines are now read as typed, with only control characters
+  removed; the rule type's validator checks them (operator, regex, UTF-8, at
+  most 4,096 characters). The pasted document on the Import and Rules
+  screens, the Advanced YAML box and the Test screen's path, user agent,
+  headers and body are read the same way. A value that contains an entity,
+  such as `&lt;`, now survives being saved again untouched.
+
+### Removed
+
+- **The MaxMind license key field on geolocation and ASN rules** (fixes #54).
+  It was kept "for whatever downloads the database", and nothing did: the
+  firewall only ever opens a local database. The stored value is deleted on
+  upgrade (see above), and an imported document that still carries it is
+  imported without it, with a note in the preview.
 
 ## [1.0.0-rc.5]
 
