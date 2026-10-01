@@ -144,6 +144,70 @@ abstract class Screen {
 	}
 
 	/**
+	 * A POSTed textarea exactly as typed, less control characters.
+	 *
+	 * For a box whose content is a document the firewall parses -- the
+	 * Advanced YAML, an import, a pasted rule -- rather than prose. The
+	 * textarea sanitiser strips anything tag-shaped and deletes every
+	 * percent-encoded octet, so a pattern such as `(<|%3c)script` arrived as
+	 * `(&lt;|)script`: a different rule, stored without a word (#60). What
+	 * is read here is parsed and validated, never printed unescaped.
+	 *
+	 * @param string $key Field name.
+	 */
+	protected function posted_typed_textarea( string $key ): string {
+		// phpcs:ignore WordPress.Security.NonceVerification.Missing -- verify() is called by the caller.
+		if ( ! isset( $_POST[ $key ] ) || is_array( $_POST[ $key ] ) ) {
+			return '';
+		}
+
+		// phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- read as typed on purpose; see above.
+		return self::typed( wp_unslash( (string) $_POST[ $key ] ), true );
+	}
+
+	/**
+	 * A POSTed one-line string exactly as typed, less control characters.
+	 *
+	 * The posted() counterpart of posted_typed_textarea(), for a field whose
+	 * value is matched against rather than displayed -- a request path, a
+	 * user agent. See there for why.
+	 *
+	 * @param string $key      Field name.
+	 * @param string $fallback Returned when absent.
+	 */
+	protected function posted_typed( string $key, string $fallback = '' ): string {
+		// phpcs:ignore WordPress.Security.NonceVerification.Missing -- verify() is called by the caller.
+		if ( ! isset( $_POST[ $key ] ) || is_array( $_POST[ $key ] ) ) {
+			return $fallback;
+		}
+
+		// phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- read as typed on purpose; see posted_typed_textarea().
+		return self::typed( wp_unslash( (string) $_POST[ $key ] ) );
+	}
+
+	/**
+	 * A value as typed, with the control characters nobody types removed.
+	 *
+	 * NUL and the other C0 controls (and DEL) are dropped because no browser
+	 * field produces them and every one of them is trouble downstream -- a
+	 * NUL truncates a C string, a stray escape survives into a log line.
+	 * A tab is kept: it is a character a pattern can legitimately contain.
+	 * Line breaks are kept only where the field is a multi-line box; a
+	 * one-line field never posts one, so one there is not something typed.
+	 *
+	 * Everything else is left alone. Escaping is the output's job, and
+	 * whether the value is acceptable is the validator's.
+	 *
+	 * @param string $value     The value, already unslashed.
+	 * @param bool   $multiline Whether line breaks belong in it.
+	 */
+	public static function typed( string $value, bool $multiline = false ): string {
+		$pattern = $multiline ? '/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/' : '/[\x00-\x08\x0A-\x1F\x7F]/';
+
+		return (string) preg_replace( $pattern, '', $value );
+	}
+
+	/**
 	 * A POSTed array, recursively sanitised.
 	 *
 	 * @param string $key Field name.
@@ -354,9 +418,24 @@ abstract class Screen {
 			esc_attr( $type ),
 			esc_attr( $name ),
 			esc_attr( $name ),
-			esc_attr( $value ),
+			self::attribute( $value ),
 			$extra
 		);
+	}
+
+	/**
+	 * A stored value escaped for an attribute, so that it posts back unchanged.
+	 *
+	 * `esc_attr()` does not encode an ampersand that already starts an
+	 * entity, which is right for markup and wrong for a value: a condition on
+	 * `&lt;` was printed as `value="&lt;"`, which the browser reads as `<`,
+	 * and the next save stored `<` instead. Every ampersand is encoded here,
+	 * so what the browser shows -- and posts -- is what is stored.
+	 *
+	 * @param string $value The value as stored.
+	 */
+	protected static function attribute( string $value ): string {
+		return htmlspecialchars( $value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8', true );
 	}
 
 	/**
@@ -398,7 +477,7 @@ abstract class Screen {
 		foreach ( $options as $value => $label ) {
 			$markup .= sprintf(
 				'<option value="%s"%s>%s</option>',
-				esc_attr( (string) $value ),
+				self::attribute( (string) $value ),
 				selected( (string) $value, $current, false ),
 				esc_html( $label )
 			);

@@ -63,7 +63,7 @@ final class Import_Screen extends Screen {
 			return;
 		}
 
-		$document = $this->posted_textarea( 'document' );
+		$document = $this->posted_typed_textarea( 'document' );
 
 		if ( '' === trim( $document ) ) {
 			Notices::add( __( 'Paste a document to import.', 'basic-firewall' ), 'error' );

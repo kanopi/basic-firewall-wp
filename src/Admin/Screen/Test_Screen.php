@@ -74,12 +74,12 @@ final class Test_Screen extends Screen {
 	public function render(): void {
 		if ( $this->verify() ) {
 			$this->submitted = array(
-				'path'       => $this->posted( 'path', '/' ),
+				'path'       => $this->posted_typed( 'path', '/' ),
 				'method'     => $this->posted( 'method', 'GET' ),
 				'ip'         => $this->posted( 'ip' ),
-				'user_agent' => $this->posted( 'user_agent' ),
-				'headers'    => $this->posted_textarea( 'headers' ),
-				'body'       => $this->posted_textarea( 'body' ),
+				'user_agent' => $this->posted_typed( 'user_agent' ),
+				'headers'    => $this->posted_typed_textarea( 'headers' ),
+				'body'       => $this->posted_typed_textarea( 'body' ),
 			);
 
 			$this->result = ( new Request_Tester() )->test( $this->submitted );

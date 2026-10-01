@@ -143,6 +143,7 @@ final class Rule_Edit_Screen extends Screen {
 		$stored_settings = (array) ( $existing['settings'] ?? array() );
 		$posted_settings = $this->with_secret_fields( $type, $this->posted_array( 'settings' ), $stored_settings );
 		$posted_settings = self::with_verbatim_fields( $type, $posted_settings );
+		$posted_settings = self::with_typed_conditions( $type, $posted_settings );
 		$posted_settings = self::with_source_credentials( $posted_settings, $stored_settings, $errors );
 
 		$settings = $type->validate_settings( $posted_settings, $errors );
@@ -359,7 +360,7 @@ final class Rule_Edit_Screen extends Screen {
 				$typed = self::raw_posted( array( 'settings', $key ) );
 
 				if ( null !== $typed ) {
-					$posted[ $key ] = $typed;
+					$posted[ $key ] = self::typed( $typed, true );
 				}
 			}
 
@@ -371,12 +372,88 @@ final class Rule_Edit_Screen extends Screen {
 				$typed = self::raw_posted( array( 'settings', $key, (string) $child ) );
 
 				if ( null !== $typed && is_array( $posted[ $key ] ?? array() ) ) {
-					$posted[ $key ][ (string) $child ] = $typed;
+					$posted[ $key ][ (string) $child ] = self::typed( $typed, true );
 				}
 			}
 		}
 
 		return $posted;
+	}
+
+	/**
+	 * Put the conditions and the referenced lists back into what was posted, as typed.
+	 *
+	 * The same problem as with_verbatim_fields(), on the fields every
+	 * condition rule is made of. Through the textarea sanitiser a URL rule on
+	 * `query.q contains %3Cscript` was stored as a rule on `script`, one on
+	 * `path contains %2e` was refused for having no value, and a list URL
+	 * lost every percent-encoding in its query string -- each from a save
+	 * that changed nothing on the screen (#60).
+	 *
+	 * So the whole `conditions` and `sources` subtrees are read as typed,
+	 * less control characters (Screen::typed()). Nothing here is trusted on
+	 * the strength of that: the type's validator checks every value --
+	 * operator, variable, regex compilation, length, encoding -- and the
+	 * screen escapes every one of them on the way out.
+	 *
+	 * @param Rule_Type            $type   The rule type.
+	 * @param array<string, mixed> $posted The settings as posted, sanitised.
+	 *
+	 * @return array<string, mixed>
+	 */
+	private static function with_typed_conditions( Rule_Type $type, array $posted ): array {
+		$subtrees = array();
+
+		if ( $type instanceof Condition_Rule_Type_Base ) {
+			$subtrees[] = 'conditions';
+		}
+
+		if ( $type->supports_sources() ) {
+			$subtrees[] = 'sources';
+		}
+
+		// phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- handle() verified the nonce; typed_tree() unslashes, and the values are kept as typed on purpose (see above).
+		$settings = isset( $_POST['settings'] ) && is_array( $_POST['settings'] ) ? $_POST['settings'] : array();
+
+		foreach ( $subtrees as $subtree ) {
+			if ( array_key_exists( $subtree, $settings ) ) {
+				// Unslashed and stripped of control characters inside typed_tree().
+				$posted[ $subtree ] = self::typed_tree( $settings[ $subtree ] );
+			}
+		}
+
+		return $posted;
+	}
+
+	/**
+	 * A posted subtree with every string as typed.
+	 *
+	 * Keys go through sanitize_key(), as Screen::sanitize_deep() puts them:
+	 * they are the form's own field names and positions, never anything
+	 * somebody types. A list's advanced block is the one multi-line field.
+	 *
+	 * @param mixed  $node The raw, still-slashed value.
+	 * @param string $key  The key it was posted under.
+	 *
+	 * @return mixed
+	 */
+	private static function typed_tree( $node, string $key = '' ) {
+		if ( is_array( $node ) ) {
+			$typed = array();
+
+			foreach ( $node as $child_key => $child ) {
+				$child_key           = is_string( $child_key ) ? sanitize_key( $child_key ) : $child_key;
+				$typed[ $child_key ] = self::typed_tree( $child, (string) $child_key );
+			}
+
+			return $typed;
+		}
+
+		if ( is_string( $node ) ) {
+			return self::typed( (string) wp_unslash( $node ), 'advanced' === $key );
+		}
+
+		return $node;
 	}
 
 	/**

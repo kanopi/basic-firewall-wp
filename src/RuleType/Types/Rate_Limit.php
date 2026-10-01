@@ -158,6 +158,13 @@ final class Rate_Limit extends Rule_Type_Base {
 				 * refused for having no limits in it.
 				 */
 				'lines'       => array( self::class, 'limit_lines' ),
+
+				/*
+				 * A pattern, read as typed: through the textarea sanitiser a
+				 * `/caf%C3%A9/* 5 60` limit lost its percent-encodings and
+				 * limited a different path (#60).
+				 */
+				'verbatim'    => true,
 				'description' => wp_kses_post(
 					__( 'One per line, as <code>pattern requests seconds</code> — <code>/wp-login.php 5 300</code> is five attempts in five minutes.<br><br>A fourth field names <strong>what to count</strong>, comma separated. Left off, the firewall counts the client address and the pattern, which is what it has always done. <code>/wp-login.php 5 300 post.log</code> counts the account being tried rather than the address trying it, so a credential-stuffing run spread over a thousand addresses still hits one limit. <code>/api/* 100 60 client_ip,path</code> counts each endpoint separately rather than the API as a whole. A header name is read in any case; a form field, cookie or query name exactly as written, so <code>post.userName</code> and <code>post.username</code> are different fields.<br><br><strong>A limit that counts an account is not a replacement for one that counts the address.</strong> The two catch opposite attacks — an account key misses one client walking a list of usernames, which gets a fresh budget per name — and a limit without <code>client_ip</code> in its key refuses but never bans. Keep an address-keyed limit on the same pattern, <em>in a separate rate limit rule</em>: within one rule only the first line whose pattern matches is ever used.', 'basic-firewall' )
 				),
