@@ -1184,6 +1184,29 @@ final class Config_Compiler {
 			 * was wrong was the silence -- the rule reported itself healthy.
 			 */
 			if ( $type instanceof Condition_Rule_Type_Base ) {
+				/*
+				 * An equality against a referenced list on a variable the
+				 * library reads as an integer is skipped, not reported and
+				 * compiled. Unlike an unreadable condition, this one fails in
+				 * the dangerous direction: "is not equal to" a list matches
+				 * every request, so a block rule would refuse every visitor,
+				 * and "is equal to" one never matches while reporting itself
+				 * active. The rule screen refuses it; this is the same refusal
+				 * for an import, WP-CLI or a hand-edited option.
+				 */
+				$strict = $type->strict_list_comparisons( $settings );
+
+				if ( array() !== $strict ) {
+					$this->problems[] = sprintf(
+						/* translators: 1: rule identifier, 2: why. */
+						__( 'Rule "%1$s" compares a referenced list for equality in a way that can never work, so it was skipped and is not being enforced: %2$s', 'basic-firewall' ),
+						(string) ( $rule['id'] ?? '?' ),
+						implode( ' ', array_unique( $strict ) )
+					);
+
+					continue;
+				}
+
 				foreach ( $type->unreadable_variables( $settings ) as $variable ) {
 					$this->problems[] = sprintf(
 						/* translators: 1: rule identifier, 2: variable name. */

@@ -140,6 +140,18 @@ final class Url extends Condition_Rule_Type_Base {
 	}
 
 	/**
+	 * {@inheritDoc}
+	 *
+	 * The port is the integer Symfony reads off the Host header, and a query
+	 * count (kanopi/firewall 2.36.0) is an integer the library counts -- the
+	 * bare `query_count` for every parameter, `query_count.<name>` for one.
+	 * Everything else this type reads is text.
+	 */
+	protected function integer_variables(): array {
+		return array( 'port', 'query_count', 'query_count.*' );
+	}
+
+	/**
 	 * Operators that compare a number and never match anything else.
 	 *
 	 * In the screen's spelling, which is what validation sees.
@@ -216,13 +228,13 @@ final class Url extends Condition_Rule_Type_Base {
 		$compiled = parent::compile_condition( $condition );
 		$variable = (string) $compiled['variable'];
 
-		if ( 'port' === $variable ) {
-			$numeric = array( 'equals', 'not_equals', 'in' );
-		} elseif ( self::is_query_count( $variable ) ) {
-			$numeric = array( 'equals', 'not_equals', 'in', 'greater_than', 'greater_than_or_equal', 'less_than', 'less_than_or_equal' );
-		} else {
+		if ( ! $this->is_integer_variable( $variable ) ) {
 			return $compiled;
 		}
+
+		$numeric = self::is_query_count( $variable )
+			? array( 'equals', 'not_equals', 'in', 'greater_than', 'greater_than_or_equal', 'less_than', 'less_than_or_equal' )
+			: array( 'equals', 'not_equals', 'in' );
 
 		if ( ! in_array( $compiled['operator'], $numeric, true ) ) {
 			return $compiled;
@@ -239,7 +251,9 @@ final class Url extends Condition_Rule_Type_Base {
 	 * A port or a count as the integer the request holds.
 	 *
 	 * Anything that is not one is left as it was, so a referenced list's
-	 * `{value}` placeholder still reaches the library to be substituted.
+	 * `{value}` placeholder still reaches the library to be substituted --
+	 * as text, which is why an equality against a list on these variables is
+	 * refused (see strict_list_comparisons()).
 	 *
 	 * @param mixed $value Compiled value.
 	 *

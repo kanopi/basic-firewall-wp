@@ -703,7 +703,10 @@ always does, which on a block rule is every visitor.
   removing a negated condition would widen what the rule matches — and reported
   on the rule, on the Status screen and in Site Health until you edit it out.
 - **`port` compares as a number** with *is equal to*, *is not equal to* and *is
-  one of*, because the library holds it as one and compares strictly.
+  one of*, because the library holds it as one and compares strictly. That
+  holds for a value typed into a condition, which the plugin casts; not for a
+  [referenced list](#on-rules-that-match-conditions), whose entries arrive as
+  text, so an equality against a list on `port` is refused.
 - **`query_count.<parameter>` is how many values the client sent** for one query
   parameter, and `query_count` with the Name left blank is how many parameters
   in all (`kanopi/firewall` 2.36.0). It is counted from the raw query string, so
@@ -721,7 +724,9 @@ always does, which on a block rule is every visitor.
   The name is case-sensitive, as the application reads it. A count is compiled
   as a whole number for *is equal to*, *is not equal to*, *is one of* and the
   greater/less-than comparisons, since the library compares equality strictly,
-  and a value that is not a whole number is refused on save.
+  and a value that is not a whole number is refused on save. Against a
+  [referenced list](#on-rules-that-match-conditions) the equality operators are
+  refused, as they are for `port`; *is greater than* and *is less than* work.
 
 #### Stop facet crawling
 
@@ -1256,6 +1261,30 @@ so an entry can be written `16509` or `AS16509`, and a JSON list of integers
 works as it is. For names, use *contains* on `asn_org`. Earlier versions of this
 plugin compiled such a list into a digits-only pattern and skipped an entry
 written `AS16509`; that workaround is gone, and a stored rule needs no change.
+
+**A list compared for equality with `port` or `query_count`** is refused, on
+the rule screen and — for a rule that arrives by import, WP-CLI or a hand edit —
+by the compiler, which skips the rule and names it on the Status screen and in
+Site Health. Both are integers to the library, which (as of kanopi/firewall
+2.36.0) compares *is equal to*, *is not equal to* and *is one of* strictly, and
+every entry of a list is substituted into the rule as text after the plugin has
+compiled it, where the cast a typed condition gets cannot reach. Saved, "port is
+one of" a list would never match, and "port is not equal to" a list would match
+every request — on a block rule, every visitor. What works instead:
+
+- *is greater than* or *is less than*, which the library compares as numbers;
+- entries written as regular expressions, such as `^(8443|9443)$`, compared
+  with *matches the regular expression*;
+- the values typed into a condition rather than kept in a list, where the plugin
+  compiles them as numbers.
+
+The same applies to a hand-written **Template** in the shorthand
+(`port@equals:{value}`, `query_count.f:{value}`). A rule type declares which of
+its variables are integers, so this covers any added later. The fix belongs in
+the library ([kanopi/firewall#443](https://github.com/kanopi/firewall/issues/443)),
+and the plugin asks the bundled library rather than trusting a version: it
+evaluates a string port against a request on that port, and once a release
+compares the two by value the refusal lifts on its own.
 
 One difference from the IP rule is worth knowing: **a relative file reference is
 resolved to an absolute path at compile time.** The library resolves

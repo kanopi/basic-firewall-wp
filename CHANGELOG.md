@@ -30,6 +30,23 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - **`query_count` and `query_count.<name>` as rate-limit key components**,
   the name kept in the case it was written, as the library reads it.
 
+### Fixed
+
+- **A referenced list compared for equality with `port` or `query_count` is
+  refused rather than saved as a rule that never matches, or matches
+  everything.** Both are integers to the library, which compares *is equal
+  to*, *is not equal to* and *is one of* strictly, and a list's entries arrive
+  as text — so "port is one of" a list never matched, and "is not equal to" a
+  list matched every request, which on a block rule is every visitor. The rule
+  screen refuses it on the list's operator, naming the alternatives (greater /
+  less than, a regular expression such as `^(8443|9443)$`, or the values typed
+  into a condition); a rule that arrives by import, WP-CLI or a hand edit is
+  skipped and named on the Status screen and in Site Health. A shorthand
+  template such as `port@equals:{value}` is checked too. The refusal lifts on
+  its own once the bundled library compares a numeric string with an integer
+  by value (kanopi/firewall#443): the plugin probes the library for it rather
+  than trusting a version.
+
 ## [1.0.0-rc.6]
 
 **Sixth release candidate for 1.0.0.** Published as a GitHub pre-release, so

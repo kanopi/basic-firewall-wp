@@ -9,6 +9,8 @@ declare( strict_types = 1 );
 
 namespace Kanopi\BasicFirewall\RuleType;
 
+use Kanopi\BasicFirewall\Library_Capabilities;
+
 /**
  * Rule types that match on a list of conditions.
  *
@@ -215,6 +217,142 @@ abstract class Condition_Rule_Type_Base extends Rule_Type_Base {
 	 */
 	protected function variable_prefixes(): array {
 		return array();
+	}
+
+	/**
+	 * Variables the library resolves to an integer rather than a string.
+	 *
+	 * A name ending in `.*` covers every member of that family, so
+	 * `query_count.*` is `query_count.f`, `query_count.page` and so on. None by
+	 * default: most of what a request carries is text.
+	 *
+	 * Declared once, here, because two things depend on it -- a type casting
+	 * the values it compiles itself, and the refusal of an equality against a
+	 * referenced list, whose values it cannot cast.
+	 *
+	 * @return list<string>
+	 */
+	protected function integer_variables(): array {
+		return array();
+	}
+
+	/**
+	 * Whether the library resolves this variable to an integer.
+	 *
+	 * @param string $variable The library's variable name.
+	 */
+	protected function is_integer_variable( string $variable ): bool {
+		foreach ( $this->integer_variables() as $declared ) {
+			if ( $declared === $variable ) {
+				return true;
+			}
+
+			if ( '.*' === substr( $declared, -2 ) ) {
+				$family = substr( $declared, 0, -1 );
+
+				if ( strlen( $variable ) > strlen( $family ) && 0 === strpos( $variable, $family ) ) {
+					return true;
+				}
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * Operators the library compares with `===`, `!==` and a strict `in_array()`.
+	 *
+	 * @var list<string>
+	 */
+	private const STRICT_OPERATORS = array( 'equals', 'not_equals', 'in' );
+
+	/**
+	 * Referenced lists that compare an integer variable for equality.
+	 *
+	 * The library compares `equals`, `not_equals` and `in` strictly, and every
+	 * entry of a referenced list is substituted into the rule as text after
+	 * this plugin has compiled it -- so the cast a typed condition gets cannot
+	 * reach it. Against a port or a query count, which the library reads as
+	 * an integer, "is equal to" a list never matches and "is not equal to" a
+	 * list matches every request: on a block rule, every visitor. Reported
+	 * per list so the rule screen can put the reason on the row it is about,
+	 * and the compiler can refuse a rule that arrived without the screen.
+	 *
+	 * Empty when the installed library compares a numeric string with an
+	 * integer by value, which is the fix kanopi/firewall#443 asks for; the
+	 * probe in Library_Capabilities notices that release and this refusal
+	 * stops on its own.
+	 *
+	 * @param array<string, mixed> $settings Rule settings.
+	 *
+	 * @return array<int, string> Why, keyed by the list's position.
+	 */
+	public function strict_list_comparisons( array $settings ): array {
+		$sources = $settings['sources'] ?? array();
+
+		if ( ! is_array( $sources ) || array() === $sources || ( new Library_Capabilities() )->compares_numbers_loosely() ) {
+			return array();
+		}
+
+		$found = array();
+
+		foreach ( array_values( $sources ) as $index => $source ) {
+			if ( ! is_array( $source ) || '' === trim( (string) ( $source['url'] ?? '' ) ) ) {
+				continue;
+			}
+
+			$comparison = $this->list_comparison( $source );
+
+			if ( null === $comparison || ! in_array( $comparison[1], self::STRICT_OPERATORS, true ) || ! $this->is_integer_variable( $comparison[0] ) ) {
+				continue;
+			}
+
+			$found[ $index ] = sprintf(
+				/* translators: 1: the variable, 2: the operator, as the rule screen names it. */
+				__( '%1$s is read as a whole number, and every entry of a referenced list reaches the firewall as text. The firewall library compares "%2$s" strictly, so the list would never match — or, for "is not equal to", would match every request. Use "is greater than" or "is less than", make the entries regular expressions such as ^(8443|9443)$ and use "matches the regular expression", or type the values into a condition, where they are compiled as numbers.', 'basic-firewall' ),
+				$comparison[0],
+				self::OPERATORS[ $comparison[1] ]
+			);
+		}
+
+		return $found;
+	}
+
+	/**
+	 * The variable and operator a referenced list's entries are matched with.
+	 *
+	 * From the variable and operator rows when there is no template, and from
+	 * an explicit template written in the library's shorthand --
+	 * `port@equals:{value}`, or `port:{value}`, which is equality too.
+	 * A template in any other shape is not something this can read, and is
+	 * left alone rather than guessed at.
+	 *
+	 * @param array<string, mixed> $source The referenced list.
+	 *
+	 * @return array{0: string, 1: string}|null The library's variable, the operator.
+	 */
+	private function list_comparison( array $source ): ?array {
+		$template = trim( (string) ( $source['template'] ?? '' ) );
+
+		if ( '' !== $template ) {
+			if ( 1 !== preg_match( '/^!?\s*([^\s@:!]+)(?:@([a-z_]+))?\s*:/i', $template, $matches ) ) {
+				return null;
+			}
+
+			$operator = isset( $matches[2] ) ? strtolower( $matches[2] ) : 'equals';
+
+			return array( $this->library_variable( $matches[1] ), $operator );
+		}
+
+		$variable = trim( (string) ( $source['variable'] ?? '' ) );
+
+		if ( '' === $variable ) {
+			return null;
+		}
+
+		$operator = trim( (string) ( $source['operator'] ?? '' ) );
+
+		return array( $this->library_variable( $variable ), '' === $operator ? 'contains' : $operator );
 	}
 
 	/**
@@ -429,6 +567,17 @@ abstract class Condition_Rule_Type_Base extends Rule_Type_Base {
 				);
 
 				$clean['sources'][ $index ]['variable'] = '';
+			}
+		}
+
+		/*
+		 * An equality against a list on an integer variable is refused rather
+		 * than saved. Checked after the variable, so a list already refused
+		 * for reading nothing is not told a second thing about the same row.
+		 */
+		foreach ( $this->strict_list_comparisons( $clean ) as $index => $problem ) {
+			if ( ! isset( $errors[ 'sources.' . $index . '.variable' ] ) ) {
+				$errors[ 'sources.' . $index . '.operator' ] = $problem;
 			}
 		}
 
