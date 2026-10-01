@@ -377,7 +377,62 @@ final class Upgrader {
 					$settings->replace( $values );
 				}
 			},
+
+			/*
+			 * 13: delete the geolocation and ASN license key (#54).
+			 *
+			 * The field is gone because nothing ever read it: the library
+			 * opens a local database and never downloads one, and the only
+			 * thing it would use a key for is the MaxMind web-service client,
+			 * which this plugin does not configure. A stored credential that
+			 * nothing reads is only a liability -- it sits in the options
+			 * table and in every backup of it -- so the stored value is
+			 * deleted rather than merely no longer shown.
+			 *
+			 * Idempotent: a rule without the key is left alone, and the
+			 * settings are written only when one was removed.
+			 */
+			13 => static function (): void {
+				$settings = Plugin::instance()->settings();
+				$values   = $settings->all();
+
+				if ( self::remove_reader_license_keys( $values ) ) {
+					$settings->replace( $values );
+				}
+			},
 		);
+	}
+
+	/**
+	 * Remove the license key from every geolocation and ASN rule's reader.
+	 *
+	 * See routine 13.
+	 *
+	 * @param array<string, mixed> $values Settings, modified in place.
+	 *
+	 * @return bool Whether anything changed.
+	 */
+	private static function remove_reader_license_keys( array &$values ): bool {
+		if ( ! isset( $values['rules'] ) || ! is_array( $values['rules'] ) ) {
+			return false;
+		}
+
+		$changed = false;
+
+		foreach ( $values['rules'] as $index => $rule ) {
+			if ( ! is_array( $rule ) || ! in_array( (string) ( $rule['type'] ?? '' ), array( 'geolocation', 'asn' ), true ) ) {
+				continue;
+			}
+
+			if ( ! is_array( $rule['settings']['reader'] ?? null ) || ! array_key_exists( 'license_key', $rule['settings']['reader'] ) ) {
+				continue;
+			}
+
+			unset( $values['rules'][ $index ]['settings']['reader']['license_key'] );
+			$changed = true;
+		}
+
+		return $changed;
 	}
 
 	/**

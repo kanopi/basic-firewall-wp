@@ -183,13 +183,4 @@ final class Asn extends Condition_Rule_Type_Base {
 	protected function reader_lookup(): string {
 		return 'asn';
 	}
-
-	/**
-	 * {@inheritDoc}
-	 *
-	 * Along with the referenced lists' credentials, which the parent names.
-	 */
-	public function secret_settings(): array {
-		return array_merge( parent::secret_settings(), array( 'reader.license_key' ) );
-	}
 }

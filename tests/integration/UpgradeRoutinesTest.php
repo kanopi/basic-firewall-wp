@@ -258,4 +258,92 @@ final class UpgradeRoutinesTest extends Settings_Snapshot {
 		$this->assertSame( $rules['plain']['settings'], $again['plain']['settings'] );
 		$this->assertSame( $weighted, $again['weighted']['settings'] );
 	}
+
+	/**
+	 * Routine 13 deletes the geolocation and ASN license key, and nothing else (#54).
+	 *
+	 * Written straight into the option, the way 1.0 stored it, because every
+	 * writer that goes through the settings now validates the key away.
+	 */
+	public function test_the_license_key_is_deleted_on_upgrade(): void {
+		$reader = static fn ( string $database ): array => array(
+			'source'      => 'database',
+			'database'    => $database,
+			'license_key' => 'MAXMIND-KEY-1c9e',
+			'edge'        => 'cloudflare',
+			'headers'     => array(),
+		);
+		$rule   = static fn ( string $id, string $type, string $variable, string $database ): array => array(
+			'id'       => $id,
+			'type'     => $type,
+			'label'    => $id,
+			'enabled'  => true,
+			'response' => 'block',
+			'settings' => array(
+				'match_type' => 'any',
+				'conditions' => array(
+					array(
+						'variable'       => $variable,
+						'operator'       => 'equals',
+						'value'          => 'ZZ',
+						'negate'         => false,
+						'case_sensitive' => false,
+					),
+				),
+				'sources'    => array(),
+				'reader'     => $reader( $database ),
+			),
+		);
+
+		$url   = self::url_rule(
+			'untouched',
+			array(
+				array(
+					'variable'       => 'path',
+					'operator'       => 'contains',
+					'value'          => '/license_key',
+					'negate'         => false,
+					'case_sensitive' => false,
+				),
+			)
+		);
+		$rules = $this->upgrade(
+			array(
+				$rule( 'geo', 'geolocation', 'country', 'geoip/GeoLite2-City.mmdb' ),
+				$rule( 'net', 'asn', 'asn_org', 'geoip/GeoLite2-ASN.mmdb' ),
+				$url,
+			),
+			12
+		);
+
+		foreach ( array(
+			'geo' => 'geoip/GeoLite2-City.mmdb',
+			'net' => 'geoip/GeoLite2-ASN.mmdb',
+		) as $id => $database ) {
+			$this->assertArrayNotHasKey( 'license_key', $rules[ $id ]['settings']['reader'], sprintf( 'Rule %s kept its license key.', $id ) );
+			$this->assertSame( $database, $rules[ $id ]['settings']['reader']['database'], 'The database path went with it.' );
+			$this->assertSame( 'ZZ', $rules[ $id ]['settings']['conditions'][0]['value'] );
+			$this->assertTrue( $rules[ $id ]['enabled'] );
+		}
+
+		$this->assertSame( $url['settings']['conditions'], $rules['untouched']['settings']['conditions'], 'A rule of another type was changed.' );
+		$this->assertStringNotContainsString( 'MAXMIND-KEY-1c9e', (string) wp_json_encode( get_option( Schema::OPTION ) ) );
+
+		// Idempotent: run again from 12, and the settings are not even written.
+		$saves = 0;
+		$count = static function () use ( &$saves ): void {
+			++$saves;
+		};
+
+		add_action( 'basic_firewall_settings_saved', $count );
+
+		try {
+			$again = $this->upgrade( array_values( $rules ), 12 );
+		} finally {
+			remove_action( 'basic_firewall_settings_saved', $count );
+		}
+
+		$this->assertSame( $rules, $again );
+		$this->assertSame( 1, $saves, 'Routine 13 wrote settings that held no license key.' );
+	}
 }

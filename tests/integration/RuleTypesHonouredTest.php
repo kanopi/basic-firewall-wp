@@ -86,14 +86,13 @@ final class RuleTypesHonouredTest extends Honoured_Settings {
 			'sources'    => 'test_every_source_format_constructs',
 		),
 		'asn'                 => array(
-			'match_type'         => 'test_asn',
-			'conditions'         => 'test_asn',
-			'sources'            => 'test_every_source_format_constructs',
-			'reader.source'      => 'test_asn',
-			'reader.database'    => 'test_asn',
-			'reader.license_key' => 'test_asn',
-			'reader.edge'        => 'test_asn',
-			'reader.headers'     => 'test_asn',
+			'match_type'      => 'test_asn',
+			'conditions'      => 'test_asn',
+			'sources'         => 'test_every_source_format_constructs',
+			'reader.source'   => 'test_asn',
+			'reader.database' => 'test_asn',
+			'reader.edge'     => 'test_asn',
+			'reader.headers'  => 'test_asn',
 		),
 		'edge_signal'         => array(
 			'match_type'     => 'test_edge_signal',
@@ -103,14 +102,13 @@ final class RuleTypesHonouredTest extends Honoured_Settings {
 			'custom_headers' => 'test_edge_signal',
 		),
 		'geolocation'         => array(
-			'match_type'         => 'test_geolocation',
-			'conditions'         => 'test_geolocation',
-			'sources'            => 'test_every_source_format_constructs',
-			'reader.source'      => 'test_geolocation',
-			'reader.database'    => 'test_geolocation',
-			'reader.license_key' => 'test_geolocation',
-			'reader.edge'        => 'test_geolocation',
-			'reader.headers'     => 'test_geolocation',
+			'match_type'      => 'test_geolocation',
+			'conditions'      => 'test_geolocation',
+			'sources'         => 'test_every_source_format_constructs',
+			'reader.source'   => 'test_geolocation',
+			'reader.database' => 'test_geolocation',
+			'reader.edge'     => 'test_geolocation',
+			'reader.headers'  => 'test_geolocation',
 		),
 		'rate_limit'          => array(
 			'paths'                     => 'test_rate_limit_counts',
@@ -1031,9 +1029,10 @@ final class RuleTypesHonouredTest extends Honoured_Settings {
 	/**
 	 * Geolocation from the edge, and from a database.
 	 *
-	 * The license key is deliberately never compiled -- nothing in the library
-	 * reads it for a local database -- so what is shown is that a rule with one
-	 * still constructs and still reads its database.
+	 * A license key an older version stored (#54) is never compiled --
+	 * nothing in the library reads it for a local database -- so what is
+	 * shown is that a rule still carrying one constructs, reads its database,
+	 * and leaves the key out of the file.
 	 */
 	public function test_geolocation(): void {
 		Request::setTrustedProxies( array( '10.0.0.1' ), Request::HEADER_X_FORWARDED_FOR );

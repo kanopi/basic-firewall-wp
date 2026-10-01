@@ -636,11 +636,10 @@ final class GeoVariableTest extends Settings_Snapshot {
 	 */
 	private function edge_reader(): array {
 		return array(
-			'source'      => 'edge',
-			'database'    => '',
-			'license_key' => '',
-			'edge'        => 'cloudfront',
-			'headers'     => array(),
+			'source'   => 'edge',
+			'database' => '',
+			'edge'     => 'cloudfront',
+			'headers'  => array(),
 		);
 	}
 

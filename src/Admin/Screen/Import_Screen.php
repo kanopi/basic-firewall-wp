@@ -221,6 +221,16 @@ final class Import_Screen extends Screen {
 			);
 		}
 
+		$dropped = (array) ( $preview['summary']['settings_dropped'] ?? array() );
+
+		if ( array() !== $dropped ) {
+			printf(
+				'<div class="bfw-warning"><p><strong>%s</strong></p><ul style="list-style:disc;margin-left:2em"><li>%s</li></ul></div>',
+				esc_html__( 'Settings in this document that this version no longer stores, and leaves out:', 'basic-firewall' ),
+				wp_kses_post( implode( '</li><li>', array_map( 'esc_html', array_map( 'strval', $dropped ) ) ) )
+			);
+		}
+
 		$advanced = (array) ( $preview['summary']['advanced_credentials'] ?? array() );
 
 		if ( array() !== $advanced ) {

@@ -221,13 +221,4 @@ final class Geo_Location extends Condition_Rule_Type_Base {
 	public function settings_help(): array {
 		return $this->reader_help();
 	}
-
-	/**
-	 * {@inheritDoc}
-	 *
-	 * Along with the referenced lists' credentials, which the parent names.
-	 */
-	public function secret_settings(): array {
-		return array_merge( parent::secret_settings(), array( 'reader.license_key' ) );
-	}
 }
