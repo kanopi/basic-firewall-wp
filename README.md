@@ -1262,29 +1262,22 @@ works as it is. For names, use *contains* on `asn_org`. Earlier versions of this
 plugin compiled such a list into a digits-only pattern and skipped an entry
 written `AS16509`; that workaround is gone, and a stored rule needs no change.
 
-**A list compared for equality with `port` or `query_count`** is refused, on
-the rule screen and — for a rule that arrives by import, WP-CLI or a hand edit —
-by the compiler, which skips the rule and names it on the Status screen and in
-Site Health. Both are integers to the library, which (as of kanopi/firewall
-2.36.0) compares *is equal to*, *is not equal to* and *is one of* strictly, and
-every entry of a list is substituted into the rule as text after the plugin has
-compiled it, where the cast a typed condition gets cannot reach. Saved, "port is
-one of" a list would never match, and "port is not equal to" a list would match
-every request — on a block rule, every visitor. What works instead:
+**A list compared for equality with `port` or `query_count`** works as
+written, from kanopi/firewall 2.36.1, which this plugin requires: the library
+compares a numeric entry with the visitor's number as a number
+([kanopi/firewall#443](https://github.com/kanopi/firewall/issues/443)), so
+"port is one of" a list matches and "port is not equal to" a list no longer
+matches every request.
 
-- *is greater than* or *is less than*, which the library compares as numbers;
-- entries written as regular expressions, such as `^(8443|9443)$`, compared
-  with *matches the regular expression*;
-- the values typed into a condition rather than kept in a list, where the plugin
-  compiles them as numbers.
-
-The same applies to a hand-written **Template** in the shorthand
-(`port@equals:{value}`, `query_count.f:{value}`). A rule type declares which of
-its variables are integers, so this covers any added later. The fix belongs in
-the library ([kanopi/firewall#443](https://github.com/kanopi/firewall/issues/443)),
-and the plugin asks the bundled library rather than trusting a version: it
-evaluates a string port against a request on that port, and once a release
-compares the two by value the refusal lifts on its own.
+Before 2.36.1 every entry was compared as text against a number, so such a list
+never matched, or, negated, matched every visitor. The plugin guards against
+that rather than trusting a version: it evaluates a string port against a
+request on that port, and only if the library still compares strictly does it
+refuse the rule on the rule screen and skip it at compile time (naming it on the
+Status screen and in Site Health). With the bundled library that check passes,
+so the guard stays out of the way; it remains for a site whose own Composer tree
+supplies an older library. A rule type declares which of its variables are
+integers, so the same applies to any added later.
 
 One difference from the IP rule is worth knowing: **a relative file reference is
 resolved to an absolute path at compile time.** The library resolves

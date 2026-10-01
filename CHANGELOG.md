@@ -7,11 +7,22 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### What changes on upgrade
+
+- **Equality on a number from a referenced list starts working.** kanopi/firewall
+  2.36.1 compares a numeric entry with a number by value
+  ([kanopi/firewall#443](https://github.com/kanopi/firewall/issues/443)), so a
+  list-backed *is equal to* / *is one of* on `port`, `query_count` or a numeric
+  geolocation field matches, and *is not equal to* no longer matches every
+  request. Conditions typed into a rule were already compiled as numbers by the
+  plugin and behave as before. A list-backed equality the plugin refused before
+  2.36.1 (see Fixed) is now accepted.
+
 ### Changed
 
-- **Requires and bundles kanopi/firewall 2.36.0** (from 2.35.1). Its one
-  addition, the `query_count` variable, is opt-in: nothing changes for a
-  configuration that does not use it.
+- **Requires and bundles kanopi/firewall 2.36.1** (from 2.35.1). 2.36.0 adds the
+  opt-in `query_count` variable; 2.36.1 makes equality on a number compare as a
+  number (see *What changes on upgrade*).
 
 ### Added
 
@@ -32,20 +43,20 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
-- **A referenced list compared for equality with `port` or `query_count` is
-  refused rather than saved as a rule that never matches, or matches
-  everything.** Both are integers to the library, which compares *is equal
-  to*, *is not equal to* and *is one of* strictly, and a list's entries arrive
-  as text — so "port is one of" a list never matched, and "is not equal to" a
-  list matched every request, which on a block rule is every visitor. The rule
-  screen refuses it on the list's operator, naming the alternatives (greater /
-  less than, a regular expression such as `^(8443|9443)$`, or the values typed
-  into a condition); a rule that arrives by import, WP-CLI or a hand edit is
-  skipped and named on the Status screen and in Site Health. A shorthand
-  template such as `port@equals:{value}` is checked too. The refusal lifts on
-  its own once the bundled library compares a numeric string with an integer
-  by value (kanopi/firewall#443): the plugin probes the library for it rather
-  than trusting a version.
+- **A referenced list compared for equality with `port` or `query_count` can
+  no longer fail silently.** Both are numbers to the library, and a list's
+  entries arrive as text. Before kanopi/firewall 2.36.1 the library compared
+  the two strictly, so "port is one of" a list never matched and "is not equal
+  to" a list matched every request (on a block rule, every visitor). With the
+  bundled 2.36.1 such a list works as written. On an older library, for
+  example one supplied by a site's own Composer tree, the plugin refuses the
+  rule on the rule screen, naming the alternatives (greater / less than, a
+  regular expression such as `^(8443|9443)$`, or the values typed into a
+  condition). It also skips a rule that arrives by import, WP-CLI or a hand
+  edit and names it on the Status screen and in Site Health. The plugin
+  decides by probing the library rather than trusting a version, and also
+  checks a shorthand template such as `port@equals:{value}`
+  (kanopi/firewall#443).
 
 ## [1.0.0-rc.6]
 
