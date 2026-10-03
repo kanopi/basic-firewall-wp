@@ -65,6 +65,32 @@ final class General_Screen extends Screen {
 		$all['global']['require_config']          = '' !== $this->posted( 'require_config' );
 		$all['global']['panic_file']              = $this->posted( 'panic_file' );
 		$all['global']['lockdown']                = '' !== $this->posted( 'lockdown' );
+		$all['global']['banning_json']            = '' !== $this->posted( 'banning_json' );
+
+		$all['global']['block_page'] = array(
+			'enabled' => '' !== $this->posted( 'block_page_enabled' ),
+			'title'   => $this->posted( 'block_page_title' ),
+			'heading' => $this->posted( 'block_page_heading' ),
+		);
+
+		$all['global']['lockdown_page'] = array(
+			'enabled' => '' !== $this->posted( 'lockdown_page_enabled' ),
+			'title'   => $this->posted( 'lockdown_page_title' ),
+			'heading' => $this->posted( 'lockdown_page_heading' ),
+			'message' => $this->posted_textarea( 'lockdown_page_message' ),
+		);
+
+		/*
+		 * As typed: CSS is full of the characters the text sanitisers take
+		 * out, and a stylesheet URL of the percent-encoded octets. Both are
+		 * checked against the library's own rules when they are saved, and
+		 * never printed unescaped.
+		 */
+		$all['global']['pages'] = array(
+			'lang'       => $this->posted( 'pages_lang' ),
+			'styles'     => $this->posted_typed_textarea( 'pages_styles' ),
+			'stylesheet' => $this->posted_typed( 'pages_stylesheet' ),
+		);
 
 		$allow  = Lockdown::sort( $this->posted_textarea( 'lockdown_allow' ) );
 		$review = Lockdown::review( $all['global']['lockdown'], $allow, Lockdown::client_address() );
@@ -167,7 +193,7 @@ final class General_Screen extends Screen {
 		$this->row(
 			__( 'Message shown to blocked clients', 'basic-firewall' ),
 			self::text( 'banning_message', (string) $settings->get( 'global.banning_message', '' ) ),
-			__( 'Available variables: <code>{{request.id}}</code> for the reference, which is what <code>wp basic-firewall find-reference</code> looks up. Keep it short and free of detail about why — a rejected client does not need to know which rule caught them.', 'basic-firewall' )
+			__( 'Available variables: <code>{{request.id}}</code> for the reference, which is what <code>wp basic-firewall find-reference</code> looks up, and <code>{{block.status}}</code> for the status sent. Keep it short and free of detail about why — a rejected client does not need to know which rule caught them, which is also why <code>{{block.rule}}</code>, the rule\'s name, is best left out. Sent as plain text, so HTML shows as source; for a page, switch on the block page below.', 'basic-firewall' )
 		);
 
 		$this->row(
@@ -188,6 +214,7 @@ final class General_Screen extends Screen {
 		$this->render_sources_section();
 		$this->render_bypass_section();
 		$this->render_lockdown_section();
+		$this->render_pages_section();
 		$this->render_panic_section();
 
 		$this->close_form();
@@ -405,6 +432,96 @@ final class General_Screen extends Screen {
 				__( 'One per line: single addresses, CIDR blocks and <code>start-end</code> ranges, IPv4 or IPv6 — the same forms an IP rule takes. It is consulted <em>instead of</em> your allow rules, not as well as them, and it is kept while lockdown is off so it is ready when you need it. The firewall sees your address as <code>%s</code>.', 'basic-firewall' ),
 				esc_html( '' !== $client ? $client : __( 'unknown', 'basic-firewall' ) )
 			)
+		);
+
+		echo '</tbody></table>';
+	}
+
+	/**
+	 * The block and lockdown pages, and how every firewall page looks.
+	 */
+	private function render_pages_section(): void {
+		$settings = $this->plugin()->settings();
+
+		printf( '<h2>%s</h2>', esc_html__( 'Block and lockdown pages', 'basic-firewall' ) );
+
+		printf(
+			'<p class="description" style="max-width:48rem">%s</p>',
+			esc_html__( 'A refused visitor gets one line of plain text unless a page is switched on here. The page is the same card as the challenge page, sent with a strict Content-Security-Policy: no script, no form. Text is plain text with the same {{request.id}} placeholder as the message, and a field left empty keeps the built-in wording.', 'basic-firewall' )
+		);
+
+		echo '<table class="form-table" role="presentation"><tbody>';
+
+		$this->row(
+			__( 'Block page', 'basic-firewall' ),
+			self::checkbox( 'block_page_enabled', (bool) $settings->get( 'global.block_page.enabled', false ), __( 'Show blocked clients a page instead of the message', 'basic-firewall' ) ),
+			__( 'The page\'s text is the <strong>Message shown to blocked clients</strong> above, one paragraph per line.', 'basic-firewall' )
+		);
+
+		$this->row(
+			__( 'Block page title', 'basic-firewall' ),
+			self::text( 'block_page_title', (string) $settings->get( 'global.block_page.title', '' ), 'text', 'placeholder="Request blocked"' )
+		);
+
+		$this->row(
+			__( 'Block page heading', 'basic-firewall' ),
+			self::text( 'block_page_heading', (string) $settings->get( 'global.block_page.heading', '' ), 'text', 'placeholder="Request blocked"' )
+		);
+
+		$this->row(
+			__( 'Lockdown page', 'basic-firewall' ),
+			self::checkbox( 'lockdown_page_enabled', (bool) $settings->get( 'global.lockdown_page.enabled', false ), __( 'Show visitors refused by lockdown a page', 'basic-firewall' ) )
+		);
+
+		$this->row(
+			__( 'Lockdown page title', 'basic-firewall' ),
+			self::text( 'lockdown_page_title', (string) $settings->get( 'global.lockdown_page.title', '' ), 'text', 'placeholder="Temporarily closed"' )
+		);
+
+		$this->row(
+			__( 'Lockdown page heading', 'basic-firewall' ),
+			self::text( 'lockdown_page_heading', (string) $settings->get( 'global.lockdown_page.heading', '' ), 'text', 'placeholder="Temporarily closed"' )
+		);
+
+		$this->row(
+			__( 'Lockdown page message', 'basic-firewall' ),
+			self::textarea( 'lockdown_page_message', (string) $settings->get( 'global.lockdown_page.message', '' ), 3 ),
+			__( 'One paragraph per line. Empty: "This site is temporarily closed to visitors. Please try again shortly."', 'basic-firewall' )
+		);
+
+		$this->row(
+			__( 'JSON for API clients', 'basic-firewall' ),
+			self::checkbox( 'banning_json', (bool) $settings->get( 'global.banning_json', false ), __( 'Answer a client that asks for JSON with JSON', 'basic-firewall' ) ),
+			__( 'A client whose first preference is JSON — the REST API\'s, a mobile app\'s — gets <code>{"error":"blocked","status":403,"request_id":"…"}</code> instead of the page or the message. A browser asks for HTML first and is unaffected.', 'basic-firewall' )
+		);
+
+		echo '</tbody></table>';
+
+		printf( '<h2 id="bfw-page-appearance">%s</h2>', esc_html__( 'Page appearance', 'basic-firewall' ) );
+
+		printf(
+			'<p class="description" style="max-width:48rem">%s</p>',
+			wp_kses_post( __( 'Applies to the challenge, block and lockdown pages alike. Every colour on them is a CSS custom property, so <code>:root { --fw-accent: #0b8f5a; --fw-accent-hover: #087448; }</code> recolours the button on all three. The others are <code>--fw-bg</code>, <code>--fw-text</code>, <code>--fw-card</code>, <code>--fw-muted</code>, <code>--fw-accent-text</code>, <code>--fw-accent-disabled</code> and <code>--fw-error</code>.', 'basic-firewall' ) )
+		);
+
+		echo '<table class="form-table" role="presentation"><tbody>';
+
+		$this->row(
+			__( 'Language', 'basic-firewall' ),
+			self::text( 'pages_lang', (string) $settings->get( 'global.pages.lang', '' ), 'text', 'placeholder="en"' ),
+			__( 'The pages\' <code>lang</code> attribute: a language tag such as <code>en</code> or <code>fr-CA</code>. Set it when you translate the wording, so a screen reader pronounces it correctly.', 'basic-firewall' )
+		);
+
+		$this->row(
+			__( 'CSS', 'basic-firewall' ),
+			self::textarea( 'pages_styles', (string) $settings->get( 'global.pages.styles', '' ), 4 ),
+			__( 'Added after the built-in rules, so yours win. A logo goes here as a <code>background-image</code>.', 'basic-firewall' )
+		);
+
+		$this->row(
+			__( 'Stylesheet', 'basic-firewall' ),
+			self::text( 'pages_stylesheet', (string) $settings->get( 'global.pages.stylesheet', '' ), 'text', 'placeholder="/wp-content/themes/your-theme/firewall.css"' ),
+			__( 'A path on this site or an <code>https:</code> URL, linked after the built-in CSS.', 'basic-firewall' )
 		);
 
 		echo '</tbody></table>';

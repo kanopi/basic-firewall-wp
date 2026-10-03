@@ -16,6 +16,8 @@ use Kanopi\BasicFirewall\Logging\Redaction;
 use Kanopi\BasicFirewall\Plugin;
 use Kanopi\BasicFirewall\Redis_Password;
 use Kanopi\Firewall\Firewall;
+use Kanopi\Firewall\Utility\Config;
+use Kanopi\Firewall\Utility\DatabaseConsumers;
 use Symfony\Component\HttpFoundation\Request;
 
 /**
@@ -714,6 +716,76 @@ final class Runner {
 		}
 
 		return array_values( $firewall->getDegradedBackends() );
+	}
+
+	/**
+	 * Bring the firewall's database tables up to the schema the library declares.
+	 *
+	 * The library creates a table on first write and never alters it after, so
+	 * an index a release adds reaches only sites installed after it -- library
+	 * 2.37.0 indexes the log table by rule (kanopi/firewall#458), and a log
+	 * table written before it has neither index. The library leaves applying
+	 * them to `bin/firewall-migrate`, deliberately off the request path: an
+	 * `ALTER TABLE` on a large log takes a lock. A plugin user has no
+	 * `bin/firewall-migrate` to run, so this is it, reached from WP-CLI and
+	 * the Logging screen, never from a visitor's request.
+	 *
+	 * Additive only, as the library's is: it adds what is missing and never
+	 * drops, renames or rewrites, so running it twice is harmless.
+	 *
+	 * Every table the compiled configuration declares -- the block list, each
+	 * rate limit's counters, each database log handler -- with the live
+	 * credentials injected as they are for evaluation.
+	 *
+	 * @param bool $apply False to report what is missing without changing anything.
+	 *
+	 * @return array{changes: list<array<string, mixed>>, failures: list<array{label: string, error: string}>}|null
+	 *         Null when there is no usable library or compiled configuration.
+	 */
+	public function migrate_tables( bool $apply ): ?array {
+		if ( ! Library_Loader::is_usable() ) {
+			return null;
+		}
+
+		$compiled = Plugin::instance()->paths()->compiled_file();
+
+		if ( ! is_readable( $compiled ) ) {
+			return null;
+		}
+
+		$this->define_cache_constants();
+
+		try {
+			$defaults = dirname( (string) ( new \ReflectionClass( Firewall::class ) )->getFileName() ) . '/../config/config.yml';
+			$built    = DatabaseConsumers::fromConfig( Config::load( array( $defaults, $compiled ), $this->overrides() ) );
+		} catch ( \Throwable $e ) {
+			return null;
+		}
+
+		$changes  = array();
+		$failures = array_values( $built['failures'] );
+
+		foreach ( $built['consumers'] as $label => $consumer ) {
+			try {
+				$results = $apply ? $consumer->migrateSchema() : $consumer->pendingSchemaChanges();
+			} catch ( \Throwable $e ) {
+				$failures[] = array(
+					'label' => (string) $label,
+					'error' => $e->getMessage(),
+				);
+
+				continue;
+			}
+
+			foreach ( $results as $result ) {
+				$changes[] = array( 'label' => (string) $label ) + $result;
+			}
+		}
+
+		return array(
+			'changes'  => $changes,
+			'failures' => $failures,
+		);
 	}
 
 	/**

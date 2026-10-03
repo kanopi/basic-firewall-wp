@@ -11,10 +11,14 @@ namespace Kanopi\BasicFirewall\Tests\integration;
 
 use Kanopi\BasicFirewall\Database_Credentials;
 use Kanopi\BasicFirewall\Install\Challenge_Secret;
+use Kanopi\BasicFirewall\Plugin;
 use Kanopi\BasicFirewall\Support\Schema;
 use Kanopi\Firewall\Challenge\RecaptchaChallengeProvider;
 use Kanopi\Firewall\Challenge\TurnstileChallengeProvider;
+use Kanopi\Firewall\Exception\ChallengeRequiredException;
 use Kanopi\Firewall\Exception\ConfigurationException;
+use Kanopi\Firewall\Exception\FirewallBlockedException;
+use Kanopi\Firewall\Exception\FirewallLockdownException;
 use Kanopi\Firewall\Firewall;
 use Kanopi\Firewall\Logging\Handler\DatabaseHandler;
 use Kanopi\Firewall\Logging\Handler\DeferredHandler;
@@ -67,6 +71,17 @@ final class SiteSettingsHonouredTest extends Honoured_Settings {
 		'global.lockdown_allow'                           => 'test_lockdown',
 		'global.banning_status_code'                      => 'test_banning_response',
 		'global.banning_message'                          => 'test_banning_response',
+		'global.block_page.enabled'                       => 'test_block_page',
+		'global.block_page.title'                         => 'test_block_page',
+		'global.block_page.heading'                       => 'test_block_page',
+		'global.lockdown_page.enabled'                    => 'test_lockdown_page',
+		'global.lockdown_page.title'                      => 'test_lockdown_page',
+		'global.lockdown_page.heading'                    => 'test_lockdown_page',
+		'global.lockdown_page.message'                    => 'test_lockdown_page',
+		'global.pages.lang'                               => 'test_block_page',
+		'global.pages.styles'                             => 'test_block_page',
+		'global.pages.stylesheet'                         => 'test_block_page',
+		'global.banning_json'                             => 'test_banning_json',
 		'global.repeat_offender_status'                   => 'test_repeat_offenders',
 		'global.add_to_expire'                            => 'test_repeat_offenders',
 		'global.behind_proxy'                             => 'test_proxy_posture',
@@ -108,6 +123,11 @@ final class SiteSettingsHonouredTest extends Honoured_Settings {
 		'challenge.cookie_name'                           => 'test_challenge_section',
 		'challenge.header_name'                           => 'test_challenge_section',
 		'challenge.audience'                              => 'test_challenge_section',
+		'challenge.page.title'                            => 'test_challenge_page',
+		'challenge.page.heading'                          => 'test_challenge_page',
+		'challenge.page.intro'                            => 'test_challenge_page',
+		'challenge.page.button'                           => 'test_challenge_page',
+		'challenge.page.error_message'                    => 'test_challenge_page',
 		'challenge.provider_options.altcha.widget_src'    => 'test_challenge_section',
 		'challenge.provider_options.altcha.widget_integrity' => 'test_challenge_section',
 		'challenge.provider_options.turnstile.site_key'   => 'test_remote_challenge_providers',
@@ -145,6 +165,8 @@ final class SiteSettingsHonouredTest extends Honoured_Settings {
 		'logger.*.parameters.user'                        => 'test_database_log_handler',
 		'logger.*.parameters.password'                    => 'test_database_log_handler',
 		'logger.*.retain_days'                            => 'test_database_log_handler',
+		'logger.*.prune_batch_size'                       => 'test_database_log_handler',
+		'logger.*.prune_max_batches'                      => 'test_database_log_handler',
 		'logger.*.deferred'                               => 'test_log_handlers',
 		'logger.*.buffered'                               => 'test_database_log_handler',
 		'sources.cron_interval'                           => 'plugin: how often WordPress cron refreshes lists, never compiled; see LifecycleTest.',
@@ -392,6 +414,171 @@ final class SiteSettingsHonouredTest extends Honoured_Settings {
 		$this->assertSame( 451, $site['status'] );
 		$this->assertMatchesRegularExpression( '/^Refused [0-9A-Fa-f]+/', $site['message'] );
 		$this->assertSame( 410, $own['status'] );
+	}
+
+	/**
+	 * A block page, in the shared appearance, instead of one line of text.
+	 *
+	 * The page's message is the banning message, so a site switching the page
+	 * on keeps the wording it already had.
+	 */
+	public function test_block_page(): void {
+		$rules = array(
+			$this->rule( 'refuse', 'url', array( 'conditions' => array( self::condition( 'path', 'equals', '/refuse' ) ) ) ),
+		);
+
+		$plain = $this->outcome(
+			$this->build(
+				array(
+					'global' => array( 'banning_message' => 'Refused {{request.id}}' ),
+					'rules'  => $rules,
+				)
+			),
+			self::request( '/refuse', '203.0.113.31' )
+		);
+
+		$this->assertStringStartsWith( 'Refused ', $plain['message'], 'With the page off, the refusal is no longer the plain-text message.' );
+
+		$firewall = $this->build(
+			array(
+				'global' => array(
+					'banning_message' => "Refused.\nReference {{request.id}}",
+					'block_page'      => array(
+						'enabled' => true,
+						'title'   => 'Honoured title',
+						'heading' => 'Honoured heading',
+					),
+					'pages'           => array(
+						'lang'       => 'fr-CA',
+						'styles'     => ':root { --fw-accent: #0b8f5a; }',
+						'stylesheet' => '/honoured/firewall.css',
+					),
+				),
+				'rules'  => $rules,
+			)
+		);
+
+		try {
+			$firewall->evaluate( self::request( '/refuse', '203.0.113.32' ) );
+			$this->fail( 'The rule did not block.' );
+		} catch ( FirewallBlockedException $e ) {
+			$page = $e->getMessage();
+
+			$this->assertStringStartsWith( 'text/html', $e->getContentType() );
+			$this->assertStringContainsString( '<html lang="fr-CA">', $page );
+			$this->assertStringContainsString( '<title>Honoured title</title>', $page );
+			$this->assertStringContainsString( 'Honoured heading', $page );
+			$this->assertMatchesRegularExpression( '#<p>Refused\.</p>\s*<p>Reference [0-9A-Fa-f]+</p>#', $page, 'The banning message is not the page\'s text, a paragraph per line.' );
+			$this->assertStringContainsString( '--fw-accent: #0b8f5a;', $page );
+			$this->assertStringContainsString( 'href="/honoured/firewall.css"', $page );
+		}
+
+		/*
+		 * A value the library would refuse to start on, stored without the
+		 * screen's validation, costs that value and not the firewall.
+		 */
+		$firewall = $this->build(
+			array(
+				'global' => array(
+					'block_page' => array( 'enabled' => true ),
+					'pages'      => array(
+						'lang'       => 'not a language',
+						'styles'     => '</style><script>alert(1)</script>',
+						'stylesheet' => 'javascript:alert(1)',
+					),
+				),
+				'rules'  => $rules,
+			),
+			true
+		);
+
+		$this->assertTrue( self::property( $firewall, 'config' )['block_page'] ?? null, 'Unusable page values were written into the compiled file.' );
+		$this->assertSame( 'block', $this->outcome( $firewall, self::request( '/refuse', '203.0.113.33' ) )['verdict'] );
+
+		// And the screen's save refuses each of them, in the library's words.
+		$problems = Plugin::instance()->settings()->replace(
+			self::merge(
+				Plugin::instance()->settings()->all(),
+				array(
+					'global' => array(
+						'pages' => array(
+							'lang'       => 'not a language',
+							'styles'     => '</style>',
+							'stylesheet' => '//elsewhere.example/x.css',
+						),
+					),
+				)
+			)
+		);
+
+		$this->assertSame(
+			array( 'global.pages.lang', 'global.pages.styles', 'global.pages.stylesheet' ),
+			array_column( $problems, 'path' )
+		);
+		$this->assertSame( '', Plugin::instance()->settings()->get( 'global.pages.stylesheet' ) );
+	}
+
+	/**
+	 * A lockdown page, with its own message.
+	 */
+	public function test_lockdown_page(): void {
+		$firewall = $this->build(
+			array(
+				'global' => array(
+					'lockdown'       => true,
+					'lockdown_allow' => array( '198.51.100.0/24' ),
+					'lockdown_page'  => array(
+						'enabled' => true,
+						'title'   => 'Back soon',
+						'heading' => 'Closed for maintenance',
+						'message' => "Back at 18:00 UTC.\nReference {{request.id}}",
+					),
+				),
+			)
+		);
+
+		try {
+			$firewall->evaluate( self::request( '/', '192.0.2.40' ) );
+			$this->fail( 'Lockdown let an address off the allowlist through.' );
+		} catch ( FirewallLockdownException $e ) {
+			$page = $e->getMessage();
+
+			$this->assertStringStartsWith( 'text/html', $e->getContentType() );
+			$this->assertStringContainsString( '<title>Back soon</title>', $page );
+			$this->assertStringContainsString( 'Closed for maintenance', $page );
+			$this->assertMatchesRegularExpression( '#<p>Back at 18:00 UTC\.</p>\s*<p>Reference [0-9A-Fa-f]+</p>#', $page );
+		}
+	}
+
+	/**
+	 * A client that asks for JSON first gets JSON; a browser does not.
+	 */
+	public function test_banning_json(): void {
+		$firewall = $this->build(
+			array(
+				'global' => array(
+					'banning_json' => true,
+					'block_page'   => array( 'enabled' => true ),
+				),
+				'rules'  => array(
+					$this->rule( 'refuse', 'url', array( 'conditions' => array( self::condition( 'path', 'equals', '/refuse' ) ) ) ),
+				),
+			)
+		);
+
+		foreach ( array(
+			'203.0.113.34' => array( 'application/json', 'application/json' ),
+			'203.0.113.36' => array( 'text/html,application/xhtml+xml', 'text/html' ),
+		) as $ip => list( $accept, $expected ) ) {
+			try {
+				$firewall->evaluate( self::request( '/refuse', $ip, array( 'Accept' => $accept ) ) );
+				$this->fail( 'The rule did not block.' );
+			} catch ( FirewallBlockedException $e ) {
+				$this->assertStringStartsWith( $expected, $e->getContentType(), "Accept: $accept" );
+			}
+		}
+
+		$this->assertSame( 'blocked', json_decode( $this->outcome( $firewall, self::request( '/refuse', '203.0.113.35', array( 'Accept' => 'application/json' ) ) )['message'], true )['error'] ?? null );
 	}
 
 	/**
@@ -983,6 +1170,63 @@ final class SiteSettingsHonouredTest extends Honoured_Settings {
 	}
 
 	/**
+	 * The interstitial's wording, and the shared appearance, on the page.
+	 */
+	public function test_challenge_page(): void {
+		$firewall = $this->build(
+			array(
+				'global'    => array(
+					'pages' => array(
+						'lang'   => 'fr',
+						'styles' => '.card { border-top: 4px solid #0b5; }',
+					),
+				),
+				'challenge' => array(
+					'provider' => 'math',
+					'page'     => array(
+						'title'         => 'Vérification requise',
+						'heading'       => 'Vérification rapide',
+						'intro'         => 'Merci de confirmer que vous êtes humain.',
+						'button'        => 'Continuer',
+						'error_message' => 'La vérification a échoué.',
+					),
+				),
+				'rules'     => array(
+					$this->rule( 'puzzle', 'url', array( 'conditions' => array( self::condition( 'path', 'equals', '/puzzle' ) ) ), array( 'response' => 'challenge' ) ),
+				),
+			)
+		);
+
+		// Equal, not identical: the library orders the keys its own way.
+		$this->assertEquals(
+			array(
+				'title'         => 'Vérification requise',
+				'heading'       => 'Vérification rapide',
+				'intro'         => 'Merci de confirmer que vous êtes humain.',
+				'button'        => 'Continuer',
+				'error_message' => 'La vérification a échoué.',
+				'lang'          => 'fr',
+				'styles'        => '.card { border-top: 4px solid #0b5; }',
+			),
+			self::property( $firewall, 'challengeConfig' )['page'] ?? null
+		);
+
+		$request = self::request( '/puzzle', '203.0.113.82' );
+
+		try {
+			$firewall->evaluate( $request );
+			$this->fail( 'The rule did not challenge.' );
+		} catch ( ChallengeRequiredException $e ) {
+			$page = $e->renderInterstitial( $request );
+
+			$this->assertStringContainsString( '<html lang="fr">', $page );
+			$this->assertStringContainsString( 'Vérification rapide', $page );
+			$this->assertStringContainsString( 'Continuer', $page );
+			$this->assertStringContainsString( 'border-top: 4px solid #0b5;', $page );
+		}
+	}
+
+	/**
 	 * Turnstile as the default and reCAPTCHA through a rule, both configured.
 	 *
 	 * The case that took the whole firewall down: the library builds every
@@ -1205,6 +1449,8 @@ final class SiteSettingsHonouredTest extends Honoured_Settings {
 						'table'             => 'honoured_log',
 						'connection_source' => 'wordpress',
 						'retain_days'       => 12,
+						'prune_batch_size'  => 250,
+						'prune_max_batches' => 4,
 						'buffered'          => false,
 					),
 					array(
@@ -1248,6 +1494,8 @@ final class SiteSettingsHonouredTest extends Honoured_Settings {
 
 		$this->assertNotNull( $wordpress, 'The WordPress-connected handler is not writing to the prefixed table.' );
 		$this->assertSame( 12, self::property( $wordpress, 'retentionDays' ) );
+		$this->assertSame( 250, self::property( $wordpress, 'pruneBatchSize' ) );
+		$this->assertSame( 4, self::property( $wordpress, 'pruneMaxBatches' ) );
 		$this->assertFalse( self::property( $wordpress, 'buffered' ) );
 		$this->assertSame( $parameters['dbname'], self::property( $wordpress, 'connectionParameters' )['dbname'] ?? null, 'WordPress\'s connection was not injected.' );
 

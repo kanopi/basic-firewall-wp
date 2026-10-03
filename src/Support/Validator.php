@@ -327,6 +327,21 @@ final class Validator {
 			return $fallback;
 		}
 
+		/*
+		 * A value whose rules belong to somebody else -- the library's, for a
+		 * page setting it would refuse to start with. The callback names the
+		 * problem, or returns null; empty is unset and never asked about.
+		 */
+		if ( '' !== $string && isset( $node['check'] ) && is_callable( $node['check'] ) ) {
+			$problem = call_user_func( $node['check'], $string );
+
+			if ( is_string( $problem ) ) {
+				$this->error( $path, $problem );
+
+				return $fallback;
+			}
+		}
+
 		return $string;
 	}
 

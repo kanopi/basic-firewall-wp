@@ -9,11 +9,13 @@ declare( strict_types = 1 );
 
 namespace Kanopi\BasicFirewall\Admin\Screen;
 
+use Kanopi\BasicFirewall\Admin\Admin;
 use Kanopi\BasicFirewall\Admin\Notices;
 use Kanopi\BasicFirewall\Admin\Screen;
 use Kanopi\BasicFirewall\Challenge\Pass_Cookie;
 use Kanopi\BasicFirewall\Compiler\Library_Map;
 use Kanopi\BasicFirewall\Install\Challenge_Secret;
+use Kanopi\BasicFirewall\Support\Page_Settings;
 
 /**
  * The interstitial a challenged visitor solves.
@@ -60,6 +62,10 @@ final class Challenge_Screen extends Screen {
 		$all['challenge']['header_name'] = $this->posted( 'header_name' );
 		$all['challenge']['audience']    = $this->posted( 'audience' );
 		$all['challenge']['ttl']         = (int) $this->posted( 'ttl', '3600' );
+
+		foreach ( Page_Settings::CHALLENGE_TEXT_KEYS as $key ) {
+			$all['challenge']['page'][ $key ] = $this->posted( 'page_' . $key );
+		}
 
 		$secret = $this->posted( 'secret' );
 
@@ -208,7 +214,53 @@ final class Challenge_Screen extends Screen {
 			echo '</div>';
 		}
 
+		$this->render_page_section();
+
 		$this->close_form();
+	}
+
+	/**
+	 * The interstitial's own wording.
+	 *
+	 * Every field left empty keeps the firewall's built-in wording, which is
+	 * shown as the placeholder so an empty field still says what visitors
+	 * read. Language and colours are on the General screen, because the block
+	 * and lockdown pages share them.
+	 */
+	private function render_page_section(): void {
+		$settings = $this->plugin()->settings();
+
+		printf( '<h2>%s</h2>', esc_html__( 'Challenge page wording', 'basic-firewall' ) );
+
+		printf(
+			'<p class="description" style="max-width:48rem">%s</p>',
+			wp_kses_post(
+				sprintf(
+					/* translators: %s: URL of the General settings screen. */
+					__( 'Plain text, shown to a visitor asked to verify. Leave a field empty for the built-in wording. The language, colours and stylesheet are under <a href="%s">Page appearance</a> on the General screen, shared with the block and lockdown pages. The widget\'s own text, such as Turnstile\'s, comes from the widget.', 'basic-firewall' ),
+					esc_url( Admin::url( 'basic-firewall-general' ) . '#bfw-page-appearance' )
+				)
+			)
+		);
+
+		echo '<table class="form-table" role="presentation"><tbody>';
+
+		$fields = array(
+			'title'         => array( __( 'Browser tab title', 'basic-firewall' ), 'Verification required' ),
+			'heading'       => array( __( 'Heading', 'basic-firewall' ), 'Quick verification' ),
+			'intro'         => array( __( 'Line under the heading', 'basic-firewall' ), __( 'The provider\'s own', 'basic-firewall' ) ),
+			'button'        => array( __( 'Button label', 'basic-firewall' ), 'Continue' ),
+			'error_message' => array( __( 'Shown when a submission is refused', 'basic-firewall' ), __( 'The provider\'s own', 'basic-firewall' ) ),
+		);
+
+		foreach ( $fields as $key => $field ) {
+			$this->row(
+				$field[0],
+				self::text( 'page_' . $key, (string) $settings->get( 'challenge.page.' . $key, '' ), 'text', sprintf( 'placeholder="%s"', esc_attr( $field[1] ) ) )
+			);
+		}
+
+		echo '</tbody></table>';
 	}
 
 	/**

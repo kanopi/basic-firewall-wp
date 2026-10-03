@@ -200,6 +200,9 @@ printf '\nwp-cli: caches\n'
 expect ok 'clear-cache runs without confirmation' 'Success:' clear-cache
 expect ok 'warm-cache builds the agent corpus, or says there is none to build' 'agent corpus' warm-cache
 expect ok 'warm-cache is safe to run twice' 'agent corpus' warm-cache
+expect ok 'migrate --dry-run reports without changing anything' 'Success:' migrate --dry-run
+expect ok 'migrate is safe to run twice' 'Success:' migrate
+expect ok 'migrate leaves nothing pending' 'up to date' migrate --dry-run
 
 printf '\nwp-cli: export and import\n'
 
