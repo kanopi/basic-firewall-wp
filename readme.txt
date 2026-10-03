@@ -4,7 +4,7 @@ Tags: security, firewall, rate limiting, bot protection, waf
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 1.0.0-rc.7
+Stable tag: 1.0.0-rc.8
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -134,6 +134,14 @@ proxy too.
 4. Blocked clients, with an address lookup that works on every backend.
 
 == Changelog ==
+
+= 1.0.0-rc.8 =
+* Bundles kanopi/firewall 2.37.0.
+* The challenge page's wording, notices, language, CSS and stylesheet can be set on the Challenge screen.
+* Blocked and locked-out visitors can be shown an HTML page instead of one line of text, with a shared page appearance (language, CSS, stylesheet) on the General screen; API clients asking for JSON can get JSON.
+* New wp basic-firewall migrate command, and an Add missing table indexes button on the Logging screen. Sites with a database log handler should run it once to add the log table's new indexes.
+* Old log rows are deleted in batches, with the batch size and count settable per database log handler.
+* In exception mode, a block page or JSON answer is sent as the library built it.
 
 = 1.0.0-rc.7 =
 * Bundles kanopi/firewall 2.36.1.
