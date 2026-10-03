@@ -761,9 +761,10 @@ final class Schema {
 
 					/*
 					 * Empty keeps the library's own wording, which is why every
-					 * default is empty rather than a copy of it. Language and
-					 * styling are under global.pages, shared with the block and
-					 * lockdown pages.
+					 * default is empty rather than a copy of it. Language, CSS
+					 * and stylesheet here are the challenge page's own: CSS is
+					 * added after global.pages' shared CSS, and a language or
+					 * stylesheet replaces the shared one. See Page_Settings.
 					 */
 					'children' => array(
 						'title'         => array(
@@ -791,6 +792,33 @@ final class Schema {
 							'label'   => 'Shown when a submission is refused',
 							'default' => '',
 						),
+						'lang'          => array(
+							'type'    => 'string',
+							'label'   => 'Language tag',
+							'default' => '',
+							'check'   => array( Page_Settings::class, 'lang_problem' ),
+						),
+						'styles'        => array(
+							'type'    => 'string',
+							'label'   => 'CSS added after the shared page CSS',
+							'default' => '',
+							'check'   => array( Page_Settings::class, 'styles_problem' ),
+						),
+						'stylesheet'    => array(
+							'type'    => 'string',
+							'label'   => 'Stylesheet: a path on this site or an https: URL',
+							'default' => '',
+							'check'   => array( Page_Settings::class, 'stylesheet_problem' ),
+						),
+					),
+				),
+				'notice'           => array(
+					'type'    => 'list',
+					'label'   => 'Notices shown on every challenge page',
+					'default' => array(),
+					'of'      => array(
+						'type'    => 'string',
+						'default' => '',
 					),
 				),
 				'provider_options' => array(

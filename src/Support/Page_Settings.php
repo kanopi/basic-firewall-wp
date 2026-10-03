@@ -35,7 +35,8 @@ use Kanopi\Firewall\Page\BlockPage;
  * `lang`, `styles` and `stylesheet` are stored once, under `global.pages`, and
  * written into all three pages. The library's pages share one card and one
  * stylesheet, so one set of colours is what an administrator means, and three
- * copies of the same CSS would only drift apart.
+ * copies of the same CSS would only drift apart. The challenge page can add
+ * its own on top: see challenge().
  */
 final class Page_Settings {
 
@@ -85,7 +86,23 @@ final class Page_Settings {
 	 * @return array<string, string>
 	 */
 	public static function challenge( array $page, array $pages ): array {
-		return self::usable( $page, self::CHALLENGE_TEXT_KEYS ) + self::usable( $pages, self::APPEARANCE_KEYS );
+		$own    = self::usable( $page, self::APPEARANCE_KEYS );
+		$shared = self::usable( $pages, self::APPEARANCE_KEYS );
+
+		/*
+		 * The challenge page's own language and stylesheet replace the shared
+		 * ones. Its CSS is added after the shared CSS rather than in place of
+		 * it, so a site's colours carry over and the challenge page only says
+		 * what is different about it. Two blocks that are each free of a
+		 * closing style tag cannot make one by being joined with a newline.
+		 */
+		$compiled = self::usable( $page, self::CHALLENGE_TEXT_KEYS ) + $own + $shared;
+
+		if ( isset( $own['styles'], $shared['styles'] ) ) {
+			$compiled['styles'] = $shared['styles'] . "\n" . $own['styles'];
+		}
+
+		return $compiled;
 	}
 
 	/**

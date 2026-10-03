@@ -128,6 +128,10 @@ final class SiteSettingsHonouredTest extends Honoured_Settings {
 		'challenge.page.intro'                            => 'test_challenge_page',
 		'challenge.page.button'                           => 'test_challenge_page',
 		'challenge.page.error_message'                    => 'test_challenge_page',
+		'challenge.page.lang'                             => 'test_challenge_page',
+		'challenge.page.styles'                           => 'test_challenge_page',
+		'challenge.page.stylesheet'                       => 'test_challenge_page',
+		'challenge.notice'                                => 'test_challenge_page',
 		'challenge.provider_options.altcha.widget_src'    => 'test_challenge_section',
 		'challenge.provider_options.altcha.widget_integrity' => 'test_challenge_section',
 		'challenge.provider_options.turnstile.site_key'   => 'test_remote_challenge_providers',
@@ -1189,7 +1193,10 @@ final class SiteSettingsHonouredTest extends Honoured_Settings {
 						'intro'         => 'Merci de confirmer que vous êtes humain.',
 						'button'        => 'Continuer',
 						'error_message' => 'La vérification a échoué.',
+						'styles'        => ':root { --fw-accent: #0b8f5a; }',
+						'stylesheet'    => '/honoured/challenge.css',
 					),
+					'notice'   => array( 'Besoin d\'aide ? help@example.com', '  ' ),
 				),
 				'rules'     => array(
 					$this->rule( 'puzzle', 'url', array( 'conditions' => array( self::condition( 'path', 'equals', '/puzzle' ) ) ), array( 'response' => 'challenge' ) ),
@@ -1206,10 +1213,14 @@ final class SiteSettingsHonouredTest extends Honoured_Settings {
 				'button'        => 'Continuer',
 				'error_message' => 'La vérification a échoué.',
 				'lang'          => 'fr',
-				'styles'        => '.card { border-top: 4px solid #0b5; }',
+				'styles'        => ".card { border-top: 4px solid #0b5; }\n:root { --fw-accent: #0b8f5a; }",
+				'stylesheet'    => '/honoured/challenge.css',
 			),
-			self::property( $firewall, 'challengeConfig' )['page'] ?? null
+			self::property( $firewall, 'challengeConfig' )['page'] ?? null,
+			'The shared CSS did not come first with the challenge page\'s own after it.'
 		);
+
+		$this->assertSame( array( 'Besoin d\'aide ? help@example.com' ), self::property( $firewall, 'challengeConfig' )['notice'] ?? null );
 
 		$request = self::request( '/puzzle', '203.0.113.82' );
 
@@ -1223,6 +1234,9 @@ final class SiteSettingsHonouredTest extends Honoured_Settings {
 			$this->assertStringContainsString( 'Vérification rapide', $page );
 			$this->assertStringContainsString( 'Continuer', $page );
 			$this->assertStringContainsString( 'border-top: 4px solid #0b5;', $page );
+			$this->assertStringContainsString( '--fw-accent: #0b8f5a;', $page );
+			$this->assertStringContainsString( 'href="/honoured/challenge.css"', $page );
+			$this->assertStringContainsString( 'Besoin d&#039;aide ? help@example.com', $page );
 		}
 	}
 

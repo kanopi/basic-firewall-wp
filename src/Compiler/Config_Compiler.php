@@ -1667,6 +1667,22 @@ final class Config_Compiler {
 			$compiled['page'] = $page;
 		}
 
+		/*
+		 * Plain text shown on every challenge page, above the form (library
+		 * 2.35.0): a help address, or why visitors are being asked. Blank
+		 * lines are dropped rather than shown as empty boxes.
+		 */
+		$notices = array_values(
+			array_filter(
+				array_map( static fn ( $notice ): string => trim( (string) $notice ), (array) ( $challenge['notice'] ?? array() ) ),
+				static fn ( string $notice ): bool => '' !== $notice
+			)
+		);
+
+		if ( array() !== $notices ) {
+			$compiled['notice'] = $notices;
+		}
+
 		return $compiled;
 	}
 

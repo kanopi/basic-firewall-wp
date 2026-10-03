@@ -36,10 +36,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
-- **Wording for the challenge page.** The Challenge screen sets the page's tab
-  title, heading, intro line, button label and error message
+- **The challenge page's wording and styling.** The Challenge screen sets the
+  page's tab title, heading, intro line, button label and error message, plus
+  its own language, CSS and stylesheet
   ([kanopi/firewall#451](https://github.com/kanopi/firewall/issues/451)). A
-  field left empty keeps the built-in wording.
+  field left empty keeps the built-in wording. The page's CSS is added after
+  the shared Page appearance CSS; its language or stylesheet replaces the
+  shared one.
+- **Notices on the challenge page.** One per line on the Challenge screen,
+  each shown in its own box above the form: a help address, or why visitors
+  are being asked (`challenge.notice`, library 2.35.0).
 - **Block and lockdown pages.** The General screen can switch on an HTML page
   for a blocked client, using the banning message as its text, and for a
   visitor refused by lockdown, with its own message. Both have their own title

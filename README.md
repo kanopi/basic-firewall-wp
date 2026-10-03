@@ -970,10 +970,18 @@ wants, in its own language and colours:
 
 | Page | Where | What you can set |
 |---|---|---|
-| Challenge | Challenge screen, *Challenge page wording* | Tab title, heading, intro line, button label, error message |
+| Challenge | Challenge screen, *Challenge page* | Tab title, heading, intro line, button label, error message, notices, and its own language, CSS and stylesheet |
 | Block | General screen, *Block and lockdown pages* | Off or on, tab title, heading. Its text is the banning message, a paragraph per line |
 | Lockdown | General screen, *Block and lockdown pages* | Off or on, tab title, heading, message |
 | All three | General screen, *Page appearance* | Language tag, extra CSS, a stylesheet |
+
+The challenge page's own CSS is added after *Page appearance*'s, so a site's
+colours carry over and the challenge page only says what is different. Its own
+language or stylesheet replaces the shared one, for that page only.
+
+**Notices** are plain-text lines shown above the challenge form, each in its own
+box (coloured by `--fw-notice-bg`, `--fw-notice-border` and `--fw-notice-text`):
+a help address, or why visitors are being asked.
 
 - **Text is plain text.** It is escaped once when the page is written, so it
   can't add markup. The block and lockdown text take the same `{{request.id}}`
@@ -982,8 +990,10 @@ wants, in its own language and colours:
   sees.
 - **Colours are CSS custom properties.** `:root { --fw-accent: #0b8f5a;
   --fw-accent-hover: #087448; }` in *CSS* recolours the button on all three
-  pages. The others are `--fw-bg`, `--fw-text`, `--fw-card`, `--fw-muted`,
-  `--fw-accent-text`, `--fw-accent-disabled` and `--fw-error`. Selectors such
+  pages. The others are `--fw-bg`, `--fw-text`, `--fw-card`,
+  `--fw-card-shadow`, `--fw-muted`, `--fw-accent-text`, `--fw-accent-disabled`,
+  `--fw-error`, the three `--fw-notice-*` and `--fw-input-border` (the math
+  challenge's answer box). Selectors such
   as `.card` work too, but they belong to the library's markup and can change
   between releases.
 - **A stylesheet is a path on this site or an `https:` URL.** A

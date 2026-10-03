@@ -120,6 +120,36 @@ final class PageSettingsTest extends TestCase {
 	}
 
 	/**
+	 * The challenge page's own styling is added to the shared, or replaces it.
+	 */
+	public function test_the_challenge_page_adds_to_the_shared_appearance(): void {
+		$shared = array(
+			'lang'       => 'en',
+			'styles'     => ':root { --fw-accent: #111; }',
+			'stylesheet' => '/shared.css',
+		);
+
+		$this->assertSame( $shared, Page_Settings::challenge( array(), $shared ) );
+
+		$compiled = Page_Settings::challenge(
+			array(
+				'lang'       => 'fr',
+				'styles'     => '.card { padding: 0; }',
+				'stylesheet' => '',
+			),
+			$shared
+		);
+
+		$this->assertSame( 'fr', $compiled['lang'] );
+		$this->assertSame( ":root { --fw-accent: #111; }\n.card { padding: 0; }", $compiled['styles'] );
+		$this->assertSame( '/shared.css', $compiled['stylesheet'], 'An empty stylesheet of its own did not fall back to the shared one.' );
+		$this->assertSame( array(), ChallengePage::problems( $compiled ) );
+
+		// A bad value of its own is dropped, and the shared one stands.
+		$this->assertSame( '/shared.css', Page_Settings::challenge( array( 'stylesheet' => 'javascript:x' ), $shared )['stylesheet'] );
+	}
+
+	/**
 	 * Off is no page at all; on with nothing set is the built-in page.
 	 */
 	public function test_a_refusal_page_is_off_unless_switched_on(): void {
