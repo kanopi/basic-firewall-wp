@@ -7,6 +7,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.0.0-rc.8]
+
+**Eighth release candidate for 1.0.0.** Published as a GitHub pre-release, so
+the `releases/latest/download` URL does not serve it; install it by its own URL.
+It bundles kanopi/firewall 2.37.0. The challenge, block and lockdown pages can
+now carry the site's own wording, language and styling, a client asking for
+JSON can be answered with JSON, and old log rows are deleted in batches. Sites
+with a database log handler should run `wp basic-firewall migrate` once: read
+*What changes on upgrade*. What changed since 1.0.0-rc.7 is below.
+
 ### What changes on upgrade
 
 - **Existing database log tables need two new indexes.** kanopi/firewall 2.37.0
