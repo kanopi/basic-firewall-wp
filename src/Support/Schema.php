@@ -210,6 +210,37 @@ final class Schema {
 					'label'   => 'Message returned to blocked clients',
 					'default' => 'Request blocked. Reference: {{request.id}}',
 				),
+				'block_page'              => self::refusal_page( 'Show blocked clients a page instead of the message', array( 'title', 'heading' ) ),
+				'lockdown_page'           => self::refusal_page( 'Show visitors refused by lockdown a page', array( 'title', 'heading', 'message' ) ),
+				'pages'                   => array(
+					'type'     => 'map',
+					'label'    => 'Appearance of the challenge, block and lockdown pages',
+					'children' => array(
+						'lang'       => array(
+							'type'    => 'string',
+							'label'   => 'Language tag',
+							'default' => '',
+							'check'   => array( Page_Settings::class, 'lang_problem' ),
+						),
+						'styles'     => array(
+							'type'    => 'string',
+							'label'   => 'CSS added after the built-in rules',
+							'default' => '',
+							'check'   => array( Page_Settings::class, 'styles_problem' ),
+						),
+						'stylesheet' => array(
+							'type'    => 'string',
+							'label'   => 'Stylesheet: a path on this site or an https: URL',
+							'default' => '',
+							'check'   => array( Page_Settings::class, 'stylesheet_problem' ),
+						),
+					),
+				),
+				'banning_json'            => array(
+					'type'    => 'bool',
+					'label'   => 'Answer a client that asks for JSON with JSON',
+					'default' => false,
+				),
 				'repeat_offender_status'  => array(
 					'type'    => 'int',
 					'label'   => 'HTTP status code returned to already-blocked clients',
@@ -302,6 +333,48 @@ final class Schema {
 					),
 				),
 			),
+		);
+	}
+
+	/**
+	 * A block or lockdown page: off by default, and its text.
+	 *
+	 * Off, the refusal is the plain-text message it has always been. Every
+	 * text key left empty keeps the library's built-in wording; the block
+	 * page's message is the banning message, so it has no key of its own.
+	 *
+	 * @param string       $label     What switching it on does.
+	 * @param list<string> $text_keys The text it stores.
+	 *
+	 * @return array<string, mixed>
+	 */
+	private static function refusal_page( string $label, array $text_keys ): array {
+		$children = array(
+			'enabled' => array(
+				'type'    => 'bool',
+				'label'   => $label,
+				'default' => false,
+			),
+		);
+
+		$labels = array(
+			'title'   => 'Browser tab title',
+			'heading' => 'Heading',
+			'message' => 'Message',
+		);
+
+		foreach ( $text_keys as $key ) {
+			$children[ $key ] = array(
+				'type'    => 'string',
+				'label'   => $labels[ $key ],
+				'default' => '',
+			);
+		}
+
+		return array(
+			'type'     => 'map',
+			'label'    => $label,
+			'children' => $children,
 		);
 	}
 
@@ -682,6 +755,72 @@ final class Schema {
 					'label'   => 'Token audience',
 					'default' => '',
 				),
+				'page'             => array(
+					'type'     => 'map',
+					'label'    => 'Wording of the challenge page',
+
+					/*
+					 * Empty keeps the library's own wording, which is why every
+					 * default is empty rather than a copy of it. Language, CSS
+					 * and stylesheet here are the challenge page's own: CSS is
+					 * added after global.pages' shared CSS, and a language or
+					 * stylesheet replaces the shared one. See Page_Settings.
+					 */
+					'children' => array(
+						'title'         => array(
+							'type'    => 'string',
+							'label'   => 'Browser tab title',
+							'default' => '',
+						),
+						'heading'       => array(
+							'type'    => 'string',
+							'label'   => 'Heading',
+							'default' => '',
+						),
+						'intro'         => array(
+							'type'    => 'string',
+							'label'   => 'Line under the heading',
+							'default' => '',
+						),
+						'button'        => array(
+							'type'    => 'string',
+							'label'   => 'Button label',
+							'default' => '',
+						),
+						'error_message' => array(
+							'type'    => 'string',
+							'label'   => 'Shown when a submission is refused',
+							'default' => '',
+						),
+						'lang'          => array(
+							'type'    => 'string',
+							'label'   => 'Language tag',
+							'default' => '',
+							'check'   => array( Page_Settings::class, 'lang_problem' ),
+						),
+						'styles'        => array(
+							'type'    => 'string',
+							'label'   => 'CSS added after the shared page CSS',
+							'default' => '',
+							'check'   => array( Page_Settings::class, 'styles_problem' ),
+						),
+						'stylesheet'    => array(
+							'type'    => 'string',
+							'label'   => 'Stylesheet: a path on this site or an https: URL',
+							'default' => '',
+							'check'   => array( Page_Settings::class, 'stylesheet_problem' ),
+						),
+					),
+				),
+				'notice'           => array(
+					'type'    => 'list',
+					'label'   => 'Notices shown on every challenge page',
+					'default' => array(),
+					'of'      => array(
+						'type'    => 'string',
+						'default' => '',
+					),
+				),
 				'provider_options' => array(
 					'type'     => 'map',
 					'label'    => 'Provider specific options',
@@ -955,6 +1094,20 @@ final class Schema {
 					'label'   => 'Keep history for this many days, 0 to keep everything',
 					'default' => 30,
 					'min'     => 0,
+				),
+				'prune_batch_size'  => array(
+					'type'    => 'int',
+					'label'   => 'Rows each retention delete removes',
+
+					// The library's defaults (library 2.37.0, kanopi/firewall#459, #464).
+					'default' => 1000,
+					'min'     => 1,
+				),
+				'prune_max_batches' => array(
+					'type'    => 'int',
+					'label'   => 'Most deletes one write may run',
+					'default' => 10,
+					'min'     => 1,
 				),
 				'deferred'          => array(
 					'type'    => 'bool',

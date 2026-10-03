@@ -16,6 +16,7 @@ use Kanopi\Firewall\Exception\ChallengeSolvedException;
 use Kanopi\Firewall\Exception\FirewallBlockedException;
 use Kanopi\Firewall\Exception\FirewallLockdownException;
 use Kanopi\Firewall\Exception\FirewallRedirectException;
+use Kanopi\Firewall\Page\BlockPage;
 use Kanopi\Firewall\Utility\NoStore;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\HttpFoundation\Request;
@@ -95,6 +96,8 @@ final class NoStoreHeadersTest extends TestCase {
 			'unrenderable challenge' => array( fn() => Outcome_Responder::challenge_response( new ChallengeRequiredException( 'no provider' ), Request::create( '/learning-resources/' ) ), 503 ),
 			'block'                  => array( fn() => Outcome_Responder::blocked_response( new FirewallBlockedException( 'Blocked.', 403 ) ), 403 ),
 			'lockdown'               => array( fn() => Outcome_Responder::blocked_response( new FirewallLockdownException( 'Closed.' ) ), 503 ),
+			'block page'             => array( fn() => Outcome_Responder::blocked_response( new FirewallBlockedException( '<!DOCTYPE html><html></html>', 403, null, 'text/html; charset=utf-8' ) ), 403 ),
+			'block, as JSON'         => array( fn() => Outcome_Responder::blocked_response( new FirewallBlockedException( '{"error":"blocked"}', 403, null, 'application/json; charset=utf-8' ) ), 403 ),
 			'redirect'               => array( fn() => Outcome_Responder::redirect_response( new FirewallRedirectException( '/notice', 307 ) ), 307 ),
 			'solved, as JSON'        => array( fn() => Outcome_Responder::solved_http_response( new ChallengeSolvedException( 'token', '/where' ), $json ), 200 ),
 			'solved, as a redirect'  => array( fn() => Outcome_Responder::solved_http_response( new ChallengeSolvedException( 'token', '/where' ), Request::create( '/basic-firewall/challenge', 'POST' ) ), 302 ),
@@ -111,6 +114,39 @@ final class NoStoreHeadersTest extends TestCase {
 		$this->assertSame( '<form id="challenge-form">stub</form>', $response['body'] );
 		$this->assertSame( '60', $response['headers']['Retry-After'] );
 		$this->assertNull( $response['warning'] );
+	}
+
+	/**
+	 * A block page or JSON from the library is sent as it came (kanopi/firewall#452).
+	 *
+	 * Wrapped in the plain-text message's document, the page would arrive as
+	 * its own escaped source, and JSON as HTML to a client that asked for JSON.
+	 */
+	public function test_a_block_page_or_json_is_sent_as_the_library_built_it(): void {
+		$page     = '<!DOCTYPE html><html lang="en"><body><h1>Request blocked</h1></body></html>';
+		$response = Outcome_Responder::blocked_response( new FirewallBlockedException( $page, 403, null, 'text/html; charset=utf-8' ) );
+
+		$this->assertSame( $page, $response['body'] );
+		$this->assertSame( 'text/html; charset=utf-8', $response['headers']['Content-Type'] );
+		$this->assertSame( BlockPage::CONTENT_SECURITY_POLICY, $response['headers']['Content-Security-Policy'] );
+
+		$json     = '{"error":"lockdown","status":503,"request_id":"abc","retry_after":300}';
+		$response = Outcome_Responder::blocked_response( new FirewallLockdownException( $json, 503, 300, null, 'application/json; charset=utf-8' ) );
+
+		$this->assertSame( $json, $response['body'] );
+		$this->assertSame( 'application/json; charset=utf-8', $response['headers']['Content-Type'] );
+		$this->assertSame( '300', $response['headers']['Retry-After'] );
+		$this->assertArrayNotHasKey( 'Content-Security-Policy', $response['headers'] );
+	}
+
+	/**
+	 * The plain-text message is still escaped into a page of the plugin's own.
+	 */
+	public function test_a_plain_text_message_is_escaped_into_a_page(): void {
+		$response = Outcome_Responder::blocked_response( new FirewallBlockedException( 'Blocked <b>now</b>.', 403 ) );
+
+		$this->assertSame( 'text/html; charset=utf-8', $response['headers']['Content-Type'] );
+		$this->assertStringContainsString( 'Blocked &lt;b&gt;now&lt;/b&gt;.', $response['body'] );
 	}
 
 	/**

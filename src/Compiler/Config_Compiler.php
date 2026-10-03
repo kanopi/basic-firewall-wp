@@ -26,6 +26,7 @@ use Kanopi\BasicFirewall\RuleType\Types\User_Agent;
 use Kanopi\BasicFirewall\RuleType\Types\Vulnerability_Score;
 use Kanopi\BasicFirewall\Runtime\Lockdown;
 use Kanopi\BasicFirewall\Runtime\Role_Bypass;
+use Kanopi\BasicFirewall\Support\Page_Settings;
 use Kanopi\BasicFirewall\Support\Schema;
 use Kanopi\BasicFirewall\Support\Site_Layout;
 use Kanopi\Firewall\Utility\RequestPath;
@@ -195,7 +196,7 @@ final class Config_Compiler {
 		 * presets count: one of them ships `response: challenge`.
 		 */
 		if ( $this->needs_challenge( $rules, (array) $settings->get( 'presets', array() ) ) ) {
-			$compiled['challenge'] = $this->compile_challenge( $challenge, $rules );
+			$compiled['challenge'] = $this->compile_challenge( $challenge, $rules, (array) $settings->get( 'global.pages', array() ) );
 		}
 
 		$compiled = $this->apply_advanced_yaml( $compiled, (string) $settings->get( 'advanced_yaml', '' ) );
@@ -525,6 +526,32 @@ final class Config_Compiler {
 
 		if ( array() !== $escalation ) {
 			$compiled['blocking_escalation'] = $escalation;
+		}
+
+		/*
+		 * A page instead of one line of text, each only when switched on
+		 * (library 2.37.0, kanopi/firewall#452). Left out, the refusal is the
+		 * plain-text message, exactly as before. Page_Settings writes only
+		 * values the library accepts, because it refuses to start on one it
+		 * does not -- and this plugin fails open when it refuses.
+		 */
+		$pages = (array) ( $section['pages'] ?? array() );
+
+		foreach ( array(
+			'block_page'    => array( 'title', 'heading' ),
+			'lockdown_page' => array( 'title', 'heading', 'message' ),
+		) as $key => $text_keys ) {
+			$page = Page_Settings::refusal( (array) ( $section[ $key ] ?? array() ), $pages, $text_keys );
+
+			if ( null !== $page ) {
+				$compiled[ $key ] = $page;
+			}
+		}
+
+		// Only a client whose first preference is JSON gets it; a browser
+		// still gets the page or the message.
+		if ( true === ( $section['banning_json'] ?? false ) ) {
+			$compiled['banning_json'] = true;
 		}
 
 		return $compiled;
@@ -1499,10 +1526,11 @@ final class Config_Compiler {
 	 *
 	 * @param array<string, mixed>       $challenge Stored challenge settings.
 	 * @param list<array<string, mixed>> $rules     Compiled rules, for the providers they name.
+	 * @param array<string, mixed>       $pages     Stored `global.pages`: the language and styling every page shares.
 	 *
 	 * @return array<string, mixed>
 	 */
-	private function compile_challenge( array $challenge, array $rules ): array {
+	private function compile_challenge( array $challenge, array $rules, array $pages = array() ): array {
 		$provider = (string) ( $challenge['provider'] ?? 'math' );
 
 		/*
@@ -1628,6 +1656,33 @@ final class Config_Compiler {
 			$compiled['provider_options'] = $provider_options;
 		}
 
+		/*
+		 * The interstitial's wording, language and styling (library 2.37.0,
+		 * kanopi/firewall#451). Only what is set: an empty key keeps the
+		 * library's own wording, and an absent `page` is the page as before.
+		 */
+		$page = Page_Settings::challenge( (array) ( $challenge['page'] ?? array() ), $pages );
+
+		if ( array() !== $page ) {
+			$compiled['page'] = $page;
+		}
+
+		/*
+		 * Plain text shown on every challenge page, above the form (library
+		 * 2.35.0): a help address, or why visitors are being asked. Blank
+		 * lines are dropped rather than shown as empty boxes.
+		 */
+		$notices = array_values(
+			array_filter(
+				array_map( static fn ( $notice ): string => trim( (string) $notice ), (array) ( $challenge['notice'] ?? array() ) ),
+				static fn ( string $notice ): bool => '' !== $notice
+			)
+		);
+
+		if ( array() !== $notices ) {
+			$compiled['notice'] = $notices;
+		}
+
 		return $compiled;
 	}
 
@@ -1717,6 +1772,16 @@ final class Config_Compiler {
 					'level'                    => $level,
 					'buffer'                   => ! empty( $handler['buffered'] ),
 					'retention_days'           => (int) ( $handler['retain_days'] ?? 30 ),
+
+					/*
+					 * The retention delete, in batches (library 2.37.0,
+					 * kanopi/firewall#459, #464). Before it, the first prune
+					 * after retention was switched on or lowered deleted the
+					 * whole backlog in one statement, inside a visitor's
+					 * request, locking the table every other request writes to.
+					 */
+					'prune_batch_size'         => max( 1, (int) ( $handler['prune_batch_size'] ?? 1000 ) ),
+					'prune_max_batches'        => max( 1, (int) ( $handler['prune_max_batches'] ?? 10 ) ),
 
 					/*
 					 * The library checks its schema on one write in a hundred,

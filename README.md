@@ -960,6 +960,66 @@ no log line, and every rate limit — a preset's as well as your own — counts 
 memory for the run, so testing a limited path as often as you like never spends
 a real client's allowance.
 
+### What a refused or challenged visitor sees
+
+By default a blocked client gets one line of plain text, the **Message shown to
+blocked clients** on the General screen. A visitor refused by lockdown gets the
+library's own line, and a challenged visitor gets the library's interstitial in
+English. From `kanopi/firewall` 2.37.0, each of the three can say what the site
+wants, in its own language and colours:
+
+| Page | Where | What you can set |
+|---|---|---|
+| Challenge | Challenge screen, *Challenge page* | Tab title, heading, intro line, button label, error message, notices, and its own language, CSS and stylesheet |
+| Block | General screen, *Block and lockdown pages* | Off or on, tab title, heading. Its text is the banning message, a paragraph per line |
+| Lockdown | General screen, *Block and lockdown pages* | Off or on, tab title, heading, message |
+| All three | General screen, *Page appearance* | Language tag, extra CSS, a stylesheet |
+
+The challenge page's own CSS is added after *Page appearance*'s, so a site's
+colours carry over and the challenge page only says what is different. Its own
+language or stylesheet replaces the shared one, for that page only.
+
+**Notices** are plain-text lines shown above the challenge form, each in its own
+box (coloured by `--fw-notice-bg`, `--fw-notice-border` and `--fw-notice-text`):
+a help address, or why visitors are being asked.
+
+- **Text is plain text.** It is escaped once when the page is written, so it
+  can't add markup. The block and lockdown text take the same `{{request.id}}`
+  placeholder as the message, and `{{block.status}}` for the status sent.
+  `{{block.rule}}` names the rule, and is best left out of anything a client
+  sees.
+- **Colours are CSS custom properties.** `:root { --fw-accent: #0b8f5a;
+  --fw-accent-hover: #087448; }` in *CSS* recolours the button on all three
+  pages. The others are `--fw-bg`, `--fw-text`, `--fw-card`,
+  `--fw-card-shadow`, `--fw-muted`, `--fw-accent-text`, `--fw-accent-disabled`,
+  `--fw-error`, the three `--fw-notice-*` and `--fw-input-border` (the math
+  challenge's answer box). Selectors such
+  as `.card` work too, but they belong to the library's markup and can change
+  between releases.
+- **A stylesheet is a path on this site or an `https:` URL.** A
+  protocol-relative `//host/…` URL, `http:` and other schemes are refused.
+- **A value the library can't use is refused on save.** The library refuses
+  to start on a malformed language tag, CSS containing a closing `style` tag
+  or an unusable stylesheet, and this plugin fails open when it refuses. So
+  the screen asks the library about each value as it is saved and reports the
+  problem in the library's words, and the compiler leaves out a bad value that
+  arrived by import or a hand edit rather than writing it.
+- **The block and lockdown pages have no script and no form**, and are sent
+  with a `Content-Security-Policy` that allows neither. Styles, images and
+  fonts from this site or over `https:` still load, so a logo in your
+  stylesheet works.
+- **JSON for API clients**, on the General screen, answers a client whose
+  first preference is JSON with `{"error":"blocked","status":403,"request_id":"…"}`
+  (or `"lockdown"`, with `retry_after`) instead of the page or the message. A
+  browser lists HTML first and still gets the page.
+- **The widget's own text** — ALTCHA's, Turnstile's, reCAPTCHA's — comes from
+  the widget, not from these settings.
+
+A whole HTML template of your own (`block_page.template`) and a page per rule
+(`metadata.block_page`) are library features the screens don't offer. The
+Advanced YAML can set them; see the library's
+[Block and lockdown pages](https://github.com/kanopi/firewall/blob/2.x/docs/configuration/global.md#block-and-lockdown-pages).
+
 ### The pass cookie's name
 
 A solved challenge is remembered in a cookie, `bfw_pass` by default. Its name
@@ -2108,6 +2168,42 @@ blocked the most clients this week, whether a rule has matched anything at all
 since it was added, what the firewall did to an address before its owner
 complained.
 
+### Keeping the table small
+
+**Keep history for** sets how many days of rows a database handler keeps. Old
+rows are deleted now and then as records are written, inside a visitor's
+request, so each delete is kept small: **Delete old rows in batches of** 1,000
+rows, at most 10 batches per write, by default (`kanopi/firewall` 2.37.0).
+Before 2.37.0 the first delete after retention was switched on deleted the
+whole backlog in one statement: 2.17 million rows took 26 seconds on MariaDB,
+holding locks on the table every other request was writing to.
+
+The defaults keep up with about 100 records per write. Past that, the PHP error
+log says `Firewall log retention is behind`. Raise the batch settings, or
+switch retention on at a quiet moment so the first catch-up isn't a visitor's.
+
+### Indexes a newer release adds
+
+The library creates a table the first time it writes to it and never alters it
+after, so an index a later release adds reaches only new sites. 2.37.0 indexes
+the log table by rule, once rule-first and once time-first, so "what has this
+rule done" and "which rules did the most this week" are both answered from an
+index. A table written before it has neither, and the firewall's log says
+`Database table is behind the schema this release declares` until they are
+added:
+
+```bash
+wp basic-firewall migrate --dry-run   # what is missing, and the SQL
+wp basic-firewall migrate             # add it
+```
+
+**Add missing table indexes** on the Logging screen does the same from the
+admin. Either one covers every table the firewall writes to (the block list,
+rate-limit counters and each database log handler), only ever adds, and is safe
+to run twice. Building an index locks the table while it is built, which is why
+neither the library nor this plugin does it on its own during a visitor's
+request.
+
 ### What is kept out of the log
 
 At `debug` the library records the value each condition compared, so a rule
@@ -2557,6 +2653,7 @@ wp basic-firewall blocked           # list every blocked client
 wp basic-firewall clear-blocked     # empty the block list
 wp basic-firewall clear-cache       # discard parsed agents and verified crawlers
 wp basic-firewall warm-cache        # build the agent corpus before a visitor has to
+wp basic-firewall migrate          # add indexes a newer release declares, --dry-run to preview
 wp basic-firewall find-reference REF # which rule produced this block reference
 
 wp basic-firewall export            # portable document, credentials stripped

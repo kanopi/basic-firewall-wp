@@ -997,6 +997,77 @@ final class Commands {
 	}
 
 	/**
+	 * Add the columns and indexes the firewall's database tables are missing.
+	 *
+	 * The firewall creates a table the first time it writes to it and never
+	 * alters it after, so an index a later release adds reaches only new
+	 * sites. Library 2.37.0 indexes the log table by rule; a log table written
+	 * before it has neither index until this runs. The firewall's own log says
+	 * "Database table is behind the schema this release declares" when one is
+	 * missing.
+	 *
+	 * Only ever adds: nothing is dropped, renamed or rewritten, so it is safe
+	 * to run twice. Adding an index to a large table takes a lock while it is
+	 * built, so run it when the site is quiet, and look first with --dry-run.
+	 *
+	 * ## OPTIONS
+	 *
+	 * [--dry-run]
+	 * : Report what is missing, and the statements, without running them.
+	 *
+	 * ## EXAMPLES
+	 *
+	 *     wp basic-firewall migrate --dry-run
+	 *     wp basic-firewall migrate
+	 *
+	 * @param array<int, string>    $args       Positional arguments.
+	 * @param array<string, string> $assoc_args Flags.
+	 */
+	public function migrate( array $args, array $assoc_args ): void {
+		$dry_run = (bool) Utils\get_flag_value( $assoc_args, 'dry-run', false );
+		$report  = Plugin::instance()->runner()->migrate_tables( ! $dry_run );
+
+		if ( null === $report ) {
+			WP_CLI::error( 'The firewall configuration could not be loaded. `wp basic-firewall status` says why.' );
+		}
+
+		foreach ( $report['failures'] as $failure ) {
+			WP_CLI::warning( sprintf( '%s: %s', $failure['label'], $failure['error'] ) );
+		}
+
+		$unapplied = 0;
+
+		foreach ( $report['changes'] as $change ) {
+			$what = sprintf( '%s: %s %s on %s', $change['label'], $change['kind'], $change['name'], $change['table'] );
+
+			if ( $dry_run ) {
+				WP_CLI::log( $what );
+
+				foreach ( (array) $change['sql'] as $statement ) {
+					WP_CLI::log( '    ' . $statement );
+				}
+			} elseif ( ! empty( $change['applied'] ) ) {
+				WP_CLI::log( 'Added ' . $what );
+			} else {
+				++$unapplied;
+				WP_CLI::warning( sprintf( 'Not added %s: %s', $what, (string) ( $change['reason'] ?? '' ) ) );
+			}
+		}
+
+		if ( array() !== $report['failures'] || $unapplied > 0 ) {
+			WP_CLI::error( 'Some tables could not be brought up to date.' );
+		}
+
+		if ( array() === $report['changes'] ) {
+			WP_CLI::success( 'Every firewall table is up to date.' );
+		} elseif ( $dry_run ) {
+			WP_CLI::success( sprintf( '%d change(s) pending. Run without --dry-run to apply them.', count( $report['changes'] ) ) );
+		} else {
+			WP_CLI::success( sprintf( 'Applied %d change(s).', count( $report['changes'] ) ) );
+		}
+	}
+
+	/**
 	 * List the available presets, and which are enabled.
 	 *
 	 * Presets, despite the name: the lists a rule references are

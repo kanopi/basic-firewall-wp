@@ -16,6 +16,7 @@ use Kanopi\Firewall\Exception\ChallengeSolvedException;
 use Kanopi\Firewall\Exception\FirewallBlockedException;
 use Kanopi\Firewall\Exception\FirewallLockdownException;
 use Kanopi\Firewall\Exception\FirewallRedirectException;
+use Kanopi\Firewall\Page\BlockPage;
 use Kanopi\Firewall\Utility\NoStore;
 use Symfony\Component\HttpFoundation\Request;
 
@@ -204,6 +205,33 @@ final class Outcome_Responder {
 		 */
 		if ( $outcome instanceof FirewallLockdownException && $outcome->getRetryAfter() > 0 ) {
 			$headers['Retry-After'] = (string) $outcome->getRetryAfter();
+		}
+
+		/*
+		 * A block page or a JSON answer is already the whole body (library
+		 * 2.37.0, kanopi/firewall#452). The library built it from escaped text,
+		 * so it is sent as it came, with the content type the library says it
+		 * is -- wrapping it in the document below would escape the page into
+		 * its own source, and hand an API client HTML it asked not to get.
+		 *
+		 * The page has no script and posts nothing, so it goes with the policy
+		 * the library sends it with in `block` mode.
+		 */
+		$content_type = $outcome->getContentType();
+
+		if ( ! str_starts_with( $content_type, 'text/plain' ) ) {
+			$headers['Content-Type'] = $content_type;
+
+			if ( str_starts_with( $content_type, 'text/html' ) ) {
+				$headers['Content-Security-Policy'] = BlockPage::CONTENT_SECURITY_POLICY;
+			}
+
+			return array(
+				'status'  => $status,
+				'headers' => $headers,
+				'body'    => $outcome->getMessage(),
+				'warning' => null,
+			);
 		}
 
 		/*

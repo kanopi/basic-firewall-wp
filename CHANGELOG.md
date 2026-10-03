@@ -7,6 +7,79 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### What changes on upgrade
+
+- **Existing database log tables need two new indexes.** kanopi/firewall 2.37.0
+  indexes the log table by rule, in both orders
+  ([kanopi/firewall#458](https://github.com/kanopi/firewall/issues/458)), but
+  the library never alters a table it has already created. Until the indexes
+  are added, the firewall's own log warns "Database table is behind the schema
+  this release declares". Run `wp basic-firewall migrate --dry-run` to see what
+  is missing, then `wp basic-firewall migrate`, or press **Add missing table
+  indexes** on the Logging screen. Building an index locks the table, so do it
+  at a quiet moment. A site without a database log handler has nothing to do.
+- **The parsed configuration is now reused on web requests.** Before 2.37.0
+  the library fingerprinted per-request environment values, so under PHP-FPM
+  every request missed the parse cache, parsed the compiled file again and
+  rewrote the cache entry
+  ([kanopi/firewall#445](https://github.com/kanopi/firewall/issues/445)). No
+  setting changes.
+- **Old log rows are deleted in batches.** With retention set, the library
+  used to delete the whole backlog in one statement inside a visitor's request.
+  It now deletes up to 10 batches of 1,000 rows per write by default
+  ([kanopi/firewall#459](https://github.com/kanopi/firewall/issues/459),
+  [#464](https://github.com/kanopi/firewall/issues/464)).
+
+### Changed
+
+- **Requires and bundles kanopi/firewall 2.37.0** (from 2.36.1).
+
+### Added
+
+- **The challenge page's wording and styling.** The Challenge screen sets the
+  page's tab title, heading, intro line, button label and error message, plus
+  its own language, CSS and stylesheet
+  ([kanopi/firewall#451](https://github.com/kanopi/firewall/issues/451)). A
+  field left empty keeps the built-in wording. The page's CSS is added after
+  the shared Page appearance CSS; its language or stylesheet replaces the
+  shared one.
+- **Notices on the challenge page.** One per line on the Challenge screen,
+  each shown in its own box above the form: a help address, or why visitors
+  are being asked (`challenge.notice`, library 2.35.0).
+- **Block and lockdown pages.** The General screen can switch on an HTML page
+  for a blocked client, using the banning message as its text, and for a
+  visitor refused by lockdown, with its own message. Both have their own title
+  and heading, and both are sent with a strict Content-Security-Policy
+  ([kanopi/firewall#452](https://github.com/kanopi/firewall/issues/452)). Off,
+  the refusal is the plain-text message, as before.
+- **Page appearance.** The language tag, extra CSS and a stylesheet on the
+  General screen apply to the challenge, block and lockdown pages alike. Every
+  colour on them is a `--fw-*` CSS custom property
+  ([kanopi/firewall#454](https://github.com/kanopi/firewall/issues/454)).
+  A value the library would refuse to start on is refused when it is saved,
+  in the library's words. A value that arrives by import or a hand edit is left
+  out of the compiled file instead, so a typo in a colour can't switch the
+  firewall off.
+- **JSON for API clients.** With **JSON for API clients** ticked, a client
+  whose first preference is JSON gets `{"error":"blocked",…}` instead of the
+  page or the message.
+- **`{{block.status}}` and `{{block.rule}}`** in the banning message.
+- **`wp basic-firewall migrate`** and the **Add missing table indexes** button
+  on the Logging screen. They add the columns and indexes the firewall's
+  tables are missing (block list, rate-limit counters, database log handlers),
+  and nothing else. This is the plugin's equivalent of the library's
+  `bin/firewall-migrate`.
+- **Retention batch settings** on a database log handler: rows per delete and
+  most deletes per write.
+
+### Fixed
+
+- **In `exception` mode, a block page or a JSON answer is sent as the library
+  built it.** The responder used to escape the library's message into a page
+  of its own, which would have shown a block page's HTML as source and given
+  an API client HTML. It now sends the library's content type, plus the
+  Content-Security-Policy for a page.
+
 ## [1.0.0-rc.7]
 
 **Seventh release candidate for 1.0.0.** Published as a GitHub pre-release, so

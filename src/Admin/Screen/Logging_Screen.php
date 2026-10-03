@@ -178,6 +178,16 @@ final class Logging_Screen extends Screen {
 		);
 
 		$this->row(
+			__( 'Delete old rows in batches of', 'basic-firewall' ),
+			self::text( $name . '[prune_batch_size]', (string) ( $handler['prune_batch_size'] ?? 1000 ), 'number', 'min="1"' )
+			. ' ' . esc_html__( 'rows, at most', 'basic-firewall' ) . ' '
+			. self::text( $name . '[prune_max_batches]', (string) ( $handler['prune_max_batches'] ?? 10 ), 'number', 'min="1" style="width:6em"' )
+			. ' ' . esc_html__( 'batches per write', 'basic-firewall' ),
+			wp_kses_post( __( 'Old rows are deleted now and then as records are written, inside a visitor\'s request, so each delete is kept small. With the defaults that keeps up with about 100 records per write; past that the PHP error log says "Firewall log retention is behind". After switching retention on or lowering it on a large table, the first catch-up is a one-off job for a quiet moment rather than for visitors\' requests.', 'basic-firewall' ) ),
+			$when( 'database' )
+		);
+
+		$this->row(
 			__( 'Buffering', 'basic-firewall' ),
 			self::checkbox( $name . '[buffered]', ! empty( $handler['buffered'] ), __( 'Hold records and write them in one go', 'basic-firewall' ) ),
 			esc_html__( 'Worth leaving on. Unbuffered means one insert per record while the request is being served, and the requests producing the most records are the ones already under attack. The cost is that a fatal error loses that request\'s buffered rows.', 'basic-firewall' ),
@@ -199,6 +209,10 @@ final class Logging_Screen extends Screen {
 	public function handle(): void {
 		if ( ! $this->verify() ) {
 			return;
+		}
+
+		if ( 'migrate_tables' === $this->posted( 'logging_action' ) ) {
+			$this->migrate_tables();
 		}
 
 		$settings = $this->plugin()->settings();
@@ -250,6 +264,8 @@ final class Logging_Screen extends Screen {
 					is_array( $previous['parameters'] ?? null ) ? $previous['parameters'] : array()
 				),
 				'retain_days'       => (int) ( $handler['retain_days'] ?? 30 ),
+				'prune_batch_size'  => (int) ( $handler['prune_batch_size'] ?? 1000 ),
+				'prune_max_batches' => (int) ( $handler['prune_max_batches'] ?? 10 ),
 				'buffered'          => ! empty( $handler['buffered'] ),
 				'deferred'          => ! empty( $handler['deferred'] ),
 			);
@@ -276,6 +292,62 @@ final class Logging_Screen extends Screen {
 
 		if ( array() === $problems ) {
 			Notices::add( __( 'Logging settings saved, and the firewall recompiled.', 'basic-firewall' ) );
+		}
+
+		$this->redirect( $this->slug() );
+	}
+
+	/**
+	 * Add the columns and indexes the firewall's tables are missing, then return.
+	 *
+	 * Library 2.37.0 indexes the log table by rule, and a table written before
+	 * it has neither index: the library adds them only when somebody says so,
+	 * because building an index locks the table. Somebody pressing this button
+	 * is somebody saying so. Unsaved changes on the form are not applied first;
+	 * this migrates the tables the settings in force write to.
+	 */
+	private function migrate_tables(): void {
+		$report = $this->plugin()->runner()->migrate_tables( true );
+
+		if ( null === $report ) {
+			Notices::add( esc_html__( 'The firewall configuration could not be loaded, so no table was checked. The Status screen says why.', 'basic-firewall' ), 'error' );
+
+			$this->redirect( $this->slug() );
+		}
+
+		foreach ( $report['failures'] as $failure ) {
+			Notices::add( esc_html( sprintf( '%s: %s', $failure['label'], $failure['error'] ) ), 'error' );
+		}
+
+		$applied = 0;
+
+		foreach ( $report['changes'] as $change ) {
+			if ( ! empty( $change['applied'] ) ) {
+				++$applied;
+
+				continue;
+			}
+
+			Notices::add(
+				esc_html(
+					sprintf(
+						/* translators: 1: index or column, 2: its name, 3: table, 4: why it was not added. */
+						__( 'The %1$s %2$s was not added to %3$s: %4$s', 'basic-firewall' ),
+						(string) $change['kind'],
+						(string) $change['name'],
+						(string) $change['table'],
+						(string) ( $change['reason'] ?? '' )
+					)
+				),
+				'error'
+			);
+		}
+
+		if ( array() === $report['changes'] && array() === $report['failures'] ) {
+			Notices::add( esc_html__( 'Every firewall table is up to date.', 'basic-firewall' ) );
+		} elseif ( $applied > 0 ) {
+			/* translators: %d: number of indexes and columns added. */
+			Notices::add( esc_html( sprintf( _n( 'Added %d missing index or column.', 'Added %d missing indexes and columns.', $applied, 'basic-firewall' ), $applied ) ) );
 		}
 
 		$this->redirect( $this->slug() );
@@ -356,6 +428,12 @@ final class Logging_Screen extends Screen {
 		 * to send them to, and nothing ever did; the actions are what a site
 		 * wanting firewall events inside WordPress actually has.
 		 */
+		printf(
+			'<p class="description" style="max-width:48rem">%s</p><p><button type="submit" name="logging_action" value="migrate_tables" class="button">%s</button></p>',
+			wp_kses_post( __( 'The firewall creates a database table the first time it writes to it and never alters it after, so a table from an earlier release can be missing an index a later one added — the log table\'s indexes by rule are new in this release. Adding one locks the table while it is built, so choose a quiet moment. <code>wp basic-firewall migrate --dry-run</code> shows what is missing first.', 'basic-firewall' ) ),
+			esc_html__( 'Add missing table indexes', 'basic-firewall' )
+		);
+
 		printf(
 			'<p class="description" style="max-width:48rem">%s</p>',
 			wp_kses_post( __( 'WordPress has no log of its own for these to go to. Every decision is also announced as the <code>basic_firewall_decision</code> action, so an activity log plugin — or a few lines of your own — can record them inside WordPress.', 'basic-firewall' ) )
