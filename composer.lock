@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "55f8e3b25028d15f120de0b2986e9b60",
+    "content-hash": "80cebea62149b2a77e228f29e216e807",
     "packages": [
         {
             "name": "composer/ca-bundle",
@@ -549,16 +549,16 @@
         },
         {
             "name": "kanopi/firewall",
-            "version": "v2.37.0",
+            "version": "v2.38.0",
             "source": {
                 "type": "git",
                 "url": "https://github.com/kanopi/firewall.git",
-                "reference": "68624073b9d415a04d41d38567f29a181cdca1ca"
+                "reference": "1416ae9912f5d7d1d80ac564579c12cf307d1cfc"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/kanopi/firewall/zipball/68624073b9d415a04d41d38567f29a181cdca1ca",
-                "reference": "68624073b9d415a04d41d38567f29a181cdca1ca",
+                "url": "https://api.github.com/repos/kanopi/firewall/zipball/1416ae9912f5d7d1d80ac564579c12cf307d1cfc",
+                "reference": "1416ae9912f5d7d1d80ac564579c12cf307d1cfc",
                 "shasum": ""
             },
             "require": {
@@ -587,6 +587,7 @@
                 "symfony/var-dumper": "~6.4 || ~7.3 || ~8.1"
             },
             "suggest": {
+                "ext-curl": "Required by Kanopi\\Firewall\\Utility\\ReverseDns\\DnsOverHttpResolver, which every built-in reverse DNS provider uses, to give crawler verification lookups a time limit. Verification with PHP's own lookups, the default, needs nothing extra.",
                 "ext-memcached": "Required by Kanopi\\Firewall\\Storage\\MemcachedStorage, for a shared block list on a host that has Memcached rather than Redis. Rate limiting on Memcached needs no backend of its own: CacheRateLimitStorage takes Symfony's MemcachedAdapter.",
                 "ext-redis": "Required by Kanopi\\Firewall\\Storage\\RedisStorage and Kanopi\\Firewall\\RateLimitStorage\\RedisRateLimitStorage, for a shared block list and distributed rate limiting across more than one server. Every other backend works without it.",
                 "ext-sodium": "Required to verify a rule source declaring `signature:` — an ed25519 detached signature over the fetched body. A source declaring `checksum:` needs nothing extra, and a source declaring neither is unaffected.",
@@ -626,9 +627,9 @@
             "description": "Evaluate the requests for malicious items.",
             "support": {
                 "issues": "https://github.com/kanopi/firewall/issues",
-                "source": "https://github.com/kanopi/firewall/tree/v2.37.0"
+                "source": "https://github.com/kanopi/firewall/tree/v2.38.0"
             },
-            "time": "2026-10-02T22:28:23+00:00"
+            "time": "2026-10-07T22:04:53+00:00"
         },
         {
             "name": "matomo/device-detector",

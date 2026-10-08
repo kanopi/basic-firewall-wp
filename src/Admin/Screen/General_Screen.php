@@ -15,6 +15,7 @@ use Kanopi\BasicFirewall\Health\Site_Health;
 use Kanopi\BasicFirewall\Runtime\Lockdown;
 use Kanopi\BasicFirewall\Runtime\Trusted_Proxies;
 use Kanopi\BasicFirewall\Sources\Refresher;
+use Kanopi\BasicFirewall\Support\Reverse_Dns;
 
 /**
  * Mode, responses, the proxy question, and escalation.
@@ -90,6 +91,11 @@ final class General_Screen extends Screen {
 			'lang'       => $this->posted( 'pages_lang' ),
 			'styles'     => $this->posted_typed_textarea( 'pages_styles' ),
 			'stylesheet' => $this->posted_typed( 'pages_stylesheet' ),
+		);
+
+		$all['global']['reverse_dns'] = array(
+			'provider'   => $this->posted( 'reverse_dns_provider' ),
+			'timeout_ms' => $this->posted( 'reverse_dns_timeout_ms', (string) Reverse_Dns::DEFAULT_TIMEOUT_MS ),
 		);
 
 		$allow  = Lockdown::sort( $this->posted_textarea( 'lockdown_allow' ) );
@@ -212,6 +218,7 @@ final class General_Screen extends Screen {
 		$this->render_proxy_section();
 		$this->render_reliability_section();
 		$this->render_sources_section();
+		$this->render_verification_section();
 		$this->render_bypass_section();
 		$this->render_lockdown_section();
 		$this->render_pages_section();
@@ -343,6 +350,55 @@ final class General_Screen extends Screen {
 		);
 
 		$this->row( __( 'Last refresh', 'basic-firewall' ), '<p>' . wp_kses_post( $this->sources_status() ) . '</p>' );
+
+		echo '</tbody></table>';
+	}
+
+	/**
+	 * Who makes the DNS lookups behind crawler verification.
+	 *
+	 * Library 2.38.0 (kanopi/firewall#473). PHP's own lookups take no timeout,
+	 * so on a host without a local caching resolver a slow nameserver holds a
+	 * worker for up to ten seconds; a provider caps each lookup. The provider
+	 * then receives visitors' addresses, written backwards, which is why the
+	 * choice is the administrator's and the screen says so before they make it.
+	 */
+	private function render_verification_section(): void {
+		$settings = $this->plugin()->settings();
+
+		printf( '<h2 id="bfw-crawler-verification">%s</h2>', esc_html__( 'Crawler verification', 'basic-firewall' ) );
+
+		printf(
+			'<p class="description" style="max-width:48rem">%s</p>',
+			wp_kses_post( __( 'A user agent rule can verify that a client claiming to be Googlebot really is, by reverse DNS: look up the hostname its address claims, then confirm that hostname resolves back to it. These settings decide who makes those lookups, for every rule that verifies. They change nothing until a rule verifies.', 'basic-firewall' ) )
+		);
+
+		echo '<table class="form-table" role="presentation"><tbody>';
+
+		$this->row(
+			__( 'Who makes the lookups', 'basic-firewall' ),
+			self::select(
+				'reverse_dns_provider',
+				Reverse_Dns::choices( __( 'PHP\'s own lookups, through this host\'s resolver (default)', 'basic-firewall' ) ),
+				(string) $settings->get( 'global.reverse_dns.provider', '' )
+			),
+			__( '<strong>PHP\'s own lookups</strong> send nothing to anyone, and are right for a host with a local caching resolver. They take no time limit: without such a resolver, one slow nameserver holds a PHP worker for up to ten seconds before the firewall stops verifying for a while.', 'basic-firewall' )
+				. '<br><br>'
+				. __( '<strong>A provider</strong> answers over HTTPS, and each lookup is cut off at the time limit below. <strong>Choosing one sends it the reverse-DNS name of each address a verifying rule asks about</strong> — the visitor\'s IP address, written backwards — and the hostname being confirmed. Only for requests that claim to be a crawler a rule verifies, and at most once per address an hour. Under the GDPR an IP address is personal data: read the provider\'s terms and privacy policy, and check your privacy notice covers it. Needs PHP\'s curl extension.', 'basic-firewall' )
+				. '<br><br>'
+				. __( 'To use a resolver you run, define it under <code>global.reverse_dns.providers</code> in the advanced YAML and name it with <code>provider</code> there.', 'basic-firewall' )
+		);
+
+		$this->row(
+			__( 'Time limit per lookup', 'basic-firewall' ),
+			self::text(
+				'reverse_dns_timeout_ms',
+				(string) $settings->get( 'global.reverse_dns.timeout_ms', Reverse_Dns::DEFAULT_TIMEOUT_MS ),
+				'number',
+				sprintf( 'min="1" max="%d"', Reverse_Dns::max_timeout_ms() )
+			) . ' ' . esc_html__( 'milliseconds', 'basic-firewall' ),
+			__( 'Applies to a provider only; PHP\'s own lookups cannot be given one. The limit includes connecting and the TLS handshake, so set it well above the provider\'s usual answer time, not just above it — measured upstream, a first verification costs 66–93 ms and later ones 19–40 ms. A verification makes up to three lookups. The default is 300.', 'basic-firewall' )
+		);
 
 		echo '</tbody></table>';
 	}

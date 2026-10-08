@@ -21,6 +21,7 @@ use Kanopi\Firewall\RateLimitStorage\DatabaseRateLimitStorage;
 use Kanopi\Firewall\RateLimitStorage\FileRateLimitStorage;
 use Kanopi\Firewall\RateLimitStorage\RedisRateLimitStorage;
 use Kanopi\Firewall\Source\SourceDefinition;
+use Kanopi\Firewall\Utility\ReverseDns\DnsOverHttpResolver;
 use Symfony\Component\HttpFoundation\Request;
 
 /**
@@ -72,13 +73,15 @@ final class RuleTypesHonouredTest extends Honoured_Settings {
 			'sources'   => 'test_every_source_format_constructs',
 		),
 		'user_agent'          => array(
-			'match_type'      => 'test_user_agent_conditions',
-			'conditions'      => 'test_user_agent_conditions',
-			'sources'         => 'test_every_source_format_constructs',
-			'cache_detection' => 'test_user_agent_cache',
-			'bot_source'      => 'test_user_agent_bot_source',
-			'verify'          => 'test_user_agent_verification',
-			'verify_suffixes' => 'test_user_agent_verification',
+			'match_type'        => 'test_user_agent_conditions',
+			'conditions'        => 'test_user_agent_conditions',
+			'sources'           => 'test_every_source_format_constructs',
+			'cache_detection'   => 'test_user_agent_cache',
+			'bot_source'        => 'test_user_agent_bot_source',
+			'verify'            => 'test_user_agent_verification',
+			'verify_suffixes'   => 'test_user_agent_verification',
+			'verify_provider'   => 'test_user_agent_verification_lookups',
+			'verify_timeout_ms' => 'test_user_agent_verification_lookups',
 		),
 		'url'                 => array(
 			'match_type' => 'test_url_conditions',
@@ -1082,6 +1085,55 @@ final class RuleTypesHonouredTest extends Honoured_Settings {
 		$this->assertTrue( method_exists( $verifying, 'passesIdentityVerification' ) );
 		$this->assertTrue( $trusting->passesIdentityVerification( $googlebot() ), 'A rule that does not verify has nothing to pass.' );
 		$this->assertFalse( $verifying->passesIdentityVerification( $googlebot() ), 'The loopback address verified as Googlebot.' );
+	}
+
+	/**
+	 * A rule's own provider and time limit are the ones its verifier uses; without them, the site's.
+	 *
+	 * Read off the verifier the library built, without making a lookup: the
+	 * resolver it holds, its time limit and pinned address, and the scope its
+	 * verdicts are cached under.
+	 */
+	public function test_user_agent_verification_lookups(): void {
+		if ( ! function_exists( 'curl_init' ) ) {
+			$this->markTestSkipped( 'DNS over HTTPS needs the curl extension.' );
+		}
+
+		$settings = array(
+			'conditions'      => array( self::condition( 'bot.name', 'contains', 'Googlebot' ) ),
+			'verify'          => true,
+			'verify_suffixes' => array( 'googlebot.com' ),
+		);
+
+		$firewall = $this->build(
+			array(
+				'global' => array( 'reverse_dns' => array( 'provider' => 'google' ) ),
+				'rules'  => array(
+					$this->rule( 'site', 'user_agent', $settings ),
+					$this->rule(
+						'own',
+						'user_agent',
+						array(
+							'verify_provider'   => 'cloudflare',
+							'verify_timeout_ms' => 650,
+						) + $settings,
+						array( 'weight' => 5 )
+					),
+				),
+			)
+		);
+
+		$site = self::invoke( $this->plugin_named( $firewall, 'site' ), 'reverseDnsVerifier' );
+		$own  = self::invoke( $this->plugin_named( $firewall, 'own' ), 'reverseDnsVerifier' );
+
+		$this->assertInstanceOf( DnsOverHttpResolver::class, self::property( $site, 'resolver' ) );
+		$this->assertSame( 'provider:google', self::property( $site, 'scope' ) );
+		$this->assertSame( '8.8.8.8', self::property( self::property( $site, 'resolver' ), 'address' ) );
+		$this->assertSame( 300, self::property( self::property( $site, 'resolver' ), 'timeoutMs' ) );
+
+		$this->assertSame( 'provider:cloudflare', self::property( $own, 'scope' ) );
+		$this->assertSame( '1.1.1.1', self::property( self::property( $own, 'resolver' ), 'address' ) );
+		$this->assertSame( 650, self::property( self::property( $own, 'resolver' ), 'timeoutMs' ) );
 	}
 
 	/**

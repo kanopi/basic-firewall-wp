@@ -17,5 +17,5 @@
 
 return array(
 	'kanopi/crs-engine' => 'v1.1.0',
-	'kanopi/firewall'   => 'v2.37.0',
+	'kanopi/firewall'   => 'v2.38.0',
 );
