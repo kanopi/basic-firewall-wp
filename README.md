@@ -1444,7 +1444,77 @@ requests never pay it. But the cold figure is what a cache miss costs, and PHP
 cannot put a timeout on a DNS lookup — neither `gethostbyaddr()` nor
 `dns_get_record()` accepts one — so without a local resolver a slow nameserver
 is bounded only by the system resolver's own retries. The library trips a
-breaker after one slow lookup, and fails closed until it resets.
+breaker after one slow lookup, and fails closed until it resets. Where the host
+has no local resolver and you can't add one, use a provider instead (below).
+
+#### Who makes the lookups
+
+From `kanopi/firewall` 2.38.0, the lookups can go to a DNS-over-HTTPS
+**provider** instead of PHP, and each one is then cut off at a time limit
+([kanopi/firewall#473](https://github.com/kanopi/firewall/issues/473)). Choose
+it under **Crawler verification** on the General screen:
+
+| Choice | What it does |
+|---|---|
+| **PHP's own lookups** (the default) | `gethostbyaddr()` and `dns_get_record()`, through the host's resolver. Nothing is sent anywhere, and there is no time limit. Right with a local caching resolver. |
+| **Cloudflare** | `cloudflare-dns.com`, connecting to `1.1.1.1` |
+| **Google Public DNS** | `dns.google`, connecting to `8.8.8.8` |
+
+**Choosing a provider is the opt-in, and it sends the provider personal data.**
+For each address a verifying rule asks about, the provider receives the
+address's reverse-DNS name (the visitor's IP address, written backwards) and the
+hostname being confirmed. That happens only for requests that claim to be a
+crawler a rule verifies, and a verdict is cached, so an address is sent at most
+once an hour. Under the GDPR an IP address is personal data: read the provider's
+terms and privacy policy, which the library's
+[Reverse DNS](https://kanopi.github.io/firewall/2.38/configuration/reverse-dns/)
+page summarises, and check your privacy notice covers it. An untouched site
+compiles no `reverse_dns` at all.
+
+**Time limit per lookup** defaults to 300 ms and applies to a provider only. It
+includes connecting and the TLS handshake, so set it well above the provider's
+usual answer time. Upstream measured a first verification at 66–93 ms and later
+ones at 19–40 ms, since each PHP worker keeps its connection open. A verification
+makes up to three lookups, and the breaker's threshold follows the limit (twice
+it, plus 50 ms), so lookups that worked don't trip it.
+
+A user agent rule can choose a different provider, or a different limit, for
+itself alone. It can't choose PHP's own lookups while the site uses a provider:
+the library has no way to say that. A provider needs PHP's curl extension.
+
+To use a resolver you run, define it as a provider in the advanced YAML and name
+it there; the library's docs give the shape:
+
+```yaml
+global:
+  reverse_dns:
+    provider: internal
+    providers:
+      internal:
+        resolver: "Kanopi\\Firewall\\Utility\\ReverseDns\\DnsOverHttpResolver"
+        options:
+          endpoint: "https://resolver.internal/dns-query?name={{ dns.name }}&type={{ dns.type }}"
+          address: 10.0.0.53
+```
+
+That class name is the one a Composer install uses. In a release zip the library
+is namespace-scoped, so write it as
+`Kanopi\\BasicFirewall\\Vendor\\Kanopi\\Firewall\\Utility\\ReverseDns\\DnsOverHttpResolver`.
+A class that doesn't exist is caught as below, not left to stop the firewall.
+
+**A choice the library can't use is left out, not compiled.** The library
+refuses to start on an unknown provider, `provider` and `resolver` both set, or a
+provider on a PHP without curl, and this plugin fails open when it refuses: every
+rule would stop, to fix a slow lookup. So the screens refuse such a value when it
+is saved, in the library's words. When one arrives another way (an import, the
+advanced YAML), the compiler leaves out the whole lookup configuration, reports
+why, and verification uses PHP's own lookups. Site Health reads the compiled file
+back from a web request, says where each verifying rule's lookups go, and raises
+it as critical if the library would still refuse it there, such as when curl is
+loaded for WP-CLI but not for the web server's PHP.
+
+Switching starts afresh: the library caches verdicts per provider, so a crawler
+PHP's failing lookups refused isn't still refused a day later.
 
 #### It is not switched off by keeping rule lists offline
 

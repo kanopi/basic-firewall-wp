@@ -25,9 +25,11 @@ use Kanopi\BasicFirewall\Runtime\Diagnostics;
 use Kanopi\BasicFirewall\Runtime\Runner;
 use Kanopi\BasicFirewall\Runtime\Trusted_Proxies;
 use Kanopi\BasicFirewall\Support\Autoloader_Locator;
+use Kanopi\BasicFirewall\Support\Reverse_Dns;
 use Kanopi\BasicFirewall\Support\Site_Layout;
 use Kanopi\Firewall\Firewall;
 use Kanopi\Firewall\Utility\RequestPath;
+use Kanopi\Firewall\Utility\ReverseDns\ReverseDnsSettings;
 use Symfony\Component\Yaml\Yaml;
 
 /**
@@ -656,14 +658,97 @@ final class Site_Health {
 			);
 		}
 
-		return self::ok(
-			__( 'Rules that verify crawlers can verify them', 'basic-firewall' ),
-			sprintf(
-				/* translators: %s: rule names. */
-				esc_html__( 'These rules verify crawlers by reverse DNS: %s. Each lookup is made on the request path the first time an address is seen, and a verdict is cached — so a local caching resolver on this host is what keeps a cache miss at a couple of milliseconds rather than a hundred.', 'basic-firewall' ),
-				$names
-			)
+		$lookups = self::verification_lookups();
+
+		/*
+		 * The compiler drops a lookup setting the library would refuse, but it
+		 * asks in the PHP that compiled -- often WP-CLI or an admin request --
+		 * and curl can be loaded there and missing under the web server's PHP.
+		 * Asked again here, from a web request, because a refusal is a firewall
+		 * that does not start: every rule off, not only verification.
+		 */
+		if ( array() !== $lookups['problems'] ) {
+			return self::critical(
+				__( 'The firewall will refuse to start: its crawler verification lookups cannot be used', 'basic-firewall' ),
+				'<p>' . esc_html__( 'The firewall library refuses to start on lookup settings it cannot use, and the plugin lets every request through when it refuses. It reports:', 'basic-firewall' ) . '</p><ul><li>'
+					. implode( '</li><li>', array_map( 'esc_html', $lookups['problems'] ) )
+					. '</li></ul><p>' . esc_html__( 'Choose PHP\'s own lookups under Crawler verification on the General screen, install PHP\'s curl extension for the web server, or correct global.reverse_dns in the advanced YAML.', 'basic-firewall' ) . '</p>',
+				sprintf( '<p><a href="%s">%s</a></p>', esc_url( admin_url( 'admin.php?page=basic-firewall-general#bfw-crawler-verification' ) ), esc_html__( 'Crawler verification settings', 'basic-firewall' ) )
+			);
+		}
+
+		$description = '<p>' . sprintf(
+			/* translators: %s: rule names. */
+			esc_html__( 'These rules verify crawlers by reverse DNS: %s. Each lookup is made on the request path the first time an address is seen, and a verdict is cached.', 'basic-firewall' ),
+			$names
+		) . '</p>';
+
+		if ( array() !== $lookups['destinations'] ) {
+			$items = array();
+
+			foreach ( $lookups['destinations'] as $rule => $where ) {
+				$items[] = sprintf( '<strong>%1$s</strong>: %2$s', esc_html( $rule ), esc_html( $where ) );
+			}
+
+			$description .= '<p>' . esc_html__( 'Their lookups are made by:', 'basic-firewall' ) . '</p><ul><li>' . implode( '</li><li>', $items ) . '</li></ul>';
+		}
+
+		$description .= '<p>' . (
+			$lookups['provider']
+				? esc_html__( 'A provider receives the reverse-DNS name of each address these rules ask about — the visitor\'s IP address, written backwards. Check your privacy notice covers it.', 'basic-firewall' )
+				: esc_html__( 'PHP\'s own lookups have no time limit, so a local caching resolver on this host is what keeps a cache miss at a couple of milliseconds rather than a hundred, and a slow nameserver from holding a worker for seconds. Without one, choose a DNS-over-HTTPS provider under Crawler verification on the General screen.', 'basic-firewall' )
+		) . '</p>';
+
+		return self::ok( __( 'Rules that verify crawlers can verify them', 'basic-firewall' ), $description );
+	}
+
+	/**
+	 * Where each verifying rule's lookups go, read from the compiled file.
+	 *
+	 * From the compiled file rather than the settings, so a provider set in
+	 * the advanced YAML is reported, and what is reported is what both
+	 * evaluation paths read.
+	 *
+	 * @return array{problems: list<string>, destinations: array<string, string>, provider: bool}
+	 */
+	private static function verification_lookups(): array {
+		$lookups = array(
+			'problems'     => array(),
+			'destinations' => array(),
+			'provider'     => false,
 		);
+
+		$compiled = Plugin::instance()->compiled()->contents();
+
+		try {
+			$config = null === $compiled ? array() : Yaml::parse( $compiled );
+		} catch ( \Throwable $e ) {
+			return $lookups;
+		}
+
+		if ( ! is_array( $config ) ) {
+			return $lookups;
+		}
+
+		$global  = is_array( $config['global'] ?? null ) ? $config['global'] : array();
+		$plugins = is_array( $config['plugins'] ?? null ) ? array_values( $config['plugins'] ) : array();
+
+		$lookups['problems'] = ReverseDnsSettings::problems( $global, $plugins );
+
+		foreach ( $plugins as $index => $plugin ) {
+			$metadata = is_array( $plugin ) && is_array( $plugin['metadata'] ?? null ) ? $plugin['metadata'] : array();
+
+			if ( null === ( $metadata['verify'] ?? null ) ) {
+				continue;
+			}
+
+			$name = is_string( $metadata['name'] ?? null ) && '' !== $metadata['name'] ? $metadata['name'] : '#' . $index;
+
+			$lookups['destinations'][ $name ] = Reverse_Dns::destination( $global, $metadata );
+			$lookups['provider']              = $lookups['provider'] || Reverse_Dns::uses_provider( $global, $metadata );
+		}
+
+		return $lookups;
 	}
 
 	/**

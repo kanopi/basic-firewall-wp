@@ -27,6 +27,7 @@ use Kanopi\Firewall\Storage\DatabaseStorage;
 use Kanopi\Firewall\Storage\FileStorage;
 use Kanopi\Firewall\Storage\RedisStorage;
 use Kanopi\Firewall\Utility\RequestPath;
+use Kanopi\Firewall\Utility\ReverseDns\DnsOverHttpResolver;
 use Monolog\Handler\ErrorLogHandler;
 use Monolog\Handler\RotatingFileHandler;
 use Monolog\Handler\StreamHandler;
@@ -82,6 +83,8 @@ final class SiteSettingsHonouredTest extends Honoured_Settings {
 		'global.pages.styles'                             => 'test_block_page',
 		'global.pages.stylesheet'                         => 'test_block_page',
 		'global.banning_json'                             => 'test_banning_json',
+		'global.reverse_dns.provider'                     => 'test_reverse_dns',
+		'global.reverse_dns.timeout_ms'                   => 'test_reverse_dns',
 		'global.repeat_offender_status'                   => 'test_repeat_offenders',
 		'global.add_to_expire'                            => 'test_repeat_offenders',
 		'global.behind_proxy'                             => 'test_proxy_posture',
@@ -583,6 +586,68 @@ final class SiteSettingsHonouredTest extends Honoured_Settings {
 		}
 
 		$this->assertSame( 'blocked', json_decode( $this->outcome( $firewall, self::request( '/refuse', '203.0.113.35', array( 'Accept' => 'application/json' ) ) )['message'], true )['error'] ?? null );
+	}
+
+	/**
+	 * Every verifying rule's lookups go to the site's provider, cut off at the site's limit.
+	 *
+	 * Without one, PHP's own lookups: no resolver at all, and verdicts cached
+	 * in the scope every earlier release used. Read off the verifier the
+	 * library built, without making a lookup.
+	 */
+	public function test_reverse_dns(): void {
+		if ( ! function_exists( 'curl_init' ) ) {
+			$this->markTestSkipped( 'DNS over HTTPS needs the curl extension.' );
+		}
+
+		$rules = array(
+			$this->rule(
+				'crawlers',
+				'user_agent',
+				array(
+					'conditions'      => array( self::condition( 'bot.name', 'contains', 'Googlebot' ) ),
+					'verify'          => true,
+					'verify_suffixes' => array( 'googlebot.com' ),
+				),
+				array( 'response' => 'allow' )
+			),
+		);
+
+		$verifier = self::invoke(
+			$this->plugin_named( $this->build( array( 'rules' => $rules ) ), 'crawlers' ),
+			'reverseDnsVerifier'
+		);
+
+		$this->assertNull( self::property( $verifier, 'resolver' ) );
+		$this->assertSame( '', self::property( $verifier, 'scope' ) );
+
+		$verifier = self::invoke(
+			$this->plugin_named(
+				$this->build(
+					array(
+						'global' => array(
+							'reverse_dns' => array(
+								'provider'   => 'cloudflare',
+								'timeout_ms' => 450,
+							),
+						),
+						'rules'  => $rules,
+					)
+				),
+				'crawlers'
+			),
+			'reverseDnsVerifier'
+		);
+
+		$resolver = self::property( $verifier, 'resolver' );
+
+		$this->assertInstanceOf( DnsOverHttpResolver::class, $resolver );
+		$this->assertSame( 'provider:cloudflare', self::property( $verifier, 'scope' ) );
+		$this->assertSame( '1.1.1.1', self::property( $resolver, 'address' ) );
+		$this->assertSame( 450, self::property( $resolver, 'timeoutMs' ) );
+
+		// Twice the limit and 50 ms, so two lookups that worked do not trip the breaker.
+		$this->assertSame( 950.0, self::property( $verifier, 'slowThresholdMs' ) );
 	}
 
 	/**

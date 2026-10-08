@@ -27,6 +27,7 @@ use Kanopi\BasicFirewall\RuleType\Types\Vulnerability_Score;
 use Kanopi\BasicFirewall\Runtime\Lockdown;
 use Kanopi\BasicFirewall\Runtime\Role_Bypass;
 use Kanopi\BasicFirewall\Support\Page_Settings;
+use Kanopi\BasicFirewall\Support\Reverse_Dns;
 use Kanopi\BasicFirewall\Support\Schema;
 use Kanopi\BasicFirewall\Support\Site_Layout;
 use Kanopi\Firewall\Utility\RequestPath;
@@ -200,6 +201,14 @@ final class Config_Compiler {
 		}
 
 		$compiled = $this->apply_advanced_yaml( $compiled, (string) $settings->get( 'advanced_yaml', '' ) );
+
+		/*
+		 * After the advanced YAML, so a provider or resolver typed there is
+		 * checked as well. The library refuses to start on a `reverse_dns` it
+		 * cannot use, and this plugin fails open when it refuses; see
+		 * Reverse_Dns::repair().
+		 */
+		$compiled = Reverse_Dns::repair( $compiled, $this->problems );
 		$compiled = $this->apply_redis_password( $compiled, trim( (string) $settings->get( 'storage.redis.username', '' ) ) );
 
 		return $this->apply_enabled( $compiled, (bool) $settings->get( 'enabled', true ) );
@@ -552,6 +561,18 @@ final class Config_Compiler {
 		// still gets the page or the message.
 		if ( true === ( $section['banning_json'] ?? false ) ) {
 			$compiled['banning_json'] = true;
+		}
+
+		/*
+		 * Who makes the lookups behind crawler verification (library 2.38.0,
+		 * kanopi/firewall#473). Nothing unless a provider or a time limit is
+		 * set, so a site that chose neither keeps PHP's own lookups and sends
+		 * nothing to anyone.
+		 */
+		$reverse_dns = Reverse_Dns::compile( (array) ( $section['reverse_dns'] ?? array() ) );
+
+		if ( array() !== $reverse_dns ) {
+			$compiled['reverse_dns'] = $reverse_dns;
 		}
 
 		return $compiled;

@@ -241,6 +241,36 @@ final class Schema {
 					'label'   => 'Answer a client that asks for JSON with JSON',
 					'default' => false,
 				),
+				'reverse_dns'             => array(
+					'type'     => 'map',
+					'label'    => 'Who makes the DNS lookups that verify crawlers',
+					'children' => array(
+						'provider'   => array(
+							'type'    => 'string',
+							'label'   => 'DNS-over-HTTPS provider',
+
+							/*
+							 * Empty, which is PHP's own lookups -- what every
+							 * release before library 2.38.0 used. Naming a
+							 * provider sends visitors' reverse-DNS names to
+							 * it, so that is a choice an administrator makes,
+							 * never a default. Checked against the library
+							 * rather than a list, so a provider it adds is
+							 * accepted and one this PHP cannot use (no curl)
+							 * is refused in its words.
+							 */
+							'default' => '',
+							'check'   => array( Reverse_Dns::class, 'provider_problem' ),
+						),
+						'timeout_ms' => array(
+							'type'    => 'int',
+							'label'   => 'Time limit for each lookup, in milliseconds',
+							'default' => Reverse_Dns::DEFAULT_TIMEOUT_MS,
+							'min'     => 1,
+							'max'     => 10000,
+						),
+					),
+				),
 				'repeat_offender_status'  => array(
 					'type'    => 'int',
 					'label'   => 'HTTP status code returned to already-blocked clients',

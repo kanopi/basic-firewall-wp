@@ -10,6 +10,7 @@ declare( strict_types = 1 );
 namespace Kanopi\BasicFirewall\RuleType\Types;
 
 use Kanopi\BasicFirewall\Library_Capabilities;
+use Kanopi\BasicFirewall\Support\Reverse_Dns;
 use Kanopi\BasicFirewall\RuleType\Condition_Rule_Type_Base;
 use Kanopi\Firewall\Plugins\UserAgent;
 
@@ -112,22 +113,29 @@ final class User_Agent extends Condition_Rule_Type_Base {
 			 * temp directory gets cleared and every clear costs that 618 ms
 			 * again on every worker.
 			 */
-			'cache_detection' => true,
+			'cache_detection'   => true,
 
 			/*
 			 * Which list `bot` consults. Widening it changes what an existing
 			 * bot rule blocks, so it is a stored choice rather than a default
 			 * that moved underneath somebody.
 			 */
-			'bot_source'      => 'curated',
+			'bot_source'        => 'curated',
 
 			/*
 			 * Off, and only meaningful with a domain list. The library treats
 			 * verification with no domains as "match nobody", which is correct
 			 * of it and not a state worth being able to save.
 			 */
-			'verify'          => false,
-			'verify_suffixes' => array(),
+			'verify'            => false,
+			'verify_suffixes'   => array(),
+
+			/*
+			 * The site's choice, from the General screen, unless a rule makes
+			 * its own (library 2.38.0). Empty and 0 both mean "the site's".
+			 */
+			'verify_provider'   => '',
+			'verify_timeout_ms' => 0,
 		);
 	}
 
@@ -161,21 +169,36 @@ final class User_Agent extends Condition_Rule_Type_Base {
 			return $help;
 		}
 
-		$verify = __( 'A user agent is whatever the client typed. An allow rule for <code>bot equals true</code> is therefore a skeleton key: anyone can send <code>Googlebot/2.1</code> and be let past every rule below it. Verification does the round trip Google, Bing, Apple and DuckDuckGo all document — reverse-resolve the address, check the hostname is in a domain you list, then forward-resolve that hostname and confirm it comes back to the same address. Reverse DNS alone proves nothing; the forward confirmation is what makes it proof.<br><br><strong>Fails closed:</strong> no PTR record, a hostname outside your list, a forward lookup that does not return, or DNS being unreachable all mean the rule does not match. On an allow rule that is the safe direction — an unverified client is treated as ordinary traffic.<br><br><strong>A local caching resolver is a prerequisite.</strong> Measured upstream at about 112 ms cold — 38 ms reverse plus 74 ms forward — against 3.5–5 ms for the firewall\'s entire evaluation. <code>systemd-resolved</code>, <code>dnsmasq</code> or <code>unbound</code> takes that to roughly 2 ms. A verdict is cached, and verification only runs once the rule\'s conditions have matched, but a cache miss pays the cold figure — and PHP cannot put a timeout on a DNS lookup.', 'basic-firewall' );
+		$verify = __( 'A user agent is whatever the client typed. An allow rule for <code>bot equals true</code> is therefore a skeleton key: anyone can send <code>Googlebot/2.1</code> and be let past every rule below it. Verification does the round trip Google, Bing, Apple and DuckDuckGo all document — reverse-resolve the address, check the hostname is in a domain you list, then forward-resolve that hostname and confirm it comes back to the same address. Reverse DNS alone proves nothing; the forward confirmation is what makes it proof.<br><br><strong>Fails closed:</strong> no PTR record, a hostname outside your list, a forward lookup that does not return, or DNS being unreachable all mean the rule does not match. On an allow rule that is the safe direction — an unverified client is treated as ordinary traffic.<br><br><strong>A local caching resolver is a prerequisite.</strong> Measured upstream at about 112 ms cold — 38 ms reverse plus 74 ms forward — against 3.5–5 ms for the firewall\'s entire evaluation. <code>systemd-resolved</code>, <code>dnsmasq</code> or <code>unbound</code> takes that to roughly 2 ms. A verdict is cached, and verification only runs once the rule\'s conditions have matched, but a cache miss pays the cold figure — and PHP cannot put a timeout on its own DNS lookups. Where there is no local resolver, choose a DNS-over-HTTPS provider under <strong>Crawler verification</strong> on the General screen: each lookup is then cut off at a time limit.', 'basic-firewall' );
 
 		if ( ! $capabilities->identity_verification_runs() ) {
 			$verify = __( '<strong>This cannot run on this site yet.</strong> The installed firewall library switches verification off whenever rule lists are kept off the request path, which they are unless <code>BASIC_FIREWALL_SOURCES_OFFLINE</code> is defined as <code>false</code> — so a rule that verifies would match nobody. kanopi/firewall 2.33.0 gives verification its own switch; until then, defining that constant also lets imported rule lists refresh while a visitor waits.', 'basic-firewall' ) . '<br><br>' . $verify;
 		}
 
 		return $help + array(
-			'verify'          => array(
+			'verify'            => array(
 				'label'       => __( 'Verify the crawler', 'basic-firewall' ),
 				'checkbox'    => __( 'Only match when the client verifies by reverse DNS', 'basic-firewall' ),
 				'description' => $verify,
 			),
-			'verify_suffixes' => array(
+			'verify_suffixes'   => array(
 				'label'       => __( 'Accepted domains', 'basic-firewall' ),
 				'description' => __( 'One per line — <code>googlebot.com</code>, <code>search.msn.com</code>, <code>applebot.apple.com</code>, <code>duckduckgo.com</code>. Matched on a label boundary, so <code>googlebot.com</code> does not accept <code>evilgooglebot.com</code>. Required when verifying.', 'basic-firewall' ),
+				'show_when'   => 'settings[verify]:1',
+			),
+			'verify_provider'   => array(
+				'label'       => __( 'Who makes the lookups', 'basic-firewall' ),
+				'choices'     => Reverse_Dns::choices( __( 'The site\'s choice, on the General screen', 'basic-firewall' ) ),
+				'description' => __( 'Usually left to the site. A provider chosen here is used for this rule only, and receives the reverse-DNS name of each address this rule asks about — the visitor\'s IP address, written backwards. A rule cannot choose PHP\'s own lookups while the site uses a provider.', 'basic-firewall' ),
+				'show_when'   => 'settings[verify]:1',
+			),
+			'verify_timeout_ms' => array(
+				'label'       => __( 'Time limit per lookup, in milliseconds', 'basic-firewall' ),
+				'description' => sprintf(
+					/* translators: %d: the largest time limit. */
+					__( '0 uses the site\'s. Applies only when a provider makes the lookups; PHP\'s own lookups cannot be given one. At most %d.', 'basic-firewall' ),
+					Reverse_Dns::max_timeout_ms()
+				),
 				'show_when'   => 'settings[verify]:1',
 			),
 		);
@@ -240,6 +263,20 @@ final class User_Agent extends Condition_Rule_Type_Base {
 		$clean['verify']          = ! empty( $settings['verify'] );
 		$clean['verify_suffixes'] = array_values( array_diff( $suffixes, $implausible ) );
 
+		/*
+		 * Kept when verification is off, as the domains are, so ticking it
+		 * again brings the rule's choice back. A provider the library would
+		 * refuse -- unknown, or no curl on this PHP -- is not stored: it would
+		 * stop the firewall starting, and the compiler would drop it anyway.
+		 */
+		$provider = trim( (string) ( $settings['verify_provider'] ?? '' ) );
+		$problem  = '' === $provider ? null : Reverse_Dns::provider_problem( $provider );
+		$timeout  = $settings['verify_timeout_ms'] ?? 0;
+		$timeout  = '' === $timeout ? 0 : ( is_numeric( $timeout ) ? (int) $timeout : -1 );
+
+		$clean['verify_provider']   = null === $problem ? $provider : '';
+		$clean['verify_timeout_ms'] = $timeout >= 0 && $timeout <= Reverse_Dns::max_timeout_ms() ? $timeout : 0;
+
 		if ( ! $clean['verify'] ) {
 			return $clean;
 		}
@@ -277,6 +314,18 @@ final class User_Agent extends Condition_Rule_Type_Base {
 
 		if ( array() === $clean['verify_suffixes'] ) {
 			$errors['verify_suffixes'] = __( 'List at least one domain to accept. Without one, any host with a PTR record would pass — which is not verification, and the firewall treats it as matching nobody.', 'basic-firewall' );
+		}
+
+		if ( null !== $problem ) {
+			$errors['verify_provider'] = $problem;
+		}
+
+		if ( $clean['verify_timeout_ms'] !== $timeout ) {
+			$errors['verify_timeout_ms'] = sprintf(
+				/* translators: %d: the largest time limit. */
+				__( 'A whole number of milliseconds from 0, for the site\'s, to %d.', 'basic-firewall' ),
+				Reverse_Dns::max_timeout_ms()
+			);
 		}
 
 		return $clean;
@@ -366,6 +415,16 @@ final class User_Agent extends Condition_Rule_Type_Base {
 					__( 'Only when verified by reverse DNS into %s.', 'basic-firewall' ),
 					implode( ', ', $suffixes )
 				);
+
+			$provider = (string) ( $settings['verify_provider'] ?? '' );
+
+			if ( '' !== $provider ) {
+				$lines[] = sprintf(
+					/* translators: %s: a DNS-over-HTTPS provider's name. */
+					__( 'Lookups made by %s.', 'basic-firewall' ),
+					$provider
+				);
+			}
 		}
 
 		return $lines;
@@ -462,6 +521,23 @@ final class User_Agent extends Condition_Rule_Type_Base {
 
 			if ( ( new Library_Capabilities() )->has_verification_switch() ) {
 				$metadata['verify_offline'] = false;
+			}
+
+			/*
+			 * Only when the rule makes its own choice; otherwise the library
+			 * takes `global.reverse_dns`, which is the site's. The compiler
+			 * checks the finished file and drops a choice the library would
+			 * refuse to start on -- see Reverse_Dns::repair().
+			 */
+			$provider = trim( (string) ( $settings['verify_provider'] ?? '' ) );
+			$timeout  = (int) ( $settings['verify_timeout_ms'] ?? 0 );
+
+			if ( '' !== $provider ) {
+				$metadata['verify_provider'] = $provider;
+			}
+
+			if ( $timeout > 0 ) {
+				$metadata['verify_timeout_ms'] = $timeout;
 			}
 		}
 

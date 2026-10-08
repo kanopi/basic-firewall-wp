@@ -7,6 +7,54 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+Bundles kanopi/firewall 2.38.0. Crawler verification can send its DNS lookups to
+a DNS-over-HTTPS provider with a time limit. Nothing changes until a site
+chooses one.
+
+### What changes on upgrade
+
+- **Nothing, unless you choose a provider.** With no provider chosen,
+  verification uses PHP's own lookups, as before, and nothing is sent to a third
+  party. The compiled file is the same as before.
+- **Lists in included files now replace, not merge**
+  ([kanopi/firewall#474](https://github.com/kanopi/firewall/issues/474),
+  [#481](https://github.com/kanopi/firewall/issues/481)). The plugin passes the
+  library one configuration, and no bundled preset sets a list to `[]`, so a
+  site configured through the screens sees no difference. Advanced YAML is
+  merged by the plugin before the library sees it, and already replaced lists.
+- **The library's parsed-configuration cache is rebuilt once**, because its
+  entry format changed. Nothing to do.
+
+### Changed
+
+- **Requires and bundles kanopi/firewall 2.38.0** (from 2.37.0).
+
+### Added
+
+- **Who makes the lookups that verify crawlers.** A new **Crawler
+  verification** section on the General screen chooses PHP's own lookups (the
+  default), Cloudflare or Google Public DNS, plus a **Time limit per lookup**
+  (300 ms by default) that cuts off each lookup to a provider, connecting and
+  TLS included ([kanopi/firewall#473](https://github.com/kanopi/firewall/issues/473)).
+  PHP's own lookups have no time limit, so on a host without a local caching
+  resolver a slow nameserver could hold a worker for up to ten seconds. The
+  screen states what a provider receives: the reverse-DNS name of each address a
+  verifying rule asks about, which is the visitor's IP address written
+  backwards.
+- **A rule's own provider and time limit.** A user agent rule that verifies can
+  choose a provider, or a limit, for itself alone. Otherwise it uses the site's.
+- **Site Health says where each verifying rule's lookups go,** read from the
+  compiled file, so a provider set in the advanced YAML is reported too.
+- **A lookup setting the library would refuse can't stop the firewall.** The
+  library refuses to start on an unknown provider, `provider` and `resolver`
+  both set, or a provider on a PHP without curl, and the plugin fails open when
+  it refuses. The screens refuse such a value when it is saved, in the library's
+  words. When one arrives another way (an import, the advanced YAML), the
+  compiler leaves out the lookup settings, reports why, and verification uses
+  PHP's own lookups. Site Health raises it as critical if the library would
+  still refuse the compiled file from a web request, such as when curl is loaded
+  for WP-CLI but not for the web server.
+
 ## [1.0.0-rc.8]
 
 **Eighth release candidate for 1.0.0.** Published as a GitHub pre-release, so

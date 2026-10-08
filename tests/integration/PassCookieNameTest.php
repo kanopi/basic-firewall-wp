@@ -90,13 +90,13 @@ final class PassCookieNameTest extends Settings_Snapshot {
 		require_once ABSPATH . 'wp-admin/includes/template.php';
 
 		$this->given_challenge( 'bfw_pass' );
-		$this->assertStringContainsString( 'id="cookie_name" value="bfw_pass"', $this->render_screen() );
+		$this->assertSame( 'bfw_pass', self::field_value( $this->render_screen(), 'cookie_name' ) );
 
 		$this->submit( self::CUSTOM );
 
 		$this->assertSame( self::CUSTOM, Plugin::instance()->settings()->get( 'challenge.cookie_name' ) );
 		$this->assertSame( self::CUSTOM, Plugin::instance()->compiled()->pass_cookie(), 'Saving did not recompile with the new name.' );
-		$this->assertStringContainsString( 'id="cookie_name" value="' . self::CUSTOM . '"', $this->render_screen() );
+		$this->assertSame( self::CUSTOM, self::field_value( $this->render_screen(), 'cookie_name' ) );
 	}
 
 	/**
@@ -221,6 +221,30 @@ final class PassCookieNameTest extends Settings_Snapshot {
 	 */
 	private function compiled(): array {
 		return (array) Yaml::parse( (string) Plugin::instance()->compiled()->contents() );
+	}
+
+	/**
+	 * The value of the field with an id, wherever its attributes are.
+	 *
+	 * Read with the HTML API rather than matched as a string: WordPress
+	 * nightly reorders the attributes of admin markup, so `id="…" value="…"`
+	 * stopped appearing side by side although the field was unchanged.
+	 *
+	 * @param string $html The markup.
+	 * @param string $id   The field's id.
+	 */
+	private static function field_value( string $html, string $id ): ?string {
+		$tags = new \WP_HTML_Tag_Processor( $html );
+
+		while ( $tags->next_tag( 'input' ) ) {
+			if ( $id === $tags->get_attribute( 'id' ) ) {
+				$value = $tags->get_attribute( 'value' );
+
+				return is_string( $value ) ? $value : null;
+			}
+		}
+
+		return null;
 	}
 
 	/**
