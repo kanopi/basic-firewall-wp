@@ -4,7 +4,7 @@ Tags: security, firewall, rate limiting, bot protection, waf
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 1.0.0-rc.8
+Stable tag: 1.0.0-rc.9
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -134,6 +134,12 @@ proxy too.
 4. Blocked clients, with an address lookup that works on every backend.
 
 == Changelog ==
+
+= 1.0.0-rc.9 =
+* Bundles kanopi/firewall 2.38.0.
+* Crawler verification can send its lookups to a DNS-over-HTTPS provider, Cloudflare or Google, with a per-lookup time limit: a Crawler verification section on the General screen, and a provider and limit of its own on a user agent rule. Off by default; choosing a provider sends it the reverse-DNS names of visitors' addresses.
+* A lookup setting the firewall library would refuse to start on is refused on save, or left out of the compiled file, so it cannot switch the firewall off.
+* Site Health says where each verifying rule's lookups go.
 
 = 1.0.0-rc.8 =
 * Bundles kanopi/firewall 2.37.0.
