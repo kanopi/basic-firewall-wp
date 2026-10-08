@@ -7,9 +7,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
-Bundles kanopi/firewall 2.38.0. Crawler verification can send its DNS lookups to
-a DNS-over-HTTPS provider with a time limit. Nothing changes until a site
-chooses one.
+## [1.0.0-rc.9]
+
+**Ninth release candidate for 1.0.0.** Published as a GitHub pre-release, so
+the `releases/latest/download` URL does not serve it; install it by its own URL.
+It bundles kanopi/firewall 2.38.0. Crawler verification can send its DNS lookups
+to a DNS-over-HTTPS provider (Cloudflare or Google) with a time limit, chosen on
+the General screen or per rule. Nothing changes, and nothing is sent to a third
+party, until a site chooses one. What changed since 1.0.0-rc.8 is below.
 
 ### What changes on upgrade
 
